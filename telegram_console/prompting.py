@@ -7,7 +7,7 @@ import re
 
 from .projects import ProjectRecord
 from .utils import shorten_text
-from .workspace import WorkConfig
+from .workspace import WorkConfig, load_work_config, load_workspace_config
 
 if TYPE_CHECKING:
     from .agent_chat import ProjectChatState
@@ -101,19 +101,31 @@ class PromptBuilder:
     def build_turn_prompt(
         self,
         project: ProjectRecord,
-        work: WorkConfig,
-        state: "ProjectChatState",
-        user_text: str,
+        work: WorkConfig | "ProjectChatState",
+        state: "ProjectChatState" | str,
+        user_text: str | None = None,
         *,
         context_mode: ContextMode,
         current_focus: str,
     ) -> BuiltPrompt:
-        profile = self.classify_intent(user_text)
-        snapshot = self._build_snapshot(project, work, state, context_mode, current_focus)
+        if isinstance(work, WorkConfig):
+            active_work = work
+            active_state = state
+            prompt_text = user_text
+        else:
+            active_work = self._resolve_work(project)
+            active_state = work
+            prompt_text = state if isinstance(state, str) else user_text
+
+        if prompt_text is None:
+            raise TypeError("PromptBuilder.build_turn_prompt() missing required argument: 'user_text'")
+
+        profile = self.classify_intent(prompt_text)
+        snapshot = self._build_snapshot(project, active_work, active_state, context_mode, current_focus)
         done_contract = self._done_contract(profile)
         return BuiltPrompt(
             profile=profile,
-            prompt_text=self._render_prompt(snapshot, user_text, profile, done_contract),
+            prompt_text=self._render_prompt(snapshot, prompt_text, profile, done_contract),
             detected_intent=PROFILE_LABELS[profile],
             done_contract=done_contract,
             expected_output=PROFILE_EXPECTATIONS[profile],
@@ -159,6 +171,13 @@ class PromptBuilder:
         if master_protocol.exists():
             items.append((str(master_protocol), "единый рабочий регламент"))
 
+        legacy_canon = project.root_dir / "meta" / "project-canon.md"
+        if project.supports("thesis"):
+            if legacy_canon.exists():
+                items.append((str(legacy_canon), "legacy compatibility shim для thesis lane"))
+            elif legacy_canon.parent.exists():
+                items.append((str(legacy_canon), "legacy compatibility shim path для старых ссылок"))
+
         work_toml = work.work_dir / "work.toml"
         if work_toml.exists():
             items.append((str(work_toml), "конфигурация активной работы"))
@@ -192,6 +211,11 @@ class PromptBuilder:
             if path.name.casefold() != "readme.md" and not path.name.endswith("-checklist.md")
         ]
         return tuple(items)
+
+    def _resolve_work(self, project: ProjectRecord) -> WorkConfig:
+        workspace = load_workspace_config(project.root_dir)
+        work_id = project.default_work or (project.works[0] if project.works else workspace.default_work)
+        return load_work_config(workspace, work_id)
 
     def _done_contract(self, profile: PromptProfile) -> tuple[str, ...]:
         if profile == "execute":

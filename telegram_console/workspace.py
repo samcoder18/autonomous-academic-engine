@@ -248,7 +248,10 @@ def list_targets_for_action(work: WorkConfig, lane: str, action: str, workspace:
         patterns = THESIS_ACTION_PATTERNS.get(action)
         if not patterns:
             raise WorkspaceConfigError(f"Неизвестное thesis-действие: {action}")
-        return _collect_bundle_targets(workspace.root_dir, work.thesis.paths.root_dir, patterns)
+        return _merge_targets(
+            _collect_bundle_targets(workspace.root_dir, work.thesis.paths.root_dir, patterns),
+            _collect_workspace_targets(workspace.root_dir, patterns),
+        )
 
     if lane == "article":
         if not work.article:
@@ -256,7 +259,11 @@ def list_targets_for_action(work: WorkConfig, lane: str, action: str, workspace:
         patterns = ARTICLE_ACTION_PATTERNS.get(action)
         if not patterns:
             raise WorkspaceConfigError(f"Неизвестное article-действие: {action}")
-        return _collect_bundle_targets(workspace.root_dir, work.article.paths.root_dir, patterns)
+        legacy_patterns = tuple(f"articles/{pattern}" for pattern in patterns)
+        return _merge_targets(
+            _collect_bundle_targets(workspace.root_dir, work.article.paths.root_dir, patterns),
+            _collect_workspace_targets(workspace.root_dir, legacy_patterns),
+        )
 
     raise WorkspaceConfigError(f"Неизвестный lane: {lane}")
 
@@ -401,8 +408,8 @@ def _build_thesis_config(
     root_dir = _resolve_work_path(work_dir, _required_text(payload, "root_dir", work_file))
     full_draft_path = _resolve_work_path(work_dir, _required_text(payload, "full_draft_path", work_file))
     section_items = payload.get("section_order")
-    if not isinstance(section_items, list) or not section_items:
-        raise WorkspaceConfigError(f"В {work_file} должен быть непустой thesis.section_order.")
+    if not isinstance(section_items, list):
+        raise WorkspaceConfigError(f"В {work_file} thesis.section_order должен быть списком.")
 
     docx_filename = _required_text(payload, "docx_filename", work_file)
     output_docx_dir = workspace.docx_root / slug
@@ -471,6 +478,33 @@ def _collect_bundle_targets(workspace_root: Path, bundle_root: Path, patterns: t
             seen.add(rel)
             targets.append(rel)
     return targets
+
+
+def _collect_workspace_targets(workspace_root: Path, patterns: tuple[str, ...]) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for path in sorted(workspace_root.glob(pattern)):
+            if path.name == "README.md" or path.name.startswith("."):
+                continue
+            rel = path.resolve().relative_to(workspace_root).as_posix()
+            if rel in seen:
+                continue
+            seen.add(rel)
+            targets.append(rel)
+    return targets
+
+
+def _merge_targets(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            if item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+    return merged
 
 
 def _map_legacy_target(work: WorkConfig, raw_target: str) -> Path | None:

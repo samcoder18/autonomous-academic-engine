@@ -20,6 +20,7 @@ from .workspace import (
     load_work_config,
     load_workspace_config,
     normalize_target_for_action,
+    normalize_target_path,
     relative_to_workspace,
     resolve_work_config,
 )
@@ -132,9 +133,10 @@ class WorkflowOrchestrator:
         action = action.strip().lower()
         work = self._work(work_id)
         try:
-            return list_targets_for_action(self._workspace_config(), work, lane, action)
+            targets = list_targets_for_action(work, lane, action, self._workspace_config())
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
+        return [self._display_target(target, lane, work) for target in targets]
 
     def list_article_slugs(self, *, work_id: str | None = None) -> list[str]:
         work = self._work(work_id)
@@ -401,9 +403,9 @@ class WorkflowOrchestrator:
             cmd = [
                 "bash",
                 "scripts/export_academic_docx.sh",
+                self._relative_to_root(Path(final_markdown)),
                 "--work",
                 work.slug,
-                self._relative_to_root(Path(final_markdown)),
             ]
             expected = Path(status["files"]["docx"]["path"])
         else:
@@ -540,8 +542,33 @@ class WorkflowOrchestrator:
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
 
+    def _normalize_relative_path(self, raw: str, *, work_id: str | None = None) -> str:
+        work = self._work(work_id, raw)
+        try:
+            return normalize_target_path(self._workspace_config(), work, raw)
+        except WorkspaceConfigError as exc:
+            message = str(exc)
+            if message.startswith("Не найден файл:"):
+                raise WorkflowError(f"Не нашла файл: {raw}") from exc
+            raise WorkflowError(message) from exc
+
     def _relative_to_root(self, path: Path) -> str:
         return path.resolve().relative_to(self.root_dir).as_posix()
+
+    def _display_target(self, target: str, lane: str, work: WorkConfig) -> str:
+        target_path = self.root_dir / target
+        if lane == "thesis" and work.thesis:
+            try:
+                return target_path.resolve().relative_to(work.thesis.paths.root_dir).as_posix()
+            except ValueError:
+                return target
+        if lane == "article" and work.article:
+            try:
+                rel = target_path.resolve().relative_to(work.article.paths.root_dir).as_posix()
+            except ValueError:
+                return target
+            return f"articles/{rel}"
+        return target
 
     def _build_pythonpath(self, current: str | None) -> str:
         paths = [str(self.package_root), str(self.root_dir)]
@@ -797,7 +824,17 @@ class WorkflowOrchestrator:
             files = article_bundle_paths(work, clean_slug)
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
-        present = {name: {"path": str(path), "exists": path.exists()} for name, path in files.items()}
+        exposed_files = {
+            "brief": files["brief"],
+            "evidence": files["evidence_pack"],
+            "claim_map": files["claim_map"],
+            "draft": files["draft"],
+            "review": files["review"],
+            "final": files["final_markdown"],
+            "checklist": files["checklist"],
+            "docx": files["docx"],
+        }
+        present = {name: {"path": str(path), "exists": path.exists()} for name, path in exposed_files.items()}
         missing = [name for name, info in present.items() if not info["exists"]]
         recent = [
             record.to_dict()

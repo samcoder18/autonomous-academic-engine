@@ -278,6 +278,61 @@ def build_fake_repo(root: Path) -> None:
     )
 
 
+def add_empty_work_scaffold(root: Path, slug: str = "empty-work") -> None:
+    workspace_file = root / "workspace.toml"
+    workspace_text = workspace_file.read_text(encoding="utf-8")
+    workspace_file.write_text(
+        workspace_text + f'{slug} = "works/{slug}"\n',
+        encoding="utf-8",
+    )
+
+    work_root = Path("works") / slug
+    write_file(
+        root / work_root / "work.toml",
+        textwrap.dedent(
+            f"""\
+            version = 1
+            slug = "{slug}"
+            title = "Empty scaffold"
+            topic = "Empty topic"
+            artifact_type = "vkr"
+            language = "ru"
+            active_lanes = ["thesis", "article"]
+            work_canon = "work-canon.md"
+
+            [standards]
+            thesis_profile = "thesis-v1"
+            article_profile = "ru-law-article-v1"
+
+            [thesis]
+            root_dir = "thesis"
+            chapters_dir = "thesis/chapters"
+            sources_dir = "thesis/sources"
+            manuscript_dir = "thesis/manuscript"
+            manuscript_sections_dir = "thesis/manuscript/sections"
+            reviews_dir = "thesis/reviews"
+            sync_dir = "thesis/sync"
+            full_draft_path = "thesis/manuscript/full-draft.md"
+            docx_filename = "thesis-draft.docx"
+            section_order = []
+
+            [article]
+            root_dir = "articles"
+            briefs_dir = "articles/briefs"
+            evidence_dir = "articles/evidence"
+            claim_maps_dir = "articles/claim-maps"
+            drafts_dir = "articles/drafts"
+            reviews_dir = "articles/reviews"
+            final_dir = "articles/final"
+            docx_subdir = "articles"
+            """
+        ),
+    )
+    write_file(root / work_root / "work-canon.md", "# Empty work canon\n")
+    write_file(root / work_root / "thesis" / "README.md", "# Empty thesis scaffold\n")
+    write_file(root / work_root / "articles" / "README.md", "# Empty article scaffold\n")
+
+
 def build_fake_launchd_files(root: Path) -> None:
     write_file(
         root / "scripts/run_telegram_console_launchd.sh",
@@ -973,6 +1028,27 @@ class ProjectServiceTests(unittest.TestCase):
         beta_records = self.service.list_recent_runs("beta", "thesis", limit=5)
         self.assertTrue(alpha_records[0].record_id.startswith("alpha:"))
         self.assertTrue(beta_records[0].record_id.startswith("beta:"))
+
+    def test_empty_work_scaffold_can_be_selected_and_reports_empty_runtime_views(self) -> None:
+        add_empty_work_scaffold(self.repo_a)
+        self.service = ProjectService(self.bot_home)
+
+        works = {work.slug for work in self.service.list_works("alpha")}
+        self.assertIn(TEST_WORK_ID, works)
+        self.assertIn("empty-work", works)
+
+        active_work = self.service.set_active_work("alpha", "empty-work")
+        self.assertEqual(active_work.slug, "empty-work")
+        self.assertEqual(self.service.list_targets("alpha", "thesis", "write-section"), [])
+        self.assertEqual(self.service.list_thesis_sections("alpha"), [])
+        self.assertEqual(self.service.list_article_slugs("alpha"), [])
+
+        thesis_status = self.service.get_artifact_status("alpha", "thesis")
+        article_status = self.service.get_artifact_status("alpha", "article")
+        self.assertEqual(thesis_status["kind"], "thesis-overview")
+        self.assertEqual(thesis_status["sections"], [])
+        self.assertEqual(article_status["kind"], "article-overview")
+        self.assertEqual(article_status["bundles"], [])
 
     def test_global_lock_mentions_busy_project(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
