@@ -1,15 +1,19 @@
-# Агентная система проекта
+# Агентная система workspace
 
-Этот файл задает рабочую оркестрацию проекта. Он не заменяет содержание диплома и не изменяет канон темы; его задача - держать процесс компактным, проверяемым и без дублирования инструкций.
+Этот файл задает оркестрацию legal-academic engine в `/Users/albina/дипломная`.
+Он описывает reusable workflow и не заменяет канон конкретной работы.
 
-## Что является источником истины
+## Источники истины
 
-- Устойчивые решения по thesis lane хранятся только в [meta/project-canon.md](/Users/albina/дипломная/meta/project-canon.md).
+- Машинно-читаемая конфигурация workspace хранится в [workspace.toml](/Users/albina/дипломная/workspace.toml).
 - Рабочий регламент для всех lane хранится только в [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
-- Канонический текст диплома хранится только в [manuscript/sections](/Users/albina/дипломная/manuscript/sections).
-- Канонический текст article lane хранится только в [articles/final](/Users/albina/дипломная/articles/final), а доказательная база - в `articles/briefs`, `articles/evidence`, `articles/claim-maps` и `articles/reviews`.
+- Канон конкретной работы хранится только в `works/<slug>/work-canon.md`.
+- Конфигурация конкретной работы хранится только в `works/<slug>/work.toml`.
 - Внешние требования и publication profiles живут в [meta/standards](/Users/albina/дипломная/meta/standards) в модели `raw + normalized`.
-- [manuscript/full-draft.md](/Users/albina/дипломная/manuscript/full-draft.md) - сборочный файл thesis lane; вручную как основной документ не редактируется.
+- Сборочные thesis-файлы и DOCX не редактируются вручную как основные документы.
+
+По умолчанию активная работа workspace: `biometrics-vkr`.
+CLI и Telegram runtime могут переключать `active work`.
 
 ## Агентные роли
 
@@ -38,68 +42,65 @@
 
 ## Формальные skills Codex
 
-Для более формального и автономного запуска эта же логика вынесена в skills Codex.
+Для более формального и автономного запуска эта логика вынесена в skills Codex.
 
 ### Thesis skills
 
-- `$thesis-workflow-orchestrator` - главный skill для полного цикла.
-- `$thesis-structure-architect` - структура и доказательная логика.
-- `$thesis-research-synthesizer` - сжатие корпуса источников в рабочий пакет.
-- `$thesis-source-verifier` - проверка актуальности и достоверности опор.
-- `$thesis-draft-writer` - написание разделов по проверенной базе.
-- `$thesis-citation-checker` - проверка ссылок, сносок и силы атрибуции.
-- `$thesis-argument-critic` - критический проход по аргументации.
-- `$thesis-style-editor` - финальный проход по естественности и академическому стилю.
+- `$thesis-workflow-orchestrator`
+- `$thesis-structure-architect`
+- `$thesis-research-synthesizer`
+- `$thesis-source-verifier`
+- `$thesis-draft-writer`
+- `$thesis-citation-checker`
+- `$thesis-argument-critic`
+- `$thesis-style-editor`
 
 ### Academic article skills
 
-- `$academic-workflow-orchestrator` - главный skill для article lane.
-- `$academic-intake` - нормализует тему в article brief.
-- `$academic-source-acquirer` - собирает первичный evidence-pack.
-- `$academic-source-verifier` - верифицирует даты, редакции и поддержку тезисов.
-- `$academic-evidence-cartographer` - строит claim map.
-- `$academic-draft-writer` - пишет article draft по verified evidence.
-- `$academic-citation-checker` - проверяет footnotes и attribution.
-- `$academic-counterargument-critic` - проверяет контраргументы и пределы вывода.
-- `$academic-submission-evaluator` - выдает verdict `submission-ready` / `strong-draft` / `strong-draft-with-blockers`.
-- `$academic-repair-orchestrator` - проводит repair по findings evaluator-а.
-- `$academic-finalizer` - собирает final markdown, checklist и DOCX.
-
-Эти skills установлены в `/Users/albina/.codex/skills` и привязаны именно к этому проекту.
-Для thesis lane вход по умолчанию: `$thesis-workflow-orchestrator`.
-Для article lane вход по умолчанию: `$academic-workflow-orchestrator`.
+- `$academic-workflow-orchestrator`
+- `$academic-intake`
+- `$academic-source-acquirer`
+- `$academic-source-verifier`
+- `$academic-evidence-cartographer`
+- `$academic-draft-writer`
+- `$academic-citation-checker`
+- `$academic-counterargument-critic`
+- `$academic-submission-evaluator`
+- `$academic-repair-orchestrator`
+- `$academic-finalizer`
 
 ## Launcher
 
-Для article lane используйте [scripts/codex_academic.sh](/Users/albina/дипломная/scripts/codex_academic.sh). Он подставляет нужный academic skill, строит managed article bundle, держит strict primary-source policy, запускает evaluator/repair/finalizer и сохраняет run trace в `articles/runs/`.
-
-Для thesis lane продолжает работать [scripts/codex_thesis.sh](/Users/albina/дипломная/scripts/codex_thesis.sh). Он остается специализированным launcher для дипломного контура.
+- [scripts/codex_thesis.sh](/Users/albina/дипломная/scripts/codex_thesis.sh) - thesis launcher с поддержкой `--work`.
+- [scripts/codex_academic.sh](/Users/albina/дипломная/scripts/codex_academic.sh) - article launcher и thesis proxy с поддержкой `--work`.
+- [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh) - пересобирает thesis manuscript выбранной работы.
+- [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh) - экспортирует thesis DOCX выбранной работы.
+- [scripts/export_academic_docx.sh](/Users/albina/дипломная/scripts/export_academic_docx.sh) - экспортирует article DOCX выбранной работы.
 
 ## Базовый порядок работы
 
 ### Thesis lane
 
-1. Сначала свериться с каноном проекта.
-2. Построить структуру фрагмента.
-3. Собрать и сжать пакет источников.
-4. Отдельно проверить источники и актуальность норм.
-5. Написать черновик только по проверенным опорам.
-6. Проверить ссылки, сноски и силу атрибуции.
-7. Провести критический проход по аргументации.
-8. Выполнить финальную редактуру стиля и формулировок.
+1. Открыть `workspace.toml` и выбрать `active work`.
+2. Свериться с `works/<slug>/work.toml` и `works/<slug>/work-canon.md`.
+3. Построить структуру фрагмента.
+4. Собрать и сжать пакет источников.
+5. Проверить источники и актуальность норм.
+6. Написать черновик только по проверенным опорам.
+7. Проверить ссылки, аргументацию и стиль.
+8. При необходимости пересобрать manuscript и экспортировать DOCX.
 
 ### Article lane
 
-1. Нормализовать тему в article brief.
-2. Собрать первичный evidence-pack.
-3. Отдельно проверить первичность, даты и точную поддержку тезисов.
-4. Построить claim map и coverage map.
-5. Написать draft только по verified evidence.
-6. Проверить footnotes и citation safety.
-7. Проверить контраргументы и overclaim.
-8. Получить evaluator verdict.
-9. При необходимости провести ограниченный repair loop.
-10. Собрать final markdown, checklist и DOCX без ложного заявления формальной готовности.
+1. Выбрать `active work`.
+2. Открыть `works/<slug>/work.toml` и relevant publication profile.
+3. Нормализовать тему в article brief.
+4. Собрать и верифицировать evidence-pack.
+5. Построить claim map и coverage map.
+6. Написать draft только по verified evidence.
+7. Прогнать citation pass, counterargument critique и evaluator.
+8. При необходимости провести ограниченный repair loop.
+9. Собрать final markdown, checklist и DOCX без ложного заявления формальной готовности.
 
 Пропуск шага допустим только когда это явно безопасно и зафиксировано в рабочем следе соответствующего lane.
 

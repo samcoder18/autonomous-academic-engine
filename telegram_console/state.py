@@ -114,6 +114,36 @@ class RuntimeStore:
             state.pop("active_project", None)
             self.write_json(self.bot_state_file, state)
 
+    def get_active_work_id(self, project_id: str) -> str | None:
+        state = self.read_json(self.bot_state_file, default={})
+        raw = state.get("active_work_by_project")
+        if not isinstance(raw, dict):
+            return None
+        value = raw.get(project_id)
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def set_active_work_id(self, project_id: str, work_id: str) -> None:
+        state = self.read_json(self.bot_state_file, default={})
+        mapping = state.get("active_work_by_project")
+        if not isinstance(mapping, dict):
+            mapping = {}
+        mapping[project_id] = work_id
+        state["active_work_by_project"] = mapping
+        self.write_json(self.bot_state_file, state)
+
+    def clear_active_work_id(self, project_id: str) -> None:
+        state = self.read_json(self.bot_state_file, default={})
+        mapping = state.get("active_work_by_project")
+        if not isinstance(mapping, dict):
+            return
+        if project_id in mapping:
+            mapping.pop(project_id, None)
+            state["active_work_by_project"] = mapping
+            self.write_json(self.bot_state_file, state)
+
     def get_last_chat_project_id(self) -> str | None:
         state = self.read_json(self.bot_state_file, default={})
         value = state.get("last_chat_project")

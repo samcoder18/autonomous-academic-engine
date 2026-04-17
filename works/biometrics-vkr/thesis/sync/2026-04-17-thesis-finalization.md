@@ -5,4 +5,4 @@
 - Финализированы введение, заключение и библиография.
 - Главы 1-3 прошли финальный аудит на актуальность правовой базы, аргументацию и citation safety.
 - По ходу прохода усилены официальные опоры по ЕБС, сервисным сценариям 2025-2026 годов и практике по распознаванию лиц.
-- Следующий шаг: собрать [manuscript/full-draft.md](/Users/albina/дипломная/manuscript/full-draft.md) через `scripts/assemble_thesis.sh` и затем выгрузить DOCX через `scripts/export_docx.sh`.
+- Следующий шаг: собрать [manuscript/full-draft.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/full-draft.md) через `scripts/assemble_thesis.sh --work biometrics-vkr` и затем выгрузить DOCX через `scripts/export_docx.sh --work biometrics-vkr`.

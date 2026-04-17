@@ -4,8 +4,8 @@
 
 ## Объем проверки
 
-- Перепроверены [manuscript/sections/02-chapter-1.md](/Users/albina/дипломная/manuscript/sections/02-chapter-1.md), [03-chapter-2.md](/Users/albina/дипломная/manuscript/sections/03-chapter-2.md) и [04-chapter-3.md](/Users/albina/дипломная/manuscript/sections/04-chapter-3.md) на предмет актуальности норм, надежности опор, силы аргументации и citation safety.
-- Дописаны [01-introduction.md](/Users/albina/дипломная/manuscript/sections/01-introduction.md), [05-conclusion.md](/Users/albina/дипломная/manuscript/sections/05-conclusion.md) и [06-bibliography.md](/Users/albina/дипломная/manuscript/sections/06-bibliography.md).
+- Перепроверены [manuscript/sections/02-chapter-1.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/02-chapter-1.md), [03-chapter-2.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/03-chapter-2.md) и [04-chapter-3.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/04-chapter-3.md) на предмет актуальности норм, надежности опор, силы аргументации и citation safety.
+- Дописаны [01-introduction.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/01-introduction.md), [05-conclusion.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/05-conclusion.md) и [06-bibliography.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/06-bibliography.md).
 
 ## Что было исправлено по ходу проверки
 

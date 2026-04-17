@@ -42,6 +42,8 @@ class AgentTurnNotification:
     project_title: str
     status: str
     started_at: str
+    work_id: str | None = None
+    work_title: str | None = None
     finished_at: str | None = None
     prompt: str | None = None
     response_text: str | None = None
@@ -122,10 +124,12 @@ class AgentChatService:
             raise AgentBusyError(self.describe_active_task(active))
 
         project = self.projects.require_project(project_id)
+        work = self.projects.get_active_work(project.id)
         state = self.get_project_state(project.id)
         context_mode = self._select_context_mode(project.id, state)
         built_prompt = self.prompt_builder.build_turn_prompt(
             project,
+            work,
             state,
             clean_prompt,
             context_mode=context_mode,
@@ -142,6 +146,8 @@ class AgentChatService:
             "project_id": project.id,
             "project_title": project.title,
             "project_root": str(project.root_dir),
+            "work_id": work.slug,
+            "work_title": work.title,
             "prompt": built_prompt.prompt_text,
             "user_text": clean_prompt,
             "session_id": state.session_id,
@@ -184,6 +190,8 @@ class AgentChatService:
             "project_id": project.id,
             "project_title": project.title,
             "project_root": str(project.root_dir),
+            "work_id": work.slug,
+            "work_title": work.title,
             "started_at": request_payload["started_at"],
             "prompt": clean_prompt,
             "user_text": clean_prompt,
@@ -256,6 +264,21 @@ class AgentChatService:
             },
         )
 
+    def mark_work_switch(self, project_id: str) -> None:
+        state = self.get_project_state(project_id)
+        self._save_project_state(
+            project_id,
+            {
+                "session_id": state.session_id,
+                "last_activity_at": utc_now(),
+                "last_user_message": state.last_user_message,
+                "last_assistant_summary": state.last_assistant_summary,
+                "busy": False,
+                "last_export_path": state.last_export_path,
+                "needs_full_context": True,
+            },
+        )
+
     def describe_active_task(self, payload: dict[str, Any]) -> str:
         project_title = self._optional_text(payload.get("project_title")) or "без названия"
         prompt = shorten_text(
@@ -313,6 +336,8 @@ class AgentChatService:
             task_id=self._optional_text(request.get("task_id")) or "chat-task",
             project_id=project_id,
             project_title=self._optional_text(request.get("project_title")) or project_id,
+            work_id=self._optional_text(request.get("work_id")),
+            work_title=self._optional_text(request.get("work_title")),
             status=status,
             started_at=self._optional_text(result.get("started_at")) or self._optional_text(request.get("started_at")) or utc_now(),
             finished_at=self._optional_text(result.get("finished_at")),

@@ -11,6 +11,7 @@ import unicodedata
 
 from .orchestrator import RunRecord, WorkflowError, WorkflowOrchestrator
 from .state import RuntimeStore
+from .workspace import WorkConfig, WorkspaceConfig, WorkspaceConfigError, list_work_ids, load_work_config, load_workspace_config
 
 
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -63,6 +64,8 @@ class ProjectRecord:
     title: str
     root_dir: Path
     capabilities: tuple[str, ...]
+    works: tuple[str, ...] = ()
+    default_work: str | None = None
     available: bool = True
     problems: tuple[str, ...] = ()
 
@@ -119,11 +122,14 @@ class ProjectRegistry:
             resolved_root.name,
             existing_ids=self._existing_ids(items),
         )
+        workspace_info = self._inspect_workspace_root(resolved_root)
         item = {
             "id": project_id,
             "title": title_clean,
             "root_dir": str(resolved_root),
             "capabilities": list(capabilities),
+            "works": list(workspace_info.get("works") or []),
+            "default_work": workspace_info.get("default_work"),
         }
         items.append(item)
         self._write_payload(items)
@@ -137,18 +143,12 @@ class ProjectRegistry:
         if not resolved_root.exists():
             return (), (f"Папка проекта не найдена: {resolved_root}",)
 
-        thesis_problems = self._validate_thesis_root(resolved_root)
-        article_problems = self._validate_article_root(resolved_root)
-        capabilities: list[str] = []
-        if not thesis_problems:
-            capabilities.append("thesis")
-        if not article_problems:
-            capabilities.append("article")
+        info = self._inspect_workspace_root(resolved_root)
+        capabilities = tuple(info.get("capabilities") or ())
+        problems = tuple(info.get("problems") or ())
         if capabilities:
-            return tuple(capabilities), ()
-
-        combined = list(dict.fromkeys([*thesis_problems, *article_problems]))
-        return (), tuple(combined)
+            return capabilities, ()
+        return (), problems
 
     def _read_payload(self) -> object:
         if not self.projects_file.exists():
@@ -161,7 +161,8 @@ class ProjectRegistry:
     def _bootstrap_if_missing(self) -> None:
         if self.projects_file.exists():
             return
-        capabilities = self._detect_capabilities(self.bot_home_dir)
+        info = self._inspect_workspace_root(self.bot_home_dir)
+        capabilities = list(info.get("capabilities") or [])
         if not capabilities:
             return
         payload = {
@@ -171,6 +172,8 @@ class ProjectRegistry:
                     "title": self.bot_home_dir.name or "Проект",
                     "root_dir": str(self.bot_home_dir),
                     "capabilities": capabilities,
+                    "works": list(info.get("works") or []),
+                    "default_work": info.get("default_work"),
                 }
             ]
         }
@@ -260,6 +263,8 @@ class ProjectRegistry:
                 title=f"Некорректная запись #{index}",
                 root_dir=self.bot_home_dir,
                 capabilities=("thesis",),
+                works=(),
+                default_work=None,
                 available=False,
                 problems=("Ожидался объект с полями id, title, root_dir и capabilities.",),
             )
@@ -281,21 +286,35 @@ class ProjectRegistry:
         raw_capabilities = item.get("capabilities")
         capabilities = self._normalize_capabilities(raw_capabilities)
         if not capabilities:
-            capabilities = ("thesis",)
+            capabilities = ()
+
+        raw_works = item.get("works")
+        works = self._normalize_works(raw_works)
+        default_work = str(item.get("default_work") or "").strip() or None
 
         if not root_dir.exists():
             problems.append(f"Папка проекта не найдена: {root_dir}")
         else:
-            if "thesis" in capabilities:
-                problems.extend(self._validate_thesis_root(root_dir))
-            if "article" in capabilities:
-                problems.extend(self._validate_article_root(root_dir))
+            info = self._inspect_workspace_root(root_dir)
+            actual_capabilities = tuple(info.get("capabilities") or ())
+            actual_works = tuple(info.get("works") or ())
+            actual_default_work = info.get("default_work")
+            actual_problems = tuple(info.get("problems") or ())
+            if actual_problems:
+                problems.extend(actual_problems)
+            if actual_capabilities:
+                capabilities = actual_capabilities
+            if actual_works:
+                works = actual_works
+            default_work = actual_default_work or default_work
 
         return ProjectRecord(
             id=project_id,
             title=title,
             root_dir=root_dir,
             capabilities=capabilities,
+            works=works,
+            default_work=default_work,
             available=not problems,
             problems=tuple(problems),
         )
@@ -317,37 +336,70 @@ class ProjectRegistry:
                 normalized.append(capability)
         return tuple(normalized)
 
-    def _detect_capabilities(self, root_dir: Path) -> list[str]:
-        capabilities: list[str] = []
-        if not self._validate_thesis_root(root_dir):
-            capabilities.append("thesis")
-        if not self._validate_article_root(root_dir):
-            capabilities.append("article")
-        return capabilities
+    def _normalize_works(self, raw_works: object) -> tuple[str, ...]:
+        if raw_works is None:
+            return ()
+        if isinstance(raw_works, str):
+            values = [raw_works]
+        elif isinstance(raw_works, list):
+            values = [str(item) for item in raw_works]
+        else:
+            return ()
 
-    def _validate_thesis_root(self, root_dir: Path) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            text = value.strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return tuple(normalized)
+
+    def _inspect_workspace_root(self, root_dir: Path) -> dict[str, object]:
         problems: list[str] = []
         checks = [
-            (root_dir / "scripts" / "codex_thesis.sh", "Не найден `scripts/codex_thesis.sh`."),
-            (root_dir / "manuscript" / "sections", "Не найдена папка `manuscript/sections`."),
+            (root_dir / "workspace.toml", "Не найден `workspace.toml`."),
             (root_dir / "AGENTS.md", "Не найден `AGENTS.md`."),
-        ]
-        for path, message in checks:
-            if not path.exists():
-                problems.append(message)
-        return problems
-
-    def _validate_article_root(self, root_dir: Path) -> list[str]:
-        problems: list[str] = []
-        checks = [
+            (root_dir / "scripts" / "codex_thesis.sh", "Не найден `scripts/codex_thesis.sh`."),
             (root_dir / "scripts" / "codex_academic.sh", "Не найден `scripts/codex_academic.sh`."),
-            (root_dir / "articles" / "briefs", "Не найдена папка `articles/briefs`."),
-            (root_dir / "articles" / "final", "Не найдена папка `articles/final`."),
         ]
         for path, message in checks:
             if not path.exists():
                 problems.append(message)
-        return problems
+
+        if problems:
+            return {"capabilities": (), "works": (), "default_work": None, "problems": tuple(problems)}
+
+        try:
+            workspace = load_workspace_config(root_dir)
+        except WorkspaceConfigError as exc:
+            return {
+                "capabilities": (),
+                "works": (),
+                "default_work": None,
+                "problems": (str(exc),),
+            }
+
+        capabilities: list[str] = []
+        work_ids: list[str] = []
+        for work_id in list_work_ids(workspace):
+            try:
+                work = load_work_config(workspace, work_id)
+            except WorkspaceConfigError as exc:
+                problems.append(str(exc))
+                continue
+            work_ids.append(work.slug)
+            for lane in work.active_lanes:
+                if lane not in capabilities:
+                    capabilities.append(lane)
+
+        if not work_ids:
+            problems.append("В workspace не найдено ни одного валидного work bundle.")
+
+        return {
+            "capabilities": tuple(capabilities),
+            "works": tuple(work_ids),
+            "default_work": workspace.default_work,
+            "problems": tuple(dict.fromkeys(problems)),
+        }
 
 
 class ProjectService:
@@ -368,6 +420,8 @@ class ProjectService:
         self.codex_model = codex_model
         self.python_executable = python_executable or sys.executable
         self._orchestrators: dict[str, WorkflowOrchestrator] = {}
+        self._workspace_cache: dict[str, WorkspaceConfig] = {}
+        self._work_cache: dict[tuple[str, str], WorkConfig] = {}
 
     @property
     def projects_file(self) -> Path:
@@ -405,6 +459,8 @@ class ProjectService:
         ]
         if len(candidates) == 1 and not active_id:
             self.store.set_active_project_id(candidates[0].id)
+            if candidates[0].default_work:
+                self.store.set_active_work_id(candidates[0].id, candidates[0].default_work)
             return candidates[0]
         return None
 
@@ -423,16 +479,91 @@ class ProjectService:
                 )
             )
         self.store.set_active_project_id(project.id)
+        active_work = self.store.get_active_work_id(project.id)
+        if not active_work or active_work not in project.works:
+            default_work = project.default_work or (project.works[0] if project.works else None)
+            if default_work:
+                self.store.set_active_work_id(project.id, default_work)
         return project
 
     def list_targets(self, project_id: str, lane: str, action: str) -> list[str]:
-        return self._get_orchestrator(self.require_project(project_id, capability=lane)).list_targets(lane, action)
+        project = self.require_project(project_id, capability=lane)
+        work = self.get_active_work(project.id, required_lane=lane)
+        return self._get_orchestrator(project).list_targets(lane, action, work_id=work.slug)
 
     def list_article_slugs(self, project_id: str) -> list[str]:
-        return self._get_orchestrator(self.require_project(project_id)).list_article_slugs()
+        project = self.require_project(project_id, capability="article")
+        work = self.get_active_work(project.id, required_lane="article")
+        return self._get_orchestrator(project).list_article_slugs(work_id=work.slug)
 
     def list_thesis_sections(self, project_id: str) -> list[str]:
-        return self._get_orchestrator(self.require_project(project_id, capability="thesis")).list_thesis_sections()
+        project = self.require_project(project_id, capability="thesis")
+        work = self.get_active_work(project.id, required_lane="thesis")
+        return self._get_orchestrator(project).list_thesis_sections(work_id=work.slug)
+
+    def list_works(self, project_id: str) -> list[WorkConfig]:
+        project = self.require_project(project_id)
+        workspace = self._get_workspace(project)
+        result: list[WorkConfig] = []
+        for work_id in project.works:
+            try:
+                result.append(self._get_work(project, work_id))
+            except WorkflowError:
+                continue
+        if not result:
+            for work_id in list_work_ids(workspace):
+                try:
+                    result.append(self._get_work(project, work_id))
+                except WorkflowError:
+                    continue
+        return result
+
+    def get_work(self, project_id: str, work_id: str) -> WorkConfig | None:
+        project = self.get_project(project_id)
+        if not project or not project.available:
+            return None
+        try:
+            return self._get_work(project, work_id)
+        except WorkflowError:
+            return None
+
+    def get_active_work(self, project_id: str, required_lane: str | None = None) -> WorkConfig:
+        project = self.require_project(project_id)
+        active_work_id = self.store.get_active_work_id(project.id)
+        if active_work_id:
+            try:
+                work = self._get_work(project, active_work_id)
+            except WorkflowError:
+                self.store.clear_active_work_id(project.id)
+            else:
+                if required_lane is None or work.supports(required_lane):
+                    return work
+
+        default_work_id = project.default_work or (project.works[0] if project.works else None)
+        if default_work_id:
+            try:
+                work = self._get_work(project, default_work_id)
+            except WorkflowError:
+                pass
+            else:
+                if required_lane is None or work.supports(required_lane):
+                    self.store.set_active_work_id(project.id, work.slug)
+                    return work
+
+        for work in self.list_works(project.id):
+            if required_lane is None or work.supports(required_lane):
+                self.store.set_active_work_id(project.id, work.slug)
+                return work
+
+        if required_lane:
+            raise WorkflowError(f"В проекте `{project.title}` нет work bundle с lane `{required_lane}`.")
+        raise WorkflowError(f"В проекте `{project.title}` не найдено доступных work bundle.")
+
+    def set_active_work(self, project_id: str, work_id: str) -> WorkConfig:
+        project = self.require_project(project_id)
+        work = self._get_work(project, work_id)
+        self.store.set_active_work_id(project.id, work.slug)
+        return work
 
     def start_run(
         self,
@@ -445,6 +576,7 @@ class ProjectService:
         model_override: str | None = None,
     ) -> dict[str, object]:
         project = self.require_project(project_id, capability=lane)
+        work = self.get_active_work(project.id, required_lane=lane)
         return self._get_orchestrator(project).start_run(
             lane,
             action,
@@ -452,6 +584,7 @@ class ProjectService:
             notes=notes,
             search_override=search_override,
             model_override=model_override,
+            work_id=work.slug,
         )
 
     def sync_active_run(self) -> list[RunRecord]:
@@ -467,13 +600,19 @@ class ProjectService:
         return [RunRecord(**item) for item in self.store.pop_notifications()]
 
     def list_recent_runs(self, project_id: str, lane: str = "all", limit: int = 8) -> list[RunRecord]:
-        return self._get_orchestrator(self.require_project(project_id)).list_recent_runs(lane, limit)
+        project = self.require_project(project_id)
+        work = self.get_active_work(project.id)
+        return self._get_orchestrator(project).list_recent_runs(lane, limit, work_id=work.slug)
 
     def get_artifact_status(self, project_id: str, subject: str) -> dict[str, object]:
-        return self._get_orchestrator(self.require_project(project_id)).get_artifact_status(subject)
+        project = self.require_project(project_id)
+        work = self.get_active_work(project.id)
+        return self._get_orchestrator(project).get_artifact_status(subject, work_id=work.slug)
 
     def export_docx(self, project_id: str, subject: str) -> dict[str, object]:
-        return self._get_orchestrator(self.require_project(project_id)).export_docx(subject)
+        project = self.require_project(project_id)
+        work = self.get_active_work(project.id)
+        return self._get_orchestrator(project).export_docx(subject, work_id=work.slug)
 
     def find_run_record(self, record_id: str, project_id: str | None = None) -> RunRecord | None:
         orchestrator = self._resolve_orchestrator_for_record(record_id, project_id)
@@ -537,6 +676,8 @@ class ProjectService:
                 title=str(payload.get("project_title") or project_root.name or "Проект"),
                 root_dir=project_root,
                 capabilities=("thesis", "article"),
+                works=(),
+                default_work=None,
             )
             return self._get_orchestrator(shadow_project)
         return None
@@ -556,6 +697,30 @@ class ProjectService:
         )
         self._orchestrators[project.id] = orchestrator
         return orchestrator
+
+    def _get_workspace(self, project: ProjectRecord) -> WorkspaceConfig:
+        cached = self._workspace_cache.get(project.id)
+        if cached and cached.root_dir == project.root_dir:
+            return cached
+        try:
+            workspace = load_workspace_config(project.root_dir)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
+        self._workspace_cache[project.id] = workspace
+        return workspace
+
+    def _get_work(self, project: ProjectRecord, work_id: str) -> WorkConfig:
+        cache_key = (project.id, work_id)
+        cached = self._work_cache.get(cache_key)
+        if cached and cached.work_dir.exists():
+            return cached
+        workspace = self._get_workspace(project)
+        try:
+            work = load_work_config(workspace, work_id)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
+        self._work_cache[cache_key] = work
+        return work
 
     def _project_id_from_record(self, record_id: str) -> str | None:
         if ":" not in record_id:

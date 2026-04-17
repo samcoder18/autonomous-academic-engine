@@ -11,6 +11,18 @@ import sys
 
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
+from .workspace import (
+    WorkConfig,
+    WorkspaceConfigError,
+    article_bundle_paths,
+    derive_review_path,
+    list_targets_for_action,
+    load_work_config,
+    load_workspace_config,
+    normalize_target_for_action,
+    relative_to_workspace,
+    resolve_work_config,
+)
 
 
 THESIS_ACTIONS = (
@@ -59,6 +71,8 @@ class RunRecord:
     project_id: str | None = None
     project_title: str | None = None
     project_root: str | None = None
+    work_id: str | None = None
+    work_title: str | None = None
     finished_at: str | None = None
     target: str | None = None
     topic: str | None = None
@@ -111,65 +125,30 @@ class WorkflowOrchestrator:
         self.python_executable = python_executable or sys.executable
         self.project_id = (project_id or "default").strip() or "default"
         self.project_title = (project_title or self.root_dir.name or self.project_id).strip()
-        self.output_docx_dir = self.root_dir / "output" / "docx"
-        self.article_docx_dir = self.output_docx_dir / "articles"
-        self.thesis_manifest_dir = self.root_dir / "output" / "codex"
-        self.article_manifest_dir = self.root_dir / "articles" / "runs"
+        self._workspace = None
 
-    def list_targets(self, lane: str, action: str) -> list[str]:
+    def list_targets(self, lane: str, action: str, *, work_id: str | None = None) -> list[str]:
         lane = lane.strip().lower()
         action = action.strip().lower()
+        work = self._work(work_id)
+        try:
+            return list_targets_for_action(self._workspace_config(), work, lane, action)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
 
-        if lane == "thesis":
-            patterns = {
-                "full-cycle": (
-                    "chapters/*.md",
-                    "sources/*.md",
-                    "manuscript/sections/*.md",
-                    "reviews/*.md",
-                ),
-                "source-pack": ("sources/*.md",),
-                "verify": (
-                    "chapters/*.md",
-                    "sources/*.md",
-                    "manuscript/sections/*.md",
-                    "reviews/*.md",
-                ),
-                "write-section": ("manuscript/sections/*.md",),
-                "review-section": ("manuscript/sections/*.md",),
-                "style-pass": ("manuscript/sections/*.md",),
-            }.get(action)
-            if not patterns:
-                raise WorkflowError(f"Не знаю такого действия для диплома: {action}")
-            return self._collect_targets(patterns)
-
-        if lane == "article":
-            patterns = {
-                "article": ("articles/briefs/*.md",),
-                "article-brief": ("articles/briefs/*.md",),
-                "review": ("articles/drafts/*.md", "articles/final/*.md"),
-                "repair": (
-                    "articles/drafts/*.md",
-                    "articles/final/*.md",
-                    "articles/reviews/*.md",
-                ),
-            }.get(action)
-            if not patterns:
-                raise WorkflowError(f"Не знаю такого действия для статьи: {action}")
-            return self._collect_targets(patterns)
-
-        raise WorkflowError(f"Не понимаю такой контур работы: {lane}")
-
-    def list_article_slugs(self) -> list[str]:
+    def list_article_slugs(self, *, work_id: str | None = None) -> list[str]:
+        work = self._work(work_id)
+        if not work.article:
+            raise WorkflowError(f"Work `{work.slug}` не поддерживает article lane.")
         slugs: set[str] = set()
         folders = (
-            self.root_dir / "articles" / "briefs",
-            self.root_dir / "articles" / "evidence",
-            self.root_dir / "articles" / "claim-maps",
-            self.root_dir / "articles" / "drafts",
-            self.root_dir / "articles" / "reviews",
-            self.root_dir / "articles" / "final",
-            self.article_docx_dir,
+            work.article.briefs_dir,
+            work.article.evidence_dir,
+            work.article.claim_maps_dir,
+            work.article.drafts_dir,
+            work.article.reviews_dir,
+            work.article.final_dir,
+            work.article.paths.output_docx_dir,
         )
         for folder in folders:
             if not folder.exists():
@@ -188,8 +167,11 @@ class WorkflowOrchestrator:
                 slugs.add(stem)
         return sorted(slugs)
 
-    def list_thesis_sections(self) -> list[str]:
-        return self._collect_targets(("manuscript/sections/*.md",))
+    def list_thesis_sections(self, *, work_id: str | None = None) -> list[str]:
+        work = self._work(work_id)
+        if not work.thesis:
+            raise WorkflowError(f"Work `{work.slug}` не поддерживает thesis lane.")
+        return self.list_targets("thesis", "write-section", work_id=work.slug)
 
     def start_run(
         self,
@@ -199,11 +181,14 @@ class WorkflowOrchestrator:
         notes: str | None = None,
         search_override: bool | None = None,
         model_override: str | None = None,
+        work_id: str | None = None,
     ) -> dict[str, Any]:
         self.sync_active_run()
         active = self.store.get_active_run()
         if active:
             raise RunBusyError(self.describe_active_run(active))
+
+        work = self._work(work_id, target_or_topic if lane == "thesis" else None)
 
         launcher_cmd, request_metadata = self._build_launch_command(
             lane=lane,
@@ -212,6 +197,7 @@ class WorkflowOrchestrator:
             notes=notes,
             search_override=search_override,
             model_override=model_override,
+            work_id=work.slug,
         )
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -230,6 +216,8 @@ class WorkflowOrchestrator:
             "project_id": self.project_id,
             "project_title": self.project_title,
             "project_root": str(self.root_dir),
+            "work_id": work.slug,
+            "work_title": work.title,
             "notes": notes.strip() if notes and notes.strip() else None,
             "search_override": search_override,
             "model_override": model_override,
@@ -279,6 +267,8 @@ class WorkflowOrchestrator:
             "project_id": self.project_id,
             "project_title": self.project_title,
             "project_root": str(self.root_dir),
+            "work_id": work.slug,
+            "work_title": work.title,
             "target": request_payload.get("target"),
             "topic": request_payload.get("topic"),
         }
@@ -316,24 +306,26 @@ class WorkflowOrchestrator:
         items = self.store.pop_notifications()
         return [RunRecord(**item) for item in items]
 
-    def list_recent_runs(self, lane: str = "all", limit: int = 8) -> list[RunRecord]:
+    def list_recent_runs(self, lane: str = "all", limit: int = 8, *, work_id: str | None = None) -> list[RunRecord]:
         self.sync_active_run()
         records: list[RunRecord] = []
         lane = lane.lower()
+        work = self._work(work_id)
 
         include_thesis = lane in ("all", "thesis")
         include_article = lane in ("all", "article")
 
         if include_thesis:
-            records.extend(self._load_manifest_records("thesis"))
+            records.extend(self._load_manifest_records("thesis", work.slug))
         if include_article:
-            records.extend(self._load_manifest_records("article"))
+            records.extend(self._load_manifest_records("article", work.slug))
 
-        records.extend(self._load_runtime_exception_records(lane))
+        records.extend(self._load_runtime_exception_records(lane, work.slug))
 
         active = self.store.get_active_run()
         if active and self._active_run_matches(active) and lane in ("all", active["lane"]):
-            records.insert(0, self._active_run_record(active))
+            if str(active.get("work_id") or "").strip() == work.slug:
+                records.insert(0, self._active_run_record(active))
 
         deduped: list[RunRecord] = []
         seen_manifests: set[str] = set()
@@ -369,43 +361,51 @@ class WorkflowOrchestrator:
         candidate = Path(path)
         return candidate if candidate.exists() else None
 
-    def get_artifact_status(self, subject: str) -> dict[str, Any]:
+    def get_artifact_status(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
+        work = self._work(work_id)
         if subject == "thesis":
             return {
                 "kind": "thesis-overview",
-                "sections": [self._thesis_section_status(path) for path in self.list_thesis_sections()],
+                "work_id": work.slug,
+                "sections": [self._thesis_section_status(path, work.slug) for path in self.list_thesis_sections(work_id=work.slug)],
             }
 
         if subject.startswith("thesis:"):
-            return self._thesis_section_status(subject.split(":", 1)[1])
+            return self._thesis_section_status(subject.split(":", 1)[1], work.slug)
 
         if subject == "article":
             return {
                 "kind": "article-overview",
-                "bundles": [self._article_bundle_status(slug) for slug in self.list_article_slugs()],
+                "work_id": work.slug,
+                "bundles": [self._article_bundle_status(slug, work.slug) for slug in self.list_article_slugs(work_id=work.slug)],
             }
 
         if subject.startswith("article:"):
-            return self._article_bundle_status(subject.split(":", 1)[1])
+            return self._article_bundle_status(subject.split(":", 1)[1], work.slug)
 
         raise WorkflowError(f"Не смогла определить, какой артефакт ты хочешь открыть: {subject}")
 
-    def export_docx(self, subject: str) -> dict[str, Any]:
+    def export_docx(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
+        work = self._work(work_id)
         if subject == "thesis":
-            cmd = ["bash", "scripts/export_docx.sh"]
-            expected = self.output_docx_dir / "thesis-draft.docx"
+            if not work.thesis:
+                raise WorkflowError(f"Work `{work.slug}` не поддерживает thesis lane.")
+            cmd = ["bash", "scripts/export_docx.sh", "--work", work.slug]
+            expected = work.thesis.export_docx_path
         elif subject.startswith("article:"):
             slug = subject.split(":", 1)[1]
-            status = self._article_bundle_status(slug)
+            status = self._article_bundle_status(slug, work.slug)
             final_markdown = status["files"]["final"]["path"]
             if not Path(final_markdown).exists():
                 raise WorkflowError(f"У статьи `{slug}` пока нет финального Markdown-файла для экспорта.")
             cmd = [
                 "bash",
                 "scripts/export_academic_docx.sh",
+                "--work",
+                work.slug,
                 self._relative_to_root(Path(final_markdown)),
             ]
-            expected = self.article_docx_dir / f"{slug}.docx"
+            expected = Path(status["files"]["docx"]["path"])
         else:
             raise WorkflowError(f"Не понимаю, что именно нужно экспортировать: {subject}")
 
@@ -440,6 +440,9 @@ class WorkflowOrchestrator:
         project_title = current.get("project_title")
         if project_title:
             lines.append(f"📚 Проект: {project_title}")
+        work_title = current.get("work_title")
+        if work_title:
+            lines.append(f"🗂 Работа: {work_title} (`{current.get('work_id')}`)")
         lines.append(f"{lane_title(current['lane']).capitalize()} • {action_title(current['action'])}")
         lines.append(f"Объект: {subject}")
         return "\n".join(lines)
@@ -453,6 +456,7 @@ class WorkflowOrchestrator:
         notes: str | None,
         search_override: bool | None,
         model_override: str | None,
+        work_id: str,
     ) -> tuple[list[str], dict[str, Any]]:
         lane = lane.strip().lower()
         action = action.strip().lower()
@@ -461,8 +465,8 @@ class WorkflowOrchestrator:
         if lane == "thesis":
             if action not in THESIS_ACTIONS:
                 raise WorkflowError(f"Для диплома пока не поддерживается действие: {action}")
-            target = self._validate_target("thesis", action, target_or_topic)
-            cmd = ["bash", "scripts/codex_thesis.sh", action, target]
+            target = self._validate_target("thesis", action, target_or_topic, work_id=work_id)
+            cmd = ["bash", "scripts/codex_thesis.sh", action, target, "--work", work_id]
             if notes_clean:
                 cmd.extend(["--notes", notes_clean])
             if search_override is True:
@@ -471,17 +475,18 @@ class WorkflowOrchestrator:
                 cmd.append("--no-search")
             if model_override:
                 cmd.extend(["--model", model_override])
-            return cmd, {"target": target}
+            work = self._work(work_id)
+            return cmd, {"target": target, "work_id": work.slug, "work_title": work.title}
 
         if lane == "article":
             if action not in ARTICLE_ACTIONS:
                 raise WorkflowError(f"Для статьи пока не поддерживается действие: {action}")
-            base = ["bash", "scripts/codex_academic.sh", action]
+            base = ["bash", "scripts/codex_academic.sh", action, "--work", work_id]
             metadata: dict[str, Any] = {}
             if action == "article":
                 target_mode, target_value = self._resolve_article_input(target_or_topic)
                 if target_mode == "brief":
-                    brief = self._validate_target("article", "article-brief", target_value)
+                    brief = self._validate_target("article", "article-brief", target_value, work_id=work_id)
                     base.extend(["--brief", brief])
                     metadata["target"] = brief
                     metadata["input_mode"] = "brief"
@@ -493,7 +498,7 @@ class WorkflowOrchestrator:
                     metadata["topic"] = topic
                     metadata["input_mode"] = "topic"
             else:
-                target = self._validate_target("article", action, target_or_topic)
+                target = self._validate_target("article", action, target_or_topic, work_id=work_id)
                 base.append(target)
                 metadata["target"] = target
 
@@ -505,6 +510,9 @@ class WorkflowOrchestrator:
                 base.append("--no-search")
             if model_override:
                 base.extend(["--model", model_override])
+            work = self._work(work_id)
+            metadata["work_id"] = work.slug
+            metadata["work_title"] = work.title
             return base, metadata
 
         raise WorkflowError(f"Не понимаю такой контур работы: {lane}")
@@ -525,41 +533,12 @@ class WorkflowOrchestrator:
             return ("brief", raw)
         return ("topic", raw)
 
-    def _validate_target(self, lane: str, action: str, target: str) -> str:
-        normalized = self._normalize_relative_path(target)
-        allowed = set(self.list_targets(lane, action))
-        if normalized not in allowed:
-            raise WorkflowError(
-                f"Этот файл не подходит для сценария «{lane_title(lane)} / {action_title(action)}»:\n{normalized}"
-            )
-        return normalized
-
-    def _normalize_relative_path(self, raw: str) -> str:
-        raw_path = Path(raw.strip()).expanduser()
-        candidate = raw_path if raw_path.is_absolute() else self.root_dir / raw_path
+    def _validate_target(self, lane: str, action: str, target: str, *, work_id: str | None = None) -> str:
+        work = self._work(work_id, target)
         try:
-            resolved = candidate.resolve(strict=True)
-        except FileNotFoundError as exc:
-            raise WorkflowError(f"Не нашла файл: {raw}") from exc
-
-        try:
-            relative = resolved.relative_to(self.root_dir)
-        except ValueError as exc:
-            raise WorkflowError(f"Этот путь находится вне корня проекта:\n{raw}") from exc
-        return relative.as_posix()
-
-    def _collect_targets(self, patterns: tuple[str, ...]) -> list[str]:
-        targets: list[str] = []
-        seen: set[str] = set()
-        for pattern in patterns:
-            for path in sorted(self.root_dir.glob(pattern)):
-                if path.name == "README.md" or path.name.startswith("."):
-                    continue
-                rel = self._relative_to_root(path)
-                if rel not in seen:
-                    seen.add(rel)
-                    targets.append(rel)
-        return targets
+            return normalize_target_for_action(self._workspace_config(), work, lane, action, target)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
 
     def _relative_to_root(self, path: Path) -> str:
         return path.resolve().relative_to(self.root_dir).as_posix()
@@ -603,6 +582,8 @@ class WorkflowOrchestrator:
             project_id=request.get("project_id", self.project_id),
             project_title=request.get("project_title", self.project_title),
             project_root=request.get("project_root", str(self.root_dir)),
+            work_id=request.get("work_id"),
+            work_title=request.get("work_title"),
             finished_at=result.get("finished_at"),
             target=request.get("target"),
             topic=request.get("topic"),
@@ -630,11 +611,13 @@ class WorkflowOrchestrator:
         if result.get("returncode") != 0:
             return (None, None)
 
-        candidate_records = self._load_manifest_records(request["lane"])
+        candidate_records = self._load_manifest_records(request["lane"], str(request.get("work_id") or "").strip())
         started = parse_datetime(request.get("started_at"))
         chosen: RunRecord | None = None
         for record in candidate_records:
             if record.action != request["action"]:
+                continue
+            if record.work_id != request.get("work_id"):
                 continue
             if request["lane"] == "thesis" and record.target != request.get("target"):
                 continue
@@ -655,13 +638,19 @@ class WorkflowOrchestrator:
             return (None, None)
         return (chosen.manifest_path, chosen.output_file)
 
-    def _load_manifest_records(self, lane: str) -> list[RunRecord]:
+    def _load_manifest_records(self, lane: str, work_id: str | None) -> list[RunRecord]:
         records: list[RunRecord] = []
-        if lane == "thesis":
-            directory = self.thesis_manifest_dir
-        elif lane == "article":
-            directory = self.article_manifest_dir
-        else:
+        if lane not in ("thesis", "article") or not work_id:
+            return records
+
+        try:
+            work = self._work(work_id)
+        except WorkflowError:
+            return records
+        directory = work.thesis.paths.output_runs_dir if lane == "thesis" and work.thesis else None
+        if lane == "article" and work.article:
+            directory = work.article.paths.output_runs_dir
+        if directory is None:
             return records
 
         if not directory.exists():
@@ -691,6 +680,8 @@ class WorkflowOrchestrator:
                     project_id=self.project_id,
                     project_title=self.project_title,
                     project_root=str(self.root_dir),
+                    work_id=data.get("work_id", work.slug),
+                    work_title=data.get("work_title", work.title),
                     target=target,
                     topic=topic,
                     manifest_path=str(manifest.resolve()),
@@ -701,7 +692,7 @@ class WorkflowOrchestrator:
             )
         return records
 
-    def _load_runtime_exception_records(self, lane: str) -> list[RunRecord]:
+    def _load_runtime_exception_records(self, lane: str, work_id: str) -> list[RunRecord]:
         records: list[RunRecord] = []
         for run_dir in self.store.list_run_dirs():
             request = self.store.read_json(run_dir / "request.json")
@@ -709,6 +700,8 @@ class WorkflowOrchestrator:
                 continue
             run_lane = request.get("lane")
             if lane not in ("all", run_lane):
+                continue
+            if str(request.get("work_id") or "").strip() != work_id:
                 continue
             resolution = self.store.read_json(run_dir / "resolution.json")
             result = self.store.read_json(run_dir / "result.json")
@@ -730,6 +723,8 @@ class WorkflowOrchestrator:
                     project_id=request.get("project_id", self.project_id),
                     project_title=request.get("project_title", self.project_title),
                     project_root=request.get("project_root", str(self.root_dir)),
+                    work_id=request.get("work_id"),
+                    work_title=request.get("work_title"),
                     finished_at=result.get("finished_at"),
                     target=request.get("target"),
                     topic=request.get("topic"),
@@ -757,6 +752,8 @@ class WorkflowOrchestrator:
             project_id=active.get("project_id", self.project_id),
             project_title=active.get("project_title", self.project_title),
             project_root=active.get("project_root", str(self.root_dir)),
+            work_id=active.get("work_id"),
+            work_title=active.get("work_title"),
             target=active.get("target"),
             topic=active.get("topic"),
             log_path=str(Path(active["run_dir"]) / "launcher.log"),
@@ -771,49 +768,46 @@ class WorkflowOrchestrator:
             ),
         )
 
-    def _thesis_section_status(self, target: str) -> dict[str, Any]:
-        section = self._validate_target("thesis", "write-section", target)
+    def _thesis_section_status(self, target: str, work_id: str) -> dict[str, Any]:
+        work = self._work(work_id, target)
+        section = self._validate_target("thesis", "write-section", target, work_id=work.slug)
         section_path = self.root_dir / section
-        review_path = self.root_dir / "reviews" / f"{section_path.stem}-review.md"
+        review_path = derive_review_path(self._workspace_config(), work, section)
         recent = [
             record.to_dict()
-            for record in self.list_recent_runs("thesis", limit=20)
+            for record in self.list_recent_runs("thesis", limit=20, work_id=work.slug)
             if record.target == section
         ][:3]
         return {
             "kind": "thesis-section",
+            "work_id": work.slug,
             "target": section,
-            "review_path": str(review_path),
-            "review_exists": review_path.exists(),
+            "review_path": str(review_path) if review_path else None,
+            "review_exists": review_path.exists() if review_path else False,
             "available_actions": list(THESIS_ACTIONS),
             "recent_runs": recent,
         }
 
-    def _article_bundle_status(self, slug: str) -> dict[str, Any]:
+    def _article_bundle_status(self, slug: str, work_id: str) -> dict[str, Any]:
         clean_slug = slug.strip()
         if not clean_slug:
             raise WorkflowError("Идентификатор статьи не может быть пустым.")
-
-        files = {
-            "brief": self.root_dir / "articles" / "briefs" / f"{clean_slug}.md",
-            "evidence": self.root_dir / "articles" / "evidence" / f"{clean_slug}.md",
-            "claim_map": self.root_dir / "articles" / "claim-maps" / f"{clean_slug}.md",
-            "draft": self.root_dir / "articles" / "drafts" / f"{clean_slug}.md",
-            "review": self.root_dir / "articles" / "reviews" / f"{clean_slug}.md",
-            "final": self.root_dir / "articles" / "final" / f"{clean_slug}.md",
-            "checklist": self.root_dir / "articles" / "final" / f"{clean_slug}-checklist.md",
-            "docx": self.article_docx_dir / f"{clean_slug}.docx",
-        }
+        work = self._work(work_id)
+        try:
+            files = article_bundle_paths(work, clean_slug)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
         present = {name: {"path": str(path), "exists": path.exists()} for name, path in files.items()}
         missing = [name for name, info in present.items() if not info["exists"]]
         recent = [
             record.to_dict()
-            for record in self.list_recent_runs("article", limit=20)
+            for record in self.list_recent_runs("article", limit=20, work_id=work.slug)
             if (record.target and clean_slug in record.target)
             or (record.output_file and clean_slug in record.output_file)
         ][:3]
         return {
             "kind": "article-bundle",
+            "work_id": work.slug,
             "slug": clean_slug,
             "files": present,
             "missing": missing,
@@ -852,3 +846,19 @@ class WorkflowOrchestrator:
         if request_root:
             return Path(request_root).expanduser().resolve() == self.root_dir
         return self.root_dir == self.store.root_dir
+
+    def _workspace_config(self):
+        if self._workspace is not None and self._workspace.root_dir == self.root_dir:
+            return self._workspace
+        try:
+            self._workspace = load_workspace_config(self.root_dir)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
+        return self._workspace
+
+    def _work(self, work_id: str | None = None, target: str | None = None) -> WorkConfig:
+        workspace = self._workspace_config()
+        try:
+            return resolve_work_config(workspace, work_id=work_id, target=target)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc

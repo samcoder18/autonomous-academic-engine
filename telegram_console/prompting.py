@@ -7,6 +7,7 @@ import re
 
 from .projects import ProjectRecord
 from .utils import shorten_text
+from .workspace import WorkConfig
 
 if TYPE_CHECKING:
     from .agent_chat import ProjectChatState
@@ -63,6 +64,9 @@ class ProjectContextSnapshot:
     project_title: str
     project_root: Path
     capabilities: tuple[str, ...]
+    active_work_id: str | None
+    active_work_title: str | None
+    active_work_root: str | None
     source_of_truth: tuple[tuple[str, str], ...]
     thesis_sections: tuple[str, ...]
     article_outputs: tuple[str, ...]
@@ -97,6 +101,7 @@ class PromptBuilder:
     def build_turn_prompt(
         self,
         project: ProjectRecord,
+        work: WorkConfig,
         state: "ProjectChatState",
         user_text: str,
         *,
@@ -104,7 +109,7 @@ class PromptBuilder:
         current_focus: str,
     ) -> BuiltPrompt:
         profile = self.classify_intent(user_text)
-        snapshot = self._build_snapshot(project, state, context_mode, current_focus)
+        snapshot = self._build_snapshot(project, work, state, context_mode, current_focus)
         done_contract = self._done_contract(profile)
         return BuiltPrompt(
             profile=profile,
@@ -118,6 +123,7 @@ class PromptBuilder:
     def _build_snapshot(
         self,
         project: ProjectRecord,
+        work: WorkConfig,
         state: "ProjectChatState",
         context_mode: ContextMode,
         current_focus: str,
@@ -127,36 +133,44 @@ class PromptBuilder:
             project_title=project.title,
             project_root=project.root_dir,
             capabilities=project.capabilities,
-            source_of_truth=self._source_of_truth(project),
-            thesis_sections=self._thesis_sections(project),
-            article_outputs=self._article_outputs(project),
+            active_work_id=work.slug,
+            active_work_title=work.title,
+            active_work_root=str(work.work_dir.relative_to(project.root_dir)),
+            source_of_truth=self._source_of_truth(project, work),
+            thesis_sections=self._thesis_sections(project, work),
+            article_outputs=self._article_outputs(project, work),
             last_user_message=state.last_user_message,
             last_assistant_summary=state.last_assistant_summary,
             current_focus=current_focus,
             context_mode=context_mode,
         )
 
-    def _source_of_truth(self, project: ProjectRecord) -> tuple[tuple[str, str], ...]:
+    def _source_of_truth(self, project: ProjectRecord, work: WorkConfig) -> tuple[tuple[str, str], ...]:
         items: list[tuple[str, str]] = []
         agents = project.root_dir / "AGENTS.md"
         if agents.exists():
             items.append((str(agents), "общая оркестрация проекта"))
 
+        workspace = project.root_dir / "workspace.toml"
+        if workspace.exists():
+            items.append((str(workspace), "машинно-читаемая конфигурация workspace"))
+
         master_protocol = project.root_dir / "meta" / "master-protocol.md"
         if master_protocol.exists():
             items.append((str(master_protocol), "единый рабочий регламент"))
 
-        if project.supports("thesis"):
-            canon = project.root_dir / "meta" / "project-canon.md"
-            if canon.exists():
-                items.append((str(canon), "канон thesis-проекта"))
+        work_toml = work.work_dir / "work.toml"
+        if work_toml.exists():
+            items.append((str(work_toml), "конфигурация активной работы"))
+        if work.work_canon_path.exists():
+            items.append((str(work.work_canon_path), "канон активной работы"))
 
         return tuple(items)
 
-    def _thesis_sections(self, project: ProjectRecord) -> tuple[str, ...]:
-        if not project.supports("thesis"):
+    def _thesis_sections(self, project: ProjectRecord, work: WorkConfig) -> tuple[str, ...]:
+        if not project.supports("thesis") or not work.thesis:
             return ()
-        sections_dir = project.root_dir / "manuscript" / "sections"
+        sections_dir = work.thesis.manuscript_sections_dir
         if not sections_dir.exists():
             return ()
         items = [
@@ -166,10 +180,10 @@ class PromptBuilder:
         ]
         return tuple(items)
 
-    def _article_outputs(self, project: ProjectRecord) -> tuple[str, ...]:
-        if not project.supports("article"):
+    def _article_outputs(self, project: ProjectRecord, work: WorkConfig) -> tuple[str, ...]:
+        if not project.supports("article") or not work.article:
             return ()
-        final_dir = project.root_dir / "articles" / "final"
+        final_dir = work.article.final_dir
         if not final_dir.exists():
             return ()
         items = [
@@ -217,6 +231,8 @@ class PromptBuilder:
             f"- ID: {snapshot.project_id}",
             f"- Корень проекта: {snapshot.project_root}",
             f"- Возможности: {', '.join(snapshot.capabilities) if snapshot.capabilities else 'не указаны'}",
+            f"- Активная работа: {snapshot.active_work_title or snapshot.active_work_id or 'не выбрана'}",
+            f"- Корень активной работы: {snapshot.active_work_root or 'не найден'}",
         ]
 
         lines.extend(["", "Source of truth:"])
@@ -245,7 +261,7 @@ class PromptBuilder:
                 "",
                 "Как работать:",
                 "- Не копируй длинные проектные документы в ответ. Если задача требует действий, сам открой нужные файлы внутри проекта.",
-                "- Для thesis/article соблюдай AGENTS.md, project canon и master protocol как source of truth.",
+                "- Для thesis/article соблюдай AGENTS.md, workspace.toml, work.toml, work-canon и master protocol как source of truth.",
                 "- Не заявляй завершенность, если реально остались blockers.",
                 "",
                 "Definition of done:",

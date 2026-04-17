@@ -18,6 +18,7 @@ from .utils import shorten_text, split_message
 
 MAIN_MENU = (
     ("📚 Проекты",),
+    ("🗂 Работы",),
     ("📦 Экспорт",),
 )
 
@@ -138,6 +139,9 @@ class TelegramConsoleBot:
         if text == "📚 Проекты":
             self._show_projects_menu(chat_id)
             return
+        if text == "🗂 Работы":
+            self._show_works_menu(chat_id)
+            return
         if text == "📦 Экспорт":
             self._export_active_project(chat_id)
             return
@@ -167,11 +171,18 @@ class TelegramConsoleBot:
         if data == "nav:projects":
             self._show_projects_menu(chat_id)
             return
+        if data == "nav:works":
+            self._show_works_menu(chat_id)
+            return
         if data == "nav:export":
             self._export_active_project(chat_id)
             return
         if data.startswith("project:use:"):
             self._select_project(chat_id, data.split(":", 2)[2])
+            return
+        if data.startswith("work:use:"):
+            _, _, project_id, work_id = data.split(":", 3)
+            self._select_work(chat_id, project_id, work_id)
             return
         self.safe_send(
             chat_id,
@@ -202,6 +213,7 @@ class TelegramConsoleBot:
                 [
                     "⏳ Беру это в работу",
                     f"📚 Проект: {project.title} (`{project.id}`)",
+                    f"🗂 Работа: {active.get('work_title') or 'по умолчанию'} (`{active.get('work_id') or 'default'}`)",
                     f"🧭 Режим: {active.get('detected_intent') or 'ответ'}",
                     f"🎯 Ожидаю: {active.get('expected_output') or 'содержательный результат по запросу'}",
                     f"🧠 Запрос: {shorten_text(active.get('prompt'), limit=160)}",
@@ -225,10 +237,17 @@ class TelegramConsoleBot:
             lines.extend(["", intro])
 
         if current:
+            try:
+                active_work = self.projects.get_active_work(current.id)
+                active_work_line = f"🗂 Активная работа: {active_work.title} (`{active_work.slug}`)"
+            except WorkflowError:
+                active_work = None
+                active_work_line = "🗂 Активная работа пока не определена."
             lines.extend(
                 [
                     "",
                     f"📚 Активный проект: {current.title} (`{current.id}`)",
+                    active_work_line,
                     f"Статус агента: {self._agent_status_label(current)}",
                     f"Что сейчас в разработке: {self.chat.describe_project_focus(current.id)}",
                 ]
@@ -250,7 +269,7 @@ class TelegramConsoleBot:
             lines.append("Пока не вижу ни одного рабочего проекта.")
             lines.append(f"Проверь реестр: {self.projects.projects_file}")
 
-        lines.extend(["", "Снизу всегда доступны `📚 Проекты` и `📦 Экспорт`."])
+        lines.extend(["", "Снизу всегда доступны `📚 Проекты`, `🗂 Работы` и `📦 Экспорт`."])
         self.safe_send(chat_id, "\n".join(lines), reply_markup=self.main_menu_markup)
 
     def _show_projects_menu(self, chat_id: int, intro: str | None = None) -> None:
@@ -290,6 +309,51 @@ class TelegramConsoleBot:
         reply_markup = inline_keyboard(buttons) if buttons else self.main_menu_markup
         self.safe_send(chat_id, "\n".join(lines), reply_markup=reply_markup)
 
+    def _show_works_menu(self, chat_id: int, intro: str | None = None) -> None:
+        project = self._ensure_active_project(chat_id)
+        if not project:
+            return
+        works = self.projects.list_works(project.id)
+        try:
+            current_work = self.projects.get_active_work(project.id)
+        except WorkflowError:
+            current_work = None
+
+        lines = ["🗂 Работы"]
+        if intro:
+            lines.extend([intro, ""])
+        lines.append(f"📚 Проект: {project.title} (`{project.id}`)")
+        lines.append(
+            f"Сейчас активна: {current_work.title} (`{current_work.slug}`)"
+            if current_work
+            else "Активная работа пока не выбрана."
+        )
+
+        if works:
+            lines.extend(["", "Что можно открыть прямо сейчас:"])
+            for work in works:
+                marker = "✅" if current_work and current_work.slug == work.slug else "📘"
+                lines.append(f"{marker} {work.title} — `{work.slug}`")
+                lines.append(f"Тип: {work.artifact_type}")
+                lines.append(f"Контуры: {', '.join(work.active_lanes)}")
+                lines.append("")
+        else:
+            lines.extend(["", "Пока не вижу ни одного work bundle для этого проекта."])
+
+        buttons = [
+            [
+                (
+                    self._work_button_label(project.id, work.slug, current_work.slug if current_work else None, work.title),
+                    f"work:use:{project.id}:{work.slug}",
+                )
+            ]
+            for work in works
+        ]
+        if works:
+            buttons.append([("📦 Экспорт активной работы", "nav:export")])
+        reply_markup = inline_keyboard(buttons) if buttons else self.main_menu_markup
+        self.safe_send(chat_id, "\n".join(lines), reply_markup=reply_markup)
+
     def _ensure_active_project(self, chat_id: int) -> ProjectRecord | None:
         project = self.projects.get_active_project()
         if project:
@@ -300,6 +364,7 @@ class TelegramConsoleBot:
     def _select_project(self, chat_id: int, project_id: str) -> None:
         try:
             project = self.projects.set_active_project(project_id)
+            work = self.projects.get_active_work(project.id)
         except WorkflowError as exc:
             self.safe_send(chat_id, str(exc), reply_markup=self.main_menu_markup)
             return
@@ -309,6 +374,27 @@ class TelegramConsoleBot:
                 [
                     "✅ Проект переключен",
                     f"Теперь работаю в контексте: {project.title} (`{project.id}`)",
+                    f"Активная работа: {work.title} (`{work.slug}`)",
+                ]
+            ),
+        )
+
+    def _select_work(self, chat_id: int, project_id: str, work_id: str) -> None:
+        try:
+            project = self.projects.require_project(project_id)
+            work = self.projects.set_active_work(project.id, work_id)
+            self.projects.set_active_project(project.id)
+            self.chat.mark_work_switch(project.id)
+        except WorkflowError as exc:
+            self.safe_send(chat_id, str(exc), reply_markup=self.main_menu_markup)
+            return
+        self._show_dashboard(
+            chat_id,
+            intro="\n".join(
+                [
+                    "✅ Активная работа переключена",
+                    f"📚 Проект: {project.title} (`{project.id}`)",
+                    f"🗂 Теперь активна: {work.title} (`{work.slug}`)",
                 ]
             ),
         )
@@ -325,9 +411,10 @@ class TelegramConsoleBot:
         self._run_export(chat_id, project.id, subject)
 
     def _resolve_export_subject(self, project: ProjectRecord) -> str:
-        if project.supports("thesis"):
+        active_work = self.projects.get_active_work(project.id)
+        if active_work.supports("thesis"):
             return "thesis"
-        if not project.supports("article"):
+        if not active_work.supports("article"):
             raise WorkflowError("Для этого проекта пока не найден понятный сценарий экспорта.")
 
         ready_slugs = [
@@ -346,6 +433,7 @@ class TelegramConsoleBot:
     def _run_export(self, chat_id: int, project_id: str, subject: str) -> None:
         try:
             project = self.projects.require_project(project_id)
+            work = self.projects.get_active_work(project.id)
             result = self.projects.export_docx(project.id, subject)
         except WorkflowError as exc:
             self.safe_send(chat_id, str(exc), reply_markup=self.main_menu_markup)
@@ -360,6 +448,7 @@ class TelegramConsoleBot:
                 [
                     "📦 Экспорт готов",
                     f"📚 Проект: {project.title}",
+                    f"🗂 Работа: {work.title} (`{work.slug}`)",
                     f"📄 Файл: {path}",
                     "Сейчас отправлю его отдельным сообщением 👇",
                 ]
@@ -396,6 +485,8 @@ class TelegramConsoleBot:
                 "💬 Ответ готов",
                 f"📚 Проект: {notification.project_title}",
             ]
+            if notification.work_title:
+                header.append(f"🗂 Работа: {notification.work_title} (`{notification.work_id}`)")
             if notification.reset_session:
                 header.append("⚠️ Контекст чата пришлось пересобрать, но разговор уже продолжился в новой сессии.")
             self.safe_send(self.config.allowed_chat_id, "\n".join(header))
@@ -411,6 +502,8 @@ class TelegramConsoleBot:
             "⚠️ Не получилось получить ответ Codex",
             f"📚 Проект: {notification.project_title}",
         ]
+        if notification.work_title:
+            lines.append(f"🗂 Работа: {notification.work_title} (`{notification.work_id}`)")
         if notification.reset_session:
             lines.append("Похоже, старая сессия сломалась. Следующее сообщение начнет новый контекст.")
         if notification.error:
@@ -424,8 +517,17 @@ class TelegramConsoleBot:
         current: ProjectRecord | None,
     ) -> list[str]:
         mark = "✅" if current and current.id == project.id else "📘"
+        work_label = "не выбрана"
+        try:
+            active_work = self.projects.get_active_work(project.id)
+        except WorkflowError:
+            active_work = None
+        if active_work:
+            work_label = f"{active_work.title} (`{active_work.slug}`)"
         return [
             f"{mark} {project.title} — `{project.id}`",
+            f"Работа: {work_label}",
+            f"Контуры: {self._project_capabilities(project)}",
             f"Статус: {self._agent_status_label(project)}",
             f"В работе: {self.chat.describe_project_focus(project.id)}",
             "",
@@ -441,6 +543,17 @@ class TelegramConsoleBot:
         if current and current.id == project.id:
             return f"✅ {project.title} · {project.id}"
         return f"📚 {project.title} · {project.id}"
+
+    def _work_button_label(
+        self,
+        project_id: str,
+        work_id: str,
+        current_work_id: str | None,
+        title: str,
+    ) -> str:
+        if current_work_id == work_id:
+            return f"✅ {title} · {work_id}"
+        return f"🗂 {title} · {work_id}"
 
     def _project_capabilities(self, project: ProjectRecord) -> str:
         labels = [PROJECT_CAPABILITY_LABELS.get(item, item) for item in project.capabilities]
@@ -493,6 +606,8 @@ def _format_project_registration_result(result: ProjectRegistrationResult) -> st
             f"ID: {result.project.id}",
             f"Путь: {result.project.root_dir}",
             f"Возможности: {', '.join(result.project.capabilities)}",
+            f"Работы: {', '.join(result.project.works) if result.project.works else 'не найдены'}",
+            f"Default work: {result.project.default_work or 'не указан'}",
         ]
     )
 

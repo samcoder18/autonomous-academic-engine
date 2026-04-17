@@ -12,7 +12,7 @@
 - Artifact type: thesis / VKR
 - Language: Russian
 - Citation model: footnotes
-- Canonical text location: `manuscript/sections/`
+- Canonical text location: `works/<slug>/thesis/manuscript/sections/`
 
 ## 3. Structure Defaults
 

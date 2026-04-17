@@ -10,4 +10,4 @@
 - ссылки и оформление;
 - естественность стиля.
 
-Article review хранится отдельно в `articles/reviews/`.
+Article review хранится отдельно в соседнем `works/biometrics-vkr/articles/reviews/`.

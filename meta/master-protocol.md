@@ -1,32 +1,34 @@
-# Мастер-протокол academic workflow
+# Мастер-протокол legal-academic workspace
 
 ## Назначение
 
-Это единый рабочий регламент проекта для thesis lane и article lane. Если правило процесса уже описано здесь, его не нужно дублировать в других служебных файлах.
+Это единый рабочий регламент workspace для всех `work bundle`, thesis lane и article lane.
+Если правило процесса уже описано здесь, его не нужно дублировать в других служебных файлах.
 
 ## 1. Источники истины
 
-- [project-canon.md](/Users/albina/дипломная/meta/project-canon.md) хранит только утвержденные решения thesis lane.
-- [manuscript/sections](/Users/albina/дипломная/manuscript/sections) хранит только канонический текст thesis lane.
-- [articles/](/Users/albina/дипломная/articles) хранит канонические article bundle и финальный article text.
-- [sources/](/Users/albina/дипломная/sources) хранит пакеты источников и заметки по ним.
+- [workspace.toml](/Users/albina/дипломная/workspace.toml) хранит корневую конфигурацию workspace.
+- `works/<slug>/work.toml` хранит конфигурацию конкретной работы.
+- `works/<slug>/work-canon.md` хранит только утвержденные решения конкретной работы.
+- `works/<slug>/thesis/manuscript/sections/` хранит канонический thesis-текст конкретной работы.
+- `works/<slug>/articles/` хранит article bundle и финальный article text конкретной работы.
 - [meta/standards](/Users/albina/дипломная/meta/standards) хранит raw и normalized publication standards.
-- [templates/](/Users/albina/дипломная/templates) задает минимальные формы для повторяемых задач.
-- [manuscript/full-draft.md](/Users/albina/дипломная/manuscript/full-draft.md) является только сборочным результатом.
+- [templates/](/Users/albina/дипломная/templates) задает минимальные reusable формы для повторяемых задач.
 
-Если решение не зафиксировано в каноне, оно не считается окончательным.
+Если решение не зафиксировано в каноне активной работы, оно не считается окончательным.
 
 ## 2. Когда дробить работу на отдельные чаты
 
 Новый чат открывается, если:
 
 - меняется цель работы;
-- обсуждается больше одной главы одновременно;
+- меняется `active work`;
+- обсуждается больше одной главы или одной статьи одновременно;
 - пакет источников выходит за пределы примерно 10-15 позиций;
 - началась отдельная подзадача вроде `методология`, `сноски`, `финальная вычитка`, `сравнительное право`;
 - текущий чат тратит время на повторение старого контекста вместо движения вперед.
 
-После завершения отдельного чата делается короткая синхронизация в `sync/` по шаблону.
+После завершения отдельного чата делается короткая синхронизация в work-local `sync/` по шаблону.
 
 ## 3. Агентная цепочка
 
@@ -34,7 +36,7 @@
 
 Базовая цепочка для thesis lane:
 
-1. Проверка канона и постановка задачи.
+1. Проверка workspace, active work и постановка задачи.
 2. Архитектор структуры.
 3. Синтезатор ресерча.
 4. Верификатор источников.
@@ -60,10 +62,11 @@
 
 ## 4. Разделение lane
 
-- thesis lane пишет только в `manuscript/sections`, `chapters`, `sources`, `reviews`, `sync` и производные thesis-выходы;
-- article lane пишет только в `articles/` и производные article-выходы вроде `output/docx/articles/`;
+- thesis lane пишет только в `works/<slug>/thesis/` и производные thesis-выходы;
+- article lane пишет только в `works/<slug>/articles/` и производные article-выходы;
 - один автономный прогон не должен смешивать thesis- и article-артефакты как основной output;
-- `project-canon.md` обязателен для thesis lane и используется в article lane только если статья прямо связана с темой диплома.
+- thesis lane обязан использовать канон активной работы;
+- article lane использует канон активной работы только когда статья связана с ее исследовательской рамкой.
 
 ## 5. Стандарт работы с источниками
 
@@ -89,29 +92,29 @@
 
 ## 7. Правила работы с thesis-рукописью
 
-- Основной рабочий текст редактируется только в [manuscript/sections](/Users/albina/дипломная/manuscript/sections).
+- Основной рабочий текст редактируется только в `works/<slug>/thesis/manuscript/sections/`.
 - Сноски оформляются как Markdown-сноски в конце соответствующей секции.
-- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh).
-- Для Word-версии со сносками используется [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh).
+- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh) с `--work`.
+- Для Word-версии со сносками используется [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh) с `--work`.
 - Проверку ориентировочного объема удобно делать через [scripts/check_section_length.sh](/Users/albina/дипломная/scripts/check_section_length.sh).
 
 ## 8. Правила работы с article bundle
 
-- Нормализованный article brief хранится в `articles/briefs/`.
-- Evidence pack хранится в `articles/evidence/`.
-- Claim map хранится в `articles/claim-maps/`.
-- Draft хранится в `articles/drafts/`.
-- Findings-first review хранится в `articles/reviews/`.
-- Финальный Markdown и checklist хранятся в `articles/final/`.
-- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](/Users/albina/дипломная/scripts/export_academic_docx.sh).
+- Нормализованный article brief хранится в `works/<slug>/articles/briefs/`.
+- Evidence pack хранится в `works/<slug>/articles/evidence/`.
+- Claim map хранится в `works/<slug>/articles/claim-maps/`.
+- Draft хранится в `works/<slug>/articles/drafts/`.
+- Findings-first review хранится в `works/<slug>/articles/reviews/`.
+- Финальный Markdown и checklist хранятся в `works/<slug>/articles/final/`.
+- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](/Users/albina/дипломная/scripts/export_academic_docx.sh) с `--work`.
 - Finalizer не должен утверждать полную формальную готовность, если relevant raw standard отсутствует или конфликтует с normalized profile.
 
 ## 9. Листы проверки и синхронизации
 
-- Для review-задач и крупных критических проходов создается или обновляется лист проверки в `reviews/` по [templates/chapter-review-sheet.md](/Users/albina/дипломная/templates/chapter-review-sheet.md).
-- После каждого значимого рабочего цикла обновляется короткая синхронизация в `sync/` по [templates/chat-sync.md](/Users/albina/дипломная/templates/chat-sync.md).
-- Если этап агентной цепочки был безопасно пропущен, причина этого фиксируется именно в синхронизации.
-- Для article lane findings-first review создается или обновляется в `articles/reviews/` по [templates/article-review-sheet.md](/Users/albina/дипломная/templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
+- Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](/Users/albina/дипломная/templates/chapter-review-sheet.md).
+- После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](/Users/albina/дипломная/templates/chat-sync.md).
+- Если этап агентной цепочки был безопасно пропущен, причина этого фиксируется именно в sync-следе работы.
+- Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](/Users/albina/дипломная/templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
 
 ## 10. Минимальный результат рабочего цикла
 

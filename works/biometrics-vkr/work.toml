@@ -1,0 +1,42 @@
+version = 1
+slug = "biometrics-vkr"
+title = "ВКР по конституционно-правовым гарантиям защиты персональных и биометрических данных"
+topic = "Конституционно-правовые гарантии защиты персональных и биометрических данных в условиях цифровой идентификации"
+artifact_type = "vkr"
+language = "ru"
+active_lanes = ["thesis", "article"]
+work_canon = "work-canon.md"
+
+[standards]
+thesis_profile = "thesis-v1"
+article_profile = "ru-law-article-v1"
+
+[thesis]
+root_dir = "thesis"
+chapters_dir = "thesis/chapters"
+sources_dir = "thesis/sources"
+manuscript_dir = "thesis/manuscript"
+manuscript_sections_dir = "thesis/manuscript/sections"
+reviews_dir = "thesis/reviews"
+sync_dir = "thesis/sync"
+full_draft_path = "thesis/manuscript/full-draft.md"
+docx_filename = "thesis-draft.docx"
+section_order = [
+  "thesis/manuscript/sections/00-title.md",
+  "thesis/manuscript/sections/01-introduction.md",
+  "thesis/manuscript/sections/02-chapter-1.md",
+  "thesis/manuscript/sections/03-chapter-2.md",
+  "thesis/manuscript/sections/04-chapter-3.md",
+  "thesis/manuscript/sections/05-conclusion.md",
+  "thesis/manuscript/sections/06-bibliography.md",
+]
+
+[article]
+root_dir = "articles"
+briefs_dir = "articles/briefs"
+evidence_dir = "articles/evidence"
+claim_maps_dir = "articles/claim-maps"
+drafts_dir = "articles/drafts"
+reviews_dir = "articles/reviews"
+final_dir = "articles/final"
+docx_subdir = "articles"

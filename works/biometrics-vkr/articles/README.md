@@ -2,7 +2,7 @@
 
 В этой папке живет отдельный контур для юридических академических статей.
 
-Он не заменяет thesis lane и не пишет в `manuscript/sections`.
+Он не заменяет thesis lane и не пишет в `works/biometrics-vkr/thesis/manuscript/sections`.
 
 ## Структура
 
@@ -16,6 +16,6 @@
 
 ## Правила
 
-- article lane пишет только в `articles/` и производные выходы вроде `output/docx/articles/`;
+- article lane пишет только в `works/biometrics-vkr/articles/` и производные выходы вроде `output/docx/biometrics-vkr/articles/`;
 - thesis lane пишет только в thesis-артефакты;
 - для статьи source of truth - это `brief`, `evidence pack`, `claim map`, `review` и `final` по одному `slug`.

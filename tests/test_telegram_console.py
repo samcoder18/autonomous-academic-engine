@@ -27,6 +27,16 @@ from telegram_console.projects import ProjectService
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 
 
+TEST_WORK_ID = "demo-work"
+TEST_WORK_ROOT = Path("works") / TEST_WORK_ID
+TEST_THESIS_SECTION = TEST_WORK_ROOT / "thesis" / "manuscript" / "sections" / "01-introduction.md"
+TEST_THESIS_REVIEW = TEST_WORK_ROOT / "thesis" / "reviews" / "01-introduction-review.md"
+TEST_ARTICLE_BRIEF = TEST_WORK_ROOT / "articles" / "briefs" / "demo.md"
+TEST_ARTICLE_DRAFT = TEST_WORK_ROOT / "articles" / "drafts" / "demo.md"
+TEST_ARTICLE_FINAL = TEST_WORK_ROOT / "articles" / "final" / "demo.md"
+TEST_ARTICLE_CHECKLIST = TEST_WORK_ROOT / "articles" / "final" / "demo-checklist.md"
+
+
 def write_file(path: Path, content: str, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -36,18 +46,84 @@ def write_file(path: Path, content: str, executable: bool = False) -> None:
 
 def build_fake_repo(root: Path) -> None:
     write_file(root / "AGENTS.md", "# Agents\n")
-    write_file(root / "meta/project-canon.md", "# Canon\n")
     write_file(root / "meta/master-protocol.md", "# Master protocol\n")
-    write_file(root / "manuscript/sections/01-introduction.md", "# Intro\n")
-    write_file(root / "manuscript/sections/README.md", "skip me\n")
-    write_file(root / "sources/source-pack.md", "# Sources\n")
-    write_file(root / "chapters/01-brief.md", "# Chapter\n")
-    write_file(root / "reviews/01-introduction-review.md", "# Review\n")
+    write_file(
+        root / "workspace.toml",
+        textwrap.dedent(
+            f"""\
+            version = 1
+            default_work = "{TEST_WORK_ID}"
+            supported_lanes = ["thesis", "article"]
 
-    write_file(root / "articles/briefs/demo.md", "# Demo brief\n")
-    write_file(root / "articles/drafts/demo.md", "# Demo draft\n")
-    write_file(root / "articles/final/demo.md", "# Demo final\n")
-    write_file(root / "articles/final/demo-checklist.md", "# Demo checklist\n")
+            [default_profiles]
+            thesis = "thesis-v1"
+            article = "ru-law-article-v1"
+
+            [outputs]
+            runs_dir = "output/runs"
+            docx_dir = "output/docx"
+
+            [works]
+            {TEST_WORK_ID} = "works/{TEST_WORK_ID}"
+            """
+        ),
+    )
+    write_file(
+        root / TEST_WORK_ROOT / "work.toml",
+        textwrap.dedent(
+            f"""\
+            version = 1
+            slug = "{TEST_WORK_ID}"
+            title = "Demo work"
+            topic = "Demo topic"
+            artifact_type = "vkr"
+            language = "ru"
+            active_lanes = ["thesis", "article"]
+            work_canon = "work-canon.md"
+
+            [standards]
+            thesis_profile = "thesis-v1"
+            article_profile = "ru-law-article-v1"
+
+            [thesis]
+            root_dir = "thesis"
+            chapters_dir = "thesis/chapters"
+            sources_dir = "thesis/sources"
+            manuscript_dir = "thesis/manuscript"
+            manuscript_sections_dir = "thesis/manuscript/sections"
+            reviews_dir = "thesis/reviews"
+            sync_dir = "thesis/sync"
+            full_draft_path = "thesis/manuscript/full-draft.md"
+            docx_filename = "thesis-draft.docx"
+            section_order = ["thesis/manuscript/sections/01-introduction.md"]
+
+            [article]
+            root_dir = "articles"
+            briefs_dir = "articles/briefs"
+            evidence_dir = "articles/evidence"
+            claim_maps_dir = "articles/claim-maps"
+            drafts_dir = "articles/drafts"
+            reviews_dir = "articles/reviews"
+            final_dir = "articles/final"
+            docx_subdir = "articles"
+            """
+        ),
+    )
+    write_file(root / TEST_WORK_ROOT / "work-canon.md", "# Canon\n")
+    write_file(root / TEST_THESIS_SECTION, "# Intro\n")
+    write_file(root / TEST_WORK_ROOT / "thesis" / "manuscript" / "README.md", "skip me\n")
+    write_file(root / TEST_WORK_ROOT / "thesis" / "sources" / "source-pack.md", "# Sources\n")
+    write_file(root / TEST_WORK_ROOT / "thesis" / "chapters" / "01-brief.md", "# Chapter\n")
+    write_file(root / TEST_THESIS_REVIEW, "# Review\n")
+
+    write_file(root / TEST_ARTICLE_BRIEF, "# Demo brief\n")
+    write_file(root / TEST_ARTICLE_DRAFT, "# Demo draft\n")
+    write_file(root / TEST_ARTICLE_FINAL, "# Demo final\n")
+    write_file(root / TEST_ARTICLE_CHECKLIST, "# Demo checklist\n")
+    write_file(root / "meta/standards/normalized/thesis-v1.md", "# thesis profile\n")
+    write_file(root / "meta/standards/normalized/ru-law-article-v1.md", "# article profile\n")
+    write_file(root / "meta/standards/raw/README.md", "# raw standards\n")
+    write_file(root / "meta/standards/README.md", "# standards\n")
 
     write_file(
         root / "scripts/codex_thesis.sh",
@@ -57,7 +133,8 @@ def build_fake_repo(root: Path) -> None:
             set -euo pipefail
 
             ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-            mkdir -p "$ROOT_DIR/output/codex"
+            WORK_ID="demo-work"
+            mkdir -p "$ROOT_DIR/output/runs/$WORK_ID/thesis"
             PRESET="${1:-}"
             TARGET="${2:-}"
             SLEEP_SECONDS="${TEST_SLEEP_SECONDS:-0}"
@@ -65,15 +142,17 @@ def build_fake_repo(root: Path) -> None:
               sleep "$SLEEP_SECONDS"
             fi
             TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-            OUT_FILE="$ROOT_DIR/output/codex/${TIMESTAMP}-${PRESET}.md"
-            MANIFEST_FILE="$ROOT_DIR/output/codex/${TIMESTAMP}-${PRESET}.meta.json"
+            OUT_FILE="$ROOT_DIR/output/runs/$WORK_ID/thesis/${TIMESTAMP}-${PRESET}.md"
+            MANIFEST_FILE="$ROOT_DIR/output/runs/$WORK_ID/thesis/${TIMESTAMP}-${PRESET}.meta.json"
             printf 'thesis output\\n' > "$OUT_FILE"
-            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$PRESET" "$ROOT_DIR" "$TARGET" "$OUT_FILE" <<'PY'
+            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$PRESET" "$ROOT_DIR" "$TARGET" "$OUT_FILE" "$WORK_ID" <<'PY'
             import json
             import sys
             manifest = {
                 "timestamp": sys.argv[2],
                 "preset": sys.argv[3],
+                "work_id": sys.argv[7],
+                "work_title": "Demo work",
                 "target": {
                     "absolute": f"{sys.argv[4]}/{sys.argv[5]}",
                     "relative": sys.argv[5],
@@ -99,7 +178,8 @@ def build_fake_repo(root: Path) -> None:
             set -euo pipefail
 
             ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-            mkdir -p "$ROOT_DIR/articles/runs"
+            WORK_ID="demo-work"
+            mkdir -p "$ROOT_DIR/output/runs/$WORK_ID/article"
             COMMAND="${1:-}"
             shift || true
             TARGET_PATH=""
@@ -126,15 +206,17 @@ def build_fake_repo(root: Path) -> None:
               TARGET_PATH="${1:-}"
             fi
             TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-            OUT_FILE="$ROOT_DIR/articles/runs/${TIMESTAMP}-${COMMAND}-demo.md"
-            MANIFEST_FILE="$ROOT_DIR/articles/runs/${TIMESTAMP}-${COMMAND}-demo.meta.json"
+            OUT_FILE="$ROOT_DIR/output/runs/$WORK_ID/article/${TIMESTAMP}-${COMMAND}-demo.md"
+            MANIFEST_FILE="$ROOT_DIR/output/runs/$WORK_ID/article/${TIMESTAMP}-${COMMAND}-demo.meta.json"
             printf 'article output\\n' > "$OUT_FILE"
-            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$COMMAND" "$ROOT_DIR" "$TARGET_PATH" "$TOPIC" "$INPUT_BRIEF" "$OUT_FILE" <<'PY'
+            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$COMMAND" "$ROOT_DIR" "$TARGET_PATH" "$TOPIC" "$INPUT_BRIEF" "$OUT_FILE" "$WORK_ID" <<'PY'
             import json
             import sys
             manifest = {
                 "timestamp": sys.argv[2],
                 "command": sys.argv[3],
+                "work_id": sys.argv[9],
+                "work_title": "Demo work",
                 "profile_id": "ru-law-article-v1",
                 "search_enabled": False,
                 "target_path": sys.argv[5] or None,
@@ -143,14 +225,14 @@ def build_fake_repo(root: Path) -> None:
                 "output_file": sys.argv[8],
                 "bundle": {
                     "slug": "demo",
-                    "brief": f"{sys.argv[4]}/articles/briefs/demo.md",
-                    "evidence_pack": f"{sys.argv[4]}/articles/evidence/demo.md",
-                    "claim_map": f"{sys.argv[4]}/articles/claim-maps/demo.md",
-                    "draft": f"{sys.argv[4]}/articles/drafts/demo.md",
-                    "review": f"{sys.argv[4]}/articles/reviews/demo.md",
-                    "final_markdown": f"{sys.argv[4]}/articles/final/demo.md",
-                    "checklist": f"{sys.argv[4]}/articles/final/demo-checklist.md",
-                    "docx": f"{sys.argv[4]}/output/docx/articles/demo.docx",
+                    "brief": f"{sys.argv[4]}/works/demo-work/articles/briefs/demo.md",
+                    "evidence_pack": f"{sys.argv[4]}/works/demo-work/articles/evidence/demo.md",
+                    "claim_map": f"{sys.argv[4]}/works/demo-work/articles/claim-maps/demo.md",
+                    "draft": f"{sys.argv[4]}/works/demo-work/articles/drafts/demo.md",
+                    "review": f"{sys.argv[4]}/works/demo-work/articles/reviews/demo.md",
+                    "final_markdown": f"{sys.argv[4]}/works/demo-work/articles/final/demo.md",
+                    "checklist": f"{sys.argv[4]}/works/demo-work/articles/final/demo-checklist.md",
+                    "docx": f"{sys.argv[4]}/output/docx/demo-work/articles/demo.docx",
                 },
             }
             with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -169,8 +251,8 @@ def build_fake_repo(root: Path) -> None:
             #!/usr/bin/env bash
             set -euo pipefail
             ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-            mkdir -p "$ROOT_DIR/output/docx"
-            OUT="$ROOT_DIR/output/docx/thesis-draft.docx"
+            mkdir -p "$ROOT_DIR/output/docx/demo-work"
+            OUT="$ROOT_DIR/output/docx/demo-work/thesis-draft.docx"
             printf 'fake thesis docx' > "$OUT"
             printf 'Exported %s\\n' "$OUT"
             """
@@ -185,9 +267,9 @@ def build_fake_repo(root: Path) -> None:
             set -euo pipefail
             ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
             INPUT="${1:-}"
-            mkdir -p "$ROOT_DIR/output/docx/articles"
+            mkdir -p "$ROOT_DIR/output/docx/demo-work/articles"
             STEM="$(basename "${INPUT%.md}")"
-            OUT="$ROOT_DIR/output/docx/articles/${STEM}.docx"
+            OUT="$ROOT_DIR/output/docx/demo-work/articles/${STEM}.docx"
             printf 'fake article docx' > "$OUT"
             printf 'Exported %s\\n' "$OUT"
             """
@@ -320,16 +402,18 @@ def write_projects_registry(bot_home: Path, projects: list[dict[str, object]]) -
 
 
 def write_thesis_manifest(root: Path, timestamp: str, output_label: str = "verify") -> None:
-    manifest = root / "output" / "codex" / f"{timestamp}-{output_label}.meta.json"
-    output = root / "output" / "codex" / f"{timestamp}-{output_label}.md"
+    manifest = root / "output" / "runs" / TEST_WORK_ID / "thesis" / f"{timestamp}-{output_label}.meta.json"
+    output = root / "output" / "runs" / TEST_WORK_ID / "thesis" / f"{timestamp}-{output_label}.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("trace\n", encoding="utf-8")
     payload = {
         "timestamp": timestamp,
         "preset": output_label,
+        "work_id": TEST_WORK_ID,
+        "work_title": "Demo work",
         "target": {
-            "absolute": str(root / "manuscript/sections/01-introduction.md"),
-            "relative": "manuscript/sections/01-introduction.md",
+            "absolute": str(root / TEST_THESIS_SECTION),
+            "relative": TEST_THESIS_SECTION.as_posix(),
             "state": "existing",
         },
         "output_file": str(output),
