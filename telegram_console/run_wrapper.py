@@ -2,20 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
-import json
 import shlex
 import subprocess
 import sys
-from datetime import datetime, timezone
 
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+from .utils import utc_now, write_json
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

@@ -5,31 +5,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import os
-import re
 import subprocess
 import sys
 
-from .orchestrator import slugify, utc_now
+from .orchestrator import slugify
+from .prompting import PromptBuilder
 from .projects import ProjectService
 from .state import RuntimeStore
-
-
-def parse_datetime(raw: str | None) -> datetime:
-    if not raw:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-
-
-def shorten_text(value: str | None, limit: int = 140) -> str:
-    clean = re.sub(r"\s+", " ", (value or "").strip())
-    if not clean:
-        return ""
-    if len(clean) <= limit:
-        return clean
-    return clean[: limit - 1].rstrip() + "…"
+from .utils import parse_datetime, shorten_text, utc_now
 
 
 class AgentChatError(RuntimeError):
@@ -49,6 +32,7 @@ class ProjectChatState:
     last_assistant_summary: str | None = None
     busy: bool = False
     last_export_path: str | None = None
+    needs_full_context: bool = False
 
 
 @dataclass
@@ -88,6 +72,7 @@ class AgentChatService:
         codex_model: str | None = None,
         python_executable: str | None = None,
         store: RuntimeStore | None = None,
+        prompt_builder: PromptBuilder | None = None,
     ):
         self.projects = project_service
         self.store = store or project_service.store
@@ -96,6 +81,7 @@ class AgentChatService:
         self.codex_bin = codex_bin or project_service.codex_bin
         self.codex_model = codex_model or project_service.codex_model
         self.python_executable = python_executable or sys.executable
+        self.prompt_builder = prompt_builder or PromptBuilder()
 
     def get_project_state(self, project_id: str) -> ProjectChatState:
         payload = self.store.get_project_chat(project_id)
@@ -109,6 +95,7 @@ class AgentChatService:
             last_assistant_summary=self._optional_text(payload.get("last_assistant_summary")),
             busy=busy or bool(payload.get("busy")),
             last_export_path=self._optional_text(payload.get("last_export_path")),
+            needs_full_context=bool(payload.get("needs_full_context")),
         )
 
     def describe_project_focus(self, project_id: str) -> str:
@@ -136,6 +123,14 @@ class AgentChatService:
 
         project = self.projects.require_project(project_id)
         state = self.get_project_state(project.id)
+        context_mode = self._select_context_mode(project.id, state)
+        built_prompt = self.prompt_builder.build_turn_prompt(
+            project,
+            state,
+            clean_prompt,
+            context_mode=context_mode,
+            current_focus=self.describe_project_focus(project.id),
+        )
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         task_token = f"{timestamp}-{slugify(project.id)}-chat"
         task_id = f"{project.id}:{timestamp}-chat"
@@ -147,11 +142,17 @@ class AgentChatService:
             "project_id": project.id,
             "project_title": project.title,
             "project_root": str(project.root_dir),
-            "prompt": clean_prompt,
+            "prompt": built_prompt.prompt_text,
+            "user_text": clean_prompt,
             "session_id": state.session_id,
             "started_at": utc_now(),
             "codex_bin": self.codex_bin,
             "codex_model": self.codex_model,
+            "profile": built_prompt.profile,
+            "detected_intent": built_prompt.detected_intent,
+            "done_contract": list(built_prompt.done_contract),
+            "expected_output": built_prompt.expected_output,
+            "context_mode": built_prompt.context_mode,
         }
         self.store.write_json(task_dir / "request.json", request_payload)
 
@@ -185,9 +186,16 @@ class AgentChatService:
             "project_root": str(project.root_dir),
             "started_at": request_payload["started_at"],
             "prompt": clean_prompt,
+            "user_text": clean_prompt,
             "session_id": state.session_id,
+            "profile": built_prompt.profile,
+            "detected_intent": built_prompt.detected_intent,
+            "done_contract": list(built_prompt.done_contract),
+            "expected_output": built_prompt.expected_output,
+            "context_mode": built_prompt.context_mode,
         }
         self.store.set_active_agent_task(active_payload)
+        self.store.set_last_chat_project_id(project.id)
         self._save_project_state(
             project.id,
             {
@@ -197,6 +205,7 @@ class AgentChatService:
                 "last_assistant_summary": state.last_assistant_summary,
                 "busy": True,
                 "last_export_path": state.last_export_path,
+                "needs_full_context": False,
             },
         )
         return active_payload
@@ -243,27 +252,16 @@ class AgentChatService:
                 "last_assistant_summary": state.last_assistant_summary,
                 "busy": False,
                 "last_export_path": str(Path(export_path).resolve()),
+                "needs_full_context": state.needs_full_context,
             },
         )
-
-    def reset_project_session(self, project_id: str) -> ProjectChatState:
-        state = self.get_project_state(project_id)
-        self._save_project_state(
-            project_id,
-            {
-                "session_id": None,
-                "last_activity_at": state.last_activity_at,
-                "last_user_message": state.last_user_message,
-                "last_assistant_summary": state.last_assistant_summary,
-                "busy": False,
-                "last_export_path": state.last_export_path,
-            },
-        )
-        return self.get_project_state(project_id)
 
     def describe_active_task(self, payload: dict[str, Any]) -> str:
         project_title = self._optional_text(payload.get("project_title")) or "без названия"
-        prompt = shorten_text(self._optional_text(payload.get("prompt")), limit=120)
+        prompt = shorten_text(
+            self._optional_text(payload.get("user_text")) or self._optional_text(payload.get("prompt")),
+            limit=120,
+        )
         lines = [
             "⏳ Я уже отвечаю в другом проекте.",
             f"📚 Проект: {project_title}",
@@ -282,6 +280,7 @@ class AgentChatService:
         existing = self.get_project_state(project_id)
         response_path = self._optional_text(result.get("response_path"))
         response_text = self._optional_text(result.get("response_text"))
+        user_text = self._optional_text(request.get("user_text"))
         if not response_text and response_path:
             path = Path(response_path)
             if path.exists():
@@ -291,6 +290,8 @@ class AgentChatService:
         error_text = self._optional_text(result.get("error"))
         summary_source = response_text if status == "success" else error_text or "Не удалось получить ответ."
         summary = shorten_text(summary_source, limit=220) or None
+        if status == "success" and user_text and user_text not in (summary or ""):
+            summary = shorten_text(f"{user_text} — {summary_source}", limit=220) or summary
         session_id = self._optional_text(result.get("thread_id"))
         if not session_id and status == "success":
             session_id = existing.session_id
@@ -300,10 +301,11 @@ class AgentChatService:
             {
                 "session_id": session_id,
                 "last_activity_at": self._optional_text(result.get("finished_at")) or utc_now(),
-                "last_user_message": self._optional_text(request.get("prompt")) or existing.last_user_message,
+                "last_user_message": user_text or existing.last_user_message,
                 "last_assistant_summary": summary,
                 "busy": False,
                 "last_export_path": existing.last_export_path,
+                "needs_full_context": bool(result.get("reset_session")),
             },
         )
 
@@ -325,6 +327,16 @@ class AgentChatService:
             reset_session=bool(result.get("reset_session")),
             error=error_text,
         )
+
+    def _select_context_mode(self, project_id: str, state: ProjectChatState) -> str:
+        last_chat_project_id = self.store.get_last_chat_project_id()
+        if not state.session_id:
+            return "full"
+        if state.needs_full_context:
+            return "full"
+        if last_chat_project_id and last_chat_project_id != project_id:
+            return "full"
+        return "compact"
 
     def _save_project_state(self, project_id: str, payload: dict[str, Any]) -> None:
         self.store.set_project_chat(project_id, payload)

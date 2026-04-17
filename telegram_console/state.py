@@ -114,6 +114,19 @@ class RuntimeStore:
             state.pop("active_project", None)
             self.write_json(self.bot_state_file, state)
 
+    def get_last_chat_project_id(self) -> str | None:
+        state = self.read_json(self.bot_state_file, default={})
+        value = state.get("last_chat_project")
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def set_last_chat_project_id(self, project_id: str) -> None:
+        state = self.read_json(self.bot_state_file, default={})
+        state["last_chat_project"] = project_id
+        self.write_json(self.bot_state_file, state)
+
     def get_project_chats(self) -> dict[str, dict[str, Any]]:
         payload = self.read_json(self.project_chats_file, default={})
         if not isinstance(payload, dict):

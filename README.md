@@ -146,10 +146,42 @@ Telegram console теперь работает как минималистичн
 - `SMTP_TO_EMAIL`
 - `SMTP_TIMEOUT_SECONDS` - таймаут SMTP, по умолчанию `30`
 
-Запуск:
+Локальный запуск вручную:
 
 - `python3 scripts/telegram_console.py`
 - `python3 -m telegram_console`
+
+Локальный always-on режим через macOS LaunchAgent:
+
+1. Заполни локальный env-файл `output/telegram/.env.launchd`
+2. Выполни `python3 scripts/telegram_console.py service install`
+3. Дальше управляй сервисом командами ниже, без открытого терминала
+
+Команды сервиса:
+
+- `python3 scripts/telegram_console.py service install`
+- `python3 scripts/telegram_console.py service start`
+- `python3 scripts/telegram_console.py service stop`
+- `python3 scripts/telegram_console.py service restart`
+- `python3 scripts/telegram_console.py service status`
+- `python3 scripts/telegram_console.py service uninstall`
+
+Что делает LaunchAgent-режим:
+
+- запускает бота в фоне без открытого терминала;
+- поднимает его после логина в macOS;
+- перезапускает после падения;
+- берет секреты из `output/telegram/.env.launchd`, а не из ручных `export`.
+
+Где лежат служебные файлы:
+
+- локальный env: `output/telegram/.env.launchd`
+- plist template в репозитории: `deploy/local-telegram-console.plist`
+- установленный plist: `~/Library/LaunchAgents/com.albina.telegram-console.plist`
+- stdout лог: `output/telegram/runtime/bot.stdout.log`
+- stderr лог: `output/telegram/runtime/bot.stderr.log`
+
+Если `output/telegram/.env.launchd` еще не существует, `service install` сам создаст шаблон и подскажет, что заполнить.
 
 Опция `--root` теперь означает `bot home`: именно там бот хранит `projects.json`, `runtime/` и свой служебный state.
 
@@ -157,13 +189,8 @@ Telegram console теперь работает как минималистичн
 
 - постоянные кнопки: `📚 Проекты` и `📦 Экспорт`
 - `/start` - открыть dashboard
-- `/project`
-- `/project current`
-- `/project use law-thesis-a`
-- `/export`
-- обычный текст без slash-команды - это прямое сообщение Codex в контексте активного проекта
-
-Legacy workflow-команды `/run`, `/artifact`, `/file` больше не считаются основным интерфейсом и не используются в обычном сценарии.
+- все остальные сообщения, включая текст со слэшем, идут напрямую в агент как обычный prompt
+- выбор проекта делается кнопкой `📚 Проекты`, а не текстовыми slash-командами
 
 Почтовая отправка включается только если заданы `SMTP_HOST`, `SMTP_FROM_EMAIL` и `SMTP_TO_EMAIL`.
 Если SMTP-настройки не заданы или заданы неполно, Telegram console работает как раньше, без почтовой доставки.

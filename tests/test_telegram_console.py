@@ -20,7 +20,9 @@ from telegram_console.agent_chat import (
 from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
 from telegram_console.config import TelegramConsoleConfig
 from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
-from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
+from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
+from telegram_console.orchestrator import RunBusyError, WorkflowOrchestrator
+from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.projects import ProjectService
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 
@@ -34,6 +36,8 @@ def write_file(path: Path, content: str, executable: bool = False) -> None:
 
 def build_fake_repo(root: Path) -> None:
     write_file(root / "AGENTS.md", "# Agents\n")
+    write_file(root / "meta/project-canon.md", "# Canon\n")
+    write_file(root / "meta/master-protocol.md", "# Master protocol\n")
     write_file(root / "manuscript/sections/01-introduction.md", "# Intro\n")
     write_file(root / "manuscript/sections/README.md", "skip me\n")
     write_file(root / "sources/source-pack.md", "# Sources\n")
@@ -192,6 +196,39 @@ def build_fake_repo(root: Path) -> None:
     )
 
 
+def build_fake_launchd_files(root: Path) -> None:
+    write_file(
+        root / "scripts/run_telegram_console_launchd.sh",
+        "#!/usr/bin/env bash\nexit 0\n",
+        executable=True,
+    )
+    write_file(
+        root / "deploy/local-telegram-console.plist",
+        textwrap.dedent(
+            """\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <plist version="1.0">
+            <dict>
+              <key>Label</key>
+              <string>__LABEL__</string>
+              <key>ProgramArguments</key>
+              <array>
+                <string>__SHELL__</string>
+                <string>__PROGRAM__</string>
+              </array>
+              <key>WorkingDirectory</key>
+              <string>__WORKDIR__</string>
+              <key>StandardOutPath</key>
+              <string>__STDOUT__</string>
+              <key>StandardErrorPath</key>
+              <string>__STDERR__</string>
+            </dict>
+            </plist>
+            """
+        ),
+    )
+
+
 def build_fake_codex(path: Path) -> None:
     write_file(
         path,
@@ -324,12 +361,12 @@ class FakeApi:
 
 class FakeChatService:
     def __init__(self) -> None:
-        self.started: list[dict[str, str]] = []
+        self.started: list[dict[str, object]] = []
         self.exports: list[dict[str, str]] = []
-        self.reset_calls: list[str] = []
         self.notifications: list[AgentTurnNotification] = []
         self.states: dict[str, ProjectChatState] = {}
         self.raise_busy = False
+        self.prompt_builder = PromptBuilder()
 
     def get_project_state(self, project_id: str) -> ProjectChatState:
         return self.states.get(project_id, ProjectChatState(project_id=project_id))
@@ -338,10 +375,17 @@ class FakeChatService:
         state = self.get_project_state(project_id)
         return state.last_assistant_summary or state.last_user_message or "Пока без истории."
 
-    def start_turn(self, project_id: str, prompt: str) -> dict[str, str]:
+    def start_turn(self, project_id: str, prompt: str) -> dict[str, object]:
         if self.raise_busy:
             raise AgentBusyError("⏳ Я уже отвечаю в другом проекте.")
-        payload = {"project_id": project_id, "prompt": prompt}
+        profile = self.prompt_builder.classify_intent(prompt)
+        payload = {
+            "project_id": project_id,
+            "prompt": prompt,
+            "profile": profile,
+            "detected_intent": PROFILE_LABELS[profile],
+            "expected_output": PROFILE_EXPECTATIONS[profile],
+        }
         self.started.append(payload)
         self.states[project_id] = ProjectChatState(
             project_id=project_id,
@@ -375,20 +419,6 @@ class FakeChatService:
             last_export_path=str(export_path),
         )
 
-    def reset_project_session(self, project_id: str) -> ProjectChatState:
-        self.reset_calls.append(project_id)
-        state = self.get_project_state(project_id)
-        self.states[project_id] = ProjectChatState(
-            project_id=project_id,
-            session_id=None,
-            last_activity_at=state.last_activity_at,
-            last_user_message=state.last_user_message,
-            last_assistant_summary=state.last_assistant_summary,
-            busy=False,
-            last_export_path=state.last_export_path,
-        )
-        return self.states[project_id]
-
     def describe_active_task(self, payload: dict[str, object]) -> str:
         return "⏳ Я уже отвечаю в другом проекте."
 
@@ -403,6 +433,39 @@ class FakeMailer:
         self.calls.append({"file_path": str(file_path), "artifact_kind": artifact_kind})
         if self.error:
             raise self.error
+
+
+class FakeCommandResult:
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class FakeLaunchctl:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+        self.loaded = False
+        self.pid = 4242
+
+    def __call__(self, command: list[str]) -> FakeCommandResult:
+        self.commands.append(command)
+        if command[:2] == ["launchctl", "print"]:
+            if self.loaded:
+                return FakeCommandResult(stdout=f"service = {{\n\tpid = {self.pid}\n}}\n")
+            return FakeCommandResult(returncode=113, stderr="service not loaded")
+        if command[:2] == ["launchctl", "bootstrap"]:
+            self.loaded = True
+            return FakeCommandResult()
+        if command[:2] == ["launchctl", "kickstart"]:
+            self.loaded = True
+            return FakeCommandResult()
+        if command[:2] == ["launchctl", "bootout"]:
+            if self.loaded:
+                self.loaded = False
+                return FakeCommandResult()
+            return FakeCommandResult(returncode=36, stderr="service not loaded")
+        return FakeCommandResult()
 
 
 class DummySmtpClient:
@@ -911,6 +974,10 @@ class AgentChatServiceTests(unittest.TestCase):
             time.sleep(0.1)
         self.fail("agent task did not complete in time")
 
+    def read_request_payload(self, active: dict[str, object]) -> dict[str, object]:
+        task_dir = Path(str(active["task_dir"]))
+        return json.loads((task_dir / "request.json").read_text(encoding="utf-8"))
+
     def test_new_turn_persists_session_and_summary(self) -> None:
         self.chat.start_turn("default", "Допиши введение")
         notification = self.wait_for_task_completion()
@@ -922,6 +989,18 @@ class AgentChatServiceTests(unittest.TestCase):
         self.assertEqual(state.last_user_message, "Допиши введение")
         self.assertIn("Допиши введение", state.last_assistant_summary or "")
 
+    def test_first_turn_uses_full_context_and_execute_profile(self) -> None:
+        active = self.chat.start_turn("default", "Допиши введение")
+        request = self.read_request_payload(active)
+
+        self.assertEqual(request["context_mode"], "full")
+        self.assertEqual(request["profile"], "execute")
+        self.assertEqual(request["detected_intent"], "выполнение")
+        self.assertIn(str(self.root / "AGENTS.md"), str(request["prompt"]))
+        self.assertIn(str(self.root / "meta" / "project-canon.md"), str(request["prompt"]))
+        self.assertIn(str(self.root / "meta" / "master-protocol.md"), str(request["prompt"]))
+        self.wait_for_task_completion()
+
     def test_follow_up_uses_resume_session(self) -> None:
         self.chat.store.set_project_chat(
             "default",
@@ -932,14 +1011,39 @@ class AgentChatServiceTests(unittest.TestCase):
                 "last_assistant_summary": "Первый ответ",
                 "busy": False,
                 "last_export_path": None,
+                "needs_full_context": False,
             },
         )
+        self.chat.store.set_last_chat_project_id("default")
 
         self.chat.start_turn("default", "Продолжай")
         notification = self.wait_for_task_completion()
 
         self.assertEqual(notification.session_id, self.session_id)
         self.assertIn(f"resume({self.session_id})", notification.response_text or "")
+
+    def test_follow_up_uses_compact_context(self) -> None:
+        self.chat.store.set_project_chat(
+            "default",
+            {
+                "session_id": self.session_id,
+                "last_activity_at": "2026-04-17T10:00:00+00:00",
+                "last_user_message": "Первый запрос",
+                "last_assistant_summary": "Первый ответ",
+                "busy": False,
+                "last_export_path": None,
+                "needs_full_context": False,
+            },
+        )
+        self.chat.store.set_last_chat_project_id("default")
+
+        active = self.chat.start_turn("default", "Как усилить аргументацию?")
+        request = self.read_request_payload(active)
+
+        self.assertEqual(request["context_mode"], "compact")
+        self.assertEqual(request["profile"], "answer")
+        self.assertIn("Краткий recap проекта", str(request["prompt"]))
+        self.wait_for_task_completion()
 
     def test_broken_session_falls_back_to_new_session(self) -> None:
         self.chat.store.set_project_chat(
@@ -951,8 +1055,10 @@ class AgentChatServiceTests(unittest.TestCase):
                 "last_assistant_summary": "Старый ответ",
                 "busy": False,
                 "last_export_path": None,
+                "needs_full_context": False,
             },
         )
+        self.chat.store.set_last_chat_project_id("default")
 
         self.chat.start_turn("default", "Продолжай после сбоя")
         notification = self.wait_for_task_completion()
@@ -961,6 +1067,32 @@ class AgentChatServiceTests(unittest.TestCase):
         self.assertEqual(notification.status, "success")
         self.assertEqual(notification.session_id, self.session_id)
         self.assertIn(f"new({self.session_id})", notification.response_text or "")
+        self.assertTrue(self.chat.get_project_state("default").needs_full_context)
+
+    def test_next_turn_after_broken_session_uses_full_context(self) -> None:
+        self.chat.store.set_project_chat(
+            "default",
+            {
+                "session_id": "broken-session",
+                "last_activity_at": "2026-04-17T10:00:00+00:00",
+                "last_user_message": "Старый запрос",
+                "last_assistant_summary": "Старый ответ",
+                "busy": False,
+                "last_export_path": None,
+                "needs_full_context": False,
+            },
+        )
+        self.chat.store.set_last_chat_project_id("default")
+
+        self.chat.start_turn("default", "Продолжай после сбоя")
+        self.wait_for_task_completion()
+
+        active = self.chat.start_turn("default", "Продолжай уже в новой сессии")
+        request = self.read_request_payload(active)
+
+        self.assertEqual(request["context_mode"], "full")
+        self.assertEqual(request["session_id"], self.session_id)
+        self.wait_for_task_completion()
 
     def test_busy_lock_blocks_second_project(self) -> None:
         previous_sleep = os.environ.get("FAKE_CODEX_SLEEP_SECONDS")
@@ -985,6 +1117,64 @@ class AgentChatServiceTests(unittest.TestCase):
 
         state = self.chat.get_project_state("default")
         self.assertEqual(state.last_export_path, str(export_path.resolve()))
+
+
+class PromptBuilderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        self.projects = ProjectService(self.root)
+        self.builder = PromptBuilder()
+        self.project = self.projects.require_project("default")
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_question_is_classified_as_answer(self) -> None:
+        built = self.builder.build_turn_prompt(
+            self.project,
+            ProjectChatState(project_id="default"),
+            "Как усилить введение?",
+            context_mode="full",
+            current_focus="Пока без истории.",
+        )
+
+        self.assertEqual(built.profile, "answer")
+        self.assertEqual(built.detected_intent, "ответ")
+        self.assertFalse(any("изменены" in item for item in built.done_contract))
+
+    def test_review_request_is_classified_as_review(self) -> None:
+        built = self.builder.build_turn_prompt(
+            self.project,
+            ProjectChatState(project_id="default"),
+            "Проверь, готово ли введение и есть ли ошибки",
+            context_mode="compact",
+            current_focus="Проверка готовности.",
+        )
+
+        self.assertEqual(built.profile, "review")
+        self.assertEqual(built.detected_intent, "проверка")
+        self.assertTrue(any("findings first" in item for item in built.done_contract))
+
+    def test_built_prompt_contains_project_context(self) -> None:
+        built = self.builder.build_turn_prompt(
+            self.project,
+            ProjectChatState(
+                project_id="default",
+                last_user_message="Предыдущий запрос",
+                last_assistant_summary="Предыдущий summary",
+            ),
+            "Допиши выводы",
+            context_mode="full",
+            current_focus="Дописать выводы и выровнять структуру.",
+        )
+
+        self.assertIn(str(self.root), built.prompt_text)
+        self.assertIn(str(self.root / "AGENTS.md"), built.prompt_text)
+        self.assertIn("Предыдущий summary", built.prompt_text)
+        self.assertIn("Дописать выводы и выровнять структуру.", built.prompt_text)
+        self.assertIn("Thesis sections", built.prompt_text)
 
 
 class TelegramConsoleBotUiTests(unittest.TestCase):
@@ -1024,6 +1214,8 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         self.assertEqual(self.chat.started[0]["project_id"], "default")
         self.assertEqual(self.chat.started[0]["prompt"], "Продолжай писать диплом")
         self.assertIn("Беру это в работу", str(self.api.messages[-1]["text"]))
+        self.assertIn("Режим: выполнение", str(self.api.messages[-1]["text"]))
+        self.assertIn("Ожидаю:", str(self.api.messages[-1]["text"]))
 
     def test_plain_greeting_is_sent_to_chat(self) -> None:
         self.bot._handle_message({"chat": {"id": 1}, "text": "привет"})
@@ -1039,6 +1231,12 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
             self.chat.started[0]["prompt"],
             "/run диплом проверить manuscript/sections/01-introduction.md",
         )
+
+    def test_review_request_acknowledgement_shows_detected_mode(self) -> None:
+        self.bot._handle_message({"chat": {"id": 1}, "text": "Проверь диплом и найди риски"})
+
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertIn("Режим: проверка", str(self.api.messages[-1]["text"]))
 
     def test_success_notification_sends_answer_text(self) -> None:
         self.chat.notifications.append(
@@ -1228,7 +1426,6 @@ class TelegramConsoleBotProjectSelectionTests(unittest.TestCase):
 
         self.bot._handle_message({"chat": {"id": 1}, "text": "/resetchat"})
 
-        self.assertEqual(self.chat.reset_calls, [])
         self.assertEqual(len(self.chat.started), 1)
         self.assertEqual(self.chat.started[0]["prompt"], "/resetchat")
 
@@ -1332,6 +1529,139 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(stdout.getvalue(), "")
             self.assertIn("Этот проект пока нельзя добавить", stderr.getvalue())
+
+    def test_service_install_creates_env_template_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            bot_home = Path(tempdir)
+            build_fake_launchd_files(bot_home)
+            manager = LaunchdServiceManager(
+                bot_home,
+                home_dir=bot_home / "home",
+                command_runner=FakeLaunchctl(),
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with patch("telegram_console.bot.LaunchdServiceManager", return_value=manager):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = main(["--root", str(bot_home), "service", "install"])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertTrue((bot_home / "output" / "telegram" / ".env.launchd").exists())
+            self.assertIn("Шаблон env-файла создан", stdout.getvalue())
+
+    def test_service_status_uses_launchd_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            bot_home = Path(tempdir)
+            build_fake_launchd_files(bot_home)
+            env_file = bot_home / "output" / "telegram" / ".env.launchd"
+            write_file(
+                env_file,
+                "TELEGRAM_BOT_TOKEN=test\nTELEGRAM_ALLOWED_CHAT_ID=1\n",
+            )
+            fake_launchctl = FakeLaunchctl()
+            manager = LaunchdServiceManager(bot_home, home_dir=bot_home / "home", command_runner=fake_launchctl)
+            manager.install()
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with patch("telegram_console.bot.LaunchdServiceManager", return_value=manager):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = main(["--root", str(bot_home), "service", "status"])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Загружен в launchd: да", stdout.getvalue())
+            self.assertIn("Env готов: да", stdout.getvalue())
+
+
+class LaunchdServiceManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.bot_home = Path(self.tempdir.name) / "bot-home"
+        self.bot_home.mkdir(parents=True, exist_ok=True)
+        build_fake_launchd_files(self.bot_home)
+        self.home_dir = Path(self.tempdir.name) / "home"
+        self.fake_launchctl = FakeLaunchctl()
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def build_manager(self) -> LaunchdServiceManager:
+        return LaunchdServiceManager(
+            self.bot_home,
+            home_dir=self.home_dir,
+            command_runner=self.fake_launchctl,
+        )
+
+    def write_env(self) -> Path:
+        env_file = self.bot_home / "output" / "telegram" / ".env.launchd"
+        write_file(
+            env_file,
+            "TELEGRAM_BOT_TOKEN=test-token\nTELEGRAM_ALLOWED_CHAT_ID=1\nCODEX_MODEL=gpt-test\n",
+        )
+        return env_file
+
+    def test_install_creates_env_template_without_bootstrapping(self) -> None:
+        manager = self.build_manager()
+
+        result = manager.install()
+
+        self.assertTrue(result.env_template_created)
+        self.assertFalse(result.installed)
+        self.assertTrue(manager.paths.env_file.exists())
+        self.assertEqual(self.fake_launchctl.commands, [])
+        self.assertIn("TELEGRAM_BOT_TOKEN=", manager.paths.env_file.read_text(encoding="utf-8"))
+
+    def test_install_with_env_renders_plist_and_bootstraps_agent(self) -> None:
+        manager = self.build_manager()
+        self.write_env()
+
+        result = manager.install()
+
+        self.assertTrue(result.installed)
+        self.assertTrue(manager.paths.installed_plist.exists())
+        plist_text = manager.paths.installed_plist.read_text(encoding="utf-8")
+        self.assertIn(DEFAULT_SERVICE_LABEL, plist_text)
+        self.assertIn(str(manager.paths.wrapper_script), plist_text)
+        joined = [" ".join(command) for command in self.fake_launchctl.commands]
+        self.assertTrue(any("launchctl bootstrap" in item for item in joined))
+        self.assertTrue(any("launchctl kickstart -k" in item for item in joined))
+
+    def test_status_reports_loaded_agent_and_pid(self) -> None:
+        manager = self.build_manager()
+        self.write_env()
+        manager.install()
+
+        status = manager.status()
+
+        self.assertTrue(status.installed)
+        self.assertTrue(status.loaded)
+        self.assertEqual(status.pid, self.fake_launchctl.pid)
+        self.assertTrue(status.env_configured)
+
+    def test_restart_uses_kickstart_when_agent_is_loaded(self) -> None:
+        manager = self.build_manager()
+        self.write_env()
+        manager.install()
+        self.fake_launchctl.commands.clear()
+
+        status = manager.restart()
+
+        self.assertTrue(status.loaded)
+        self.assertTrue(any(command[:3] == ["launchctl", "kickstart", "-k"] for command in self.fake_launchctl.commands))
+
+    def test_uninstall_removes_plist_but_keeps_env(self) -> None:
+        manager = self.build_manager()
+        env_file = self.write_env()
+        manager.install()
+
+        status = manager.uninstall()
+
+        self.assertFalse(manager.paths.installed_plist.exists())
+        self.assertTrue(env_file.exists())
+        self.assertFalse(status.installed)
 
 
 class TelegramApiTests(unittest.TestCase):

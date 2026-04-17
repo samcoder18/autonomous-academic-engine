@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from .state import RuntimeStore
+from .utils import parse_datetime, utc_now
 
 
 THESIS_ACTIONS = (
@@ -75,22 +76,6 @@ class RunRecord:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def parse_datetime(raw: str | None) -> datetime:
-    if not raw:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-    if re.fullmatch(r"\d{8}-\d{6}", raw):
-        return datetime.strptime(raw, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-
 
 def slugify(text: str) -> str:
     value = re.sub(r"[^\w]+", "-", text.lower(), flags=re.UNICODE).strip("-_")

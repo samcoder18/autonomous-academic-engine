@@ -3,17 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import argparse
-import re
-import shlex
 import sys
 import traceback
 
 from .agent_chat import AgentBusyError, AgentChatError, AgentChatService, AgentTurnNotification
 from .config import TelegramConsoleConfig
 from .email_delivery import EmailDeliveryError, SmtpDocxSender
+from .launchd_service import LaunchdServiceError, LaunchdServiceManager
 from .orchestrator import WorkflowError
 from .projects import ProjectRecord, ProjectRegistrationResult, ProjectService
 from .telegram_api import TelegramApiError, TelegramBotApi
+from .utils import shorten_text, split_message
 
 
 MAIN_MENU = (
@@ -42,45 +42,6 @@ def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
             for row in rows
         ]
     }
-
-
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value.strip()).casefold()
-
-
-def shorten_text(value: str | None, limit: int = 140) -> str:
-    clean = re.sub(r"\s+", " ", (value or "").strip())
-    if not clean:
-        return ""
-    if len(clean) <= limit:
-        return clean
-    return clean[: limit - 1].rstrip() + "…"
-
-
-def split_message(text: str, limit: int = 3500) -> list[str]:
-    clean = text.strip()
-    if not clean:
-        return []
-    if len(clean) <= limit:
-        return [clean]
-
-    chunks: list[str] = []
-    current = ""
-    for block in clean.split("\n\n"):
-        candidate = block if not current else f"{current}\n\n{block}"
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current)
-            current = ""
-        while len(block) > limit:
-            chunks.append(block[:limit].rstrip())
-            block = block[limit:].lstrip()
-        current = block
-    if current:
-        chunks.append(current)
-    return chunks or [clean[:limit]]
 
 
 def default_bot_home() -> Path:
@@ -241,6 +202,8 @@ class TelegramConsoleBot:
                 [
                     "⏳ Беру это в работу",
                     f"📚 Проект: {project.title} (`{project.id}`)",
+                    f"🧭 Режим: {active.get('detected_intent') or 'ответ'}",
+                    f"🎯 Ожидаю: {active.get('expected_output') or 'содержательный результат по запросу'}",
                     f"🧠 Запрос: {shorten_text(active.get('prompt'), limit=160)}",
                     "",
                     "Ответ пришлю отдельным сообщением, как только закончу ✨",
@@ -326,64 +289,6 @@ class TelegramConsoleBot:
             buttons.append([("📦 Экспорт активного проекта", "nav:export")])
         reply_markup = inline_keyboard(buttons) if buttons else self.main_menu_markup
         self.safe_send(chat_id, "\n".join(lines), reply_markup=reply_markup)
-
-    def _handle_project_command(self, chat_id: int, text: str) -> None:
-        try:
-            parts = shlex.split(text)
-        except ValueError as exc:
-            self.safe_send(chat_id, f"Не смогла разобрать команду 😵\n{exc}")
-            return
-        if len(parts) == 1:
-            self._show_projects_menu(chat_id)
-            return
-        if len(parts) == 2 and parts[1] == "current":
-            project = self.projects.get_active_project()
-            if not project:
-                self._show_projects_menu(chat_id, "Сейчас активный проект не выбран.")
-                return
-            state = self.chat.get_project_state(project.id)
-            self.safe_send(
-                chat_id,
-                "\n".join(
-                    [
-                        "📚 Активный проект",
-                        f"Название: {project.title}",
-                        f"ID: {project.id}",
-                        f"Возможности: {self._project_capabilities(project)}",
-                        f"Статус: {self._agent_status_label(project)}",
-                        f"Что сейчас в разработке: {self.chat.describe_project_focus(project.id)}",
-                        f"Последняя сессия Codex: {state.session_id or 'пока нет'}",
-                        f"Путь: {project.root_dir}",
-                    ]
-                ),
-                reply_markup=self.main_menu_markup,
-            )
-            return
-        if len(parts) == 3 and parts[1] == "use":
-            self._select_project(chat_id, parts[2])
-            return
-        self.safe_send(chat_id, "Формат такой:\n/project\n/project current\n/project use <id>")
-
-    def _handle_reset_chat_command(self, chat_id: int) -> None:
-        project = self._ensure_active_project(chat_id)
-        if not project:
-            return
-        active = self.store.get_active_agent_task()
-        if active:
-            self.safe_send(chat_id, self.chat.describe_active_task(active), reply_markup=self.main_menu_markup)
-            return
-        self.chat.reset_project_session(project.id)
-        self.safe_send(
-            chat_id,
-            "\n".join(
-                [
-                    "🔄 Контекст чата очищен",
-                    f"📚 Проект: {project.title}",
-                    "Следующее сообщение начнет новую Codex-сессию.",
-                ]
-            ),
-            reply_markup=self.main_menu_markup,
-        )
 
     def _ensure_active_project(self, chat_id: int) -> ProjectRecord | None:
         project = self.projects.get_active_project()
@@ -592,6 +497,35 @@ def _format_project_registration_result(result: ProjectRegistrationResult) -> st
     )
 
 
+def handle_service_command(*, bot_home: str | Path | None, action: str) -> int:
+    manager = LaunchdServiceManager(Path(bot_home or default_bot_home()).resolve())
+    try:
+        if action == "install":
+            print(manager.format_install_result(manager.install()))
+            return 0
+        if action == "start":
+            print(manager.format_status(manager.start()))
+            return 0
+        if action == "stop":
+            print(manager.format_status(manager.stop()))
+            return 0
+        if action == "restart":
+            print(manager.format_status(manager.restart()))
+            return 0
+        if action == "status":
+            print(manager.format_status(manager.status()))
+            return 0
+        if action == "uninstall":
+            print(manager.format_status(manager.uninstall()))
+            return 0
+    except LaunchdServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print(f"Неизвестная service-команда: {action}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Telegram remote chat console for Codex.")
     parser.add_argument(
@@ -607,6 +541,17 @@ def main(argv: list[str] | None = None) -> int:
     project_add_parser = project_subparsers.add_parser("add", help="Register an existing project in the bot registry.")
     project_add_parser.add_argument("--title", required=True, help="Human-readable project title.")
     project_add_parser.add_argument("--root", dest="project_root", required=True, help="Absolute path to the project.")
+    service_parser = subparsers.add_parser("service", help="Manage the local macOS LaunchAgent.")
+    service_subparsers = service_parser.add_subparsers(dest="service_command")
+    for command, help_text in (
+        ("install", "Install the local LaunchAgent and start it."),
+        ("start", "Start the installed LaunchAgent."),
+        ("stop", "Stop the LaunchAgent if it is running."),
+        ("restart", "Restart the LaunchAgent."),
+        ("status", "Show LaunchAgent status and log paths."),
+        ("uninstall", "Unload and remove the LaunchAgent plist."),
+    ):
+        service_subparsers.add_parser(command, help=help_text)
     args = parser.parse_args(argv)
     if args.command == "project":
         if args.project_command == "add":
@@ -616,6 +561,14 @@ def main(argv: list[str] | None = None) -> int:
                 project_root=args.project_root,
             )
         project_parser.print_help()
+        return 1
+    if args.command == "service":
+        if args.service_command:
+            return handle_service_command(
+                bot_home=args.bot_home,
+                action=args.service_command,
+            )
+        service_parser.print_help()
         return 1
 
     bot = build_bot(args.bot_home)

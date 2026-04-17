@@ -6,27 +6,7 @@ import json
 import subprocess
 import sys
 
-
-def utc_now() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def append_text(path: Path, header: str, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(header)
-        handle.write("\n")
-        handle.write(content)
-        if content and not content.endswith("\n"):
-            handle.write("\n")
-        handle.write("\n")
+from .utils import append_text, utc_now, write_json
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
