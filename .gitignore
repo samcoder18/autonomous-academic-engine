@@ -1,1 +1,9 @@
 .DS_Store
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+output/telegram/projects.json
+output/telegram/runtime/

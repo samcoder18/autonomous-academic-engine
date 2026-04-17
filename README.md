@@ -55,6 +55,7 @@
 
 - [scripts/codex_academic.sh](/Users/albina/дипломная/scripts/codex_academic.sh) - общий legal-academic launcher для article lane и thesis proxy.
 - [scripts/codex_thesis.sh](/Users/albina/дипломная/scripts/codex_thesis.sh) - thesis-only launcher.
+- [scripts/telegram_console.py](/Users/albina/дипломная/scripts/telegram_console.py) - Telegram-консоль для удаленного project-centric чата с Codex и экспорта.
 
 Примеры:
 
@@ -78,6 +79,95 @@
 - для article lane строит managed bundle в [articles/](/Users/albina/дипломная/articles);
 - включает web search по умолчанию там, где критична актуальность первоисточников;
 - сохраняет финальные сообщения и manifest article-run в [articles/runs](/Users/albina/дипломная/articles/runs), а thesis-run в [output/codex](/Users/albina/дипломная/output/codex).
+
+## Telegram console
+
+Telegram console теперь работает как минималистичный удаленный чат с Codex поверх мультипроектного реестра.
+
+Что умеет текущая версия:
+
+- работать в мультипроектном режиме через локальный реестр `output/telegram/projects.json`;
+- держать один активный проект в Telegram и явно переключать его через `📚 Проекты`;
+- показывать на главном экране действующие проекты, их статус и короткое поле “что сейчас в разработке”;
+- принимать обычные текстовые сообщения и отправлять их напрямую в Codex CLI в контексте активного проекта;
+- хранить persistent `session_id` по каждому проекту и продолжать разговор после перезапуска бота;
+- использовать глобальный lock: пока Codex отвечает по одному проекту, новые запросы временно блокируются;
+- экспортировать основной итоговый файл активного проекта через `📦 Экспорт` (для thesis-проектов это DOCX диплома);
+- при желании дублировать финальный DOCX на почту через SMTP;
+- ограничивать доступ одним `TELEGRAM_ALLOWED_CHAT_ID`;
+- держать runtime-state отдельно в `output/telegram/runtime/`, не смешивая его с каноническими артефактами проекта.
+
+Реестр проектов редактируется локально и не коммитится. Формат записи:
+
+```json
+{
+  "projects": [
+    {
+      "id": "law-thesis-a",
+      "title": "Диплом по биометрии",
+      "root_dir": "/абсолютный/путь/к/проекту",
+      "capabilities": ["thesis", "article"]
+    }
+  ]
+}
+```
+
+Если `projects.json` еще нет, а бот запускается из одного валидного проекта, он создаст запись `default` автоматически.
+Если хочешь добавить новый проект без ручного редактирования файла, используй локальную команду:
+
+- `python3 scripts/telegram_console.py project add --title "Диплом по биометрии" --root "/абсолютный/путь/к/проекту"`
+- `python3 -m telegram_console project add --title "Диплом по биометрии" --root "/абсолютный/путь/к/проекту"`
+
+В этом режиме бот сам:
+
+- валидирует папку проекта;
+- определяет `capabilities`;
+- генерирует читаемый `id` из названия;
+- при конфликте добавляет суффиксы вроде `-2`, `-3`;
+- не создает дубликат, если такой путь уже зарегистрирован.
+
+Обязательные переменные окружения:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_CHAT_ID`
+
+Опционально:
+
+- `CODEX_BIN`
+- `CODEX_MODEL`
+- `TELEGRAM_POLL_TIMEOUT`
+- `SMTP_HOST`
+- `SMTP_PORT` - порт SMTP, по умолчанию `587`
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
+- `SMTP_SECURITY` - `starttls`, `ssl` или `none`; по умолчанию `starttls`
+- `SMTP_FROM_EMAIL`
+- `SMTP_FROM_NAME` - имя отправителя, по умолчанию `Академический штурман`
+- `SMTP_TO_EMAIL`
+- `SMTP_TIMEOUT_SECONDS` - таймаут SMTP, по умолчанию `30`
+
+Запуск:
+
+- `python3 scripts/telegram_console.py`
+- `python3 -m telegram_console`
+
+Опция `--root` теперь означает `bot home`: именно там бот хранит `projects.json`, `runtime/` и свой служебный state.
+
+Ключевой UX внутри Telegram:
+
+- постоянные кнопки: `📚 Проекты` и `📦 Экспорт`
+- `/start` - открыть dashboard
+- `/project`
+- `/project current`
+- `/project use law-thesis-a`
+- `/export`
+- обычный текст без slash-команды - это прямое сообщение Codex в контексте активного проекта
+
+Legacy workflow-команды `/run`, `/artifact`, `/file` больше не считаются основным интерфейсом и не используются в обычном сценарии.
+
+Почтовая отправка включается только если заданы `SMTP_HOST`, `SMTP_FROM_EMAIL` и `SMTP_TO_EMAIL`.
+Если SMTP-настройки не заданы или заданы неполно, Telegram console работает как раньше, без почтовой доставки.
+Письмо отправляется только для финального DOCX из сценария `Экспорт`: бот сначала собирает и отдает файл в Telegram, а затем отправляет тот же DOCX на почту как дополнительный канал доставки.
 
 ## Базовый принцип
 

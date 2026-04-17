@@ -1,0 +1,1346 @@
+from __future__ import annotations
+
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
+import json
+import os
+import tempfile
+import textwrap
+import time
+import unittest
+from unittest.mock import patch
+
+from telegram_console.agent_chat import (
+    AgentBusyError,
+    AgentChatService,
+    AgentTurnNotification,
+    ProjectChatState,
+)
+from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
+from telegram_console.config import TelegramConsoleConfig
+from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
+from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
+from telegram_console.projects import ProjectService
+from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
+
+
+def write_file(path: Path, content: str, executable: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if executable:
+        path.chmod(0o755)
+
+
+def build_fake_repo(root: Path) -> None:
+    write_file(root / "AGENTS.md", "# Agents\n")
+    write_file(root / "manuscript/sections/01-introduction.md", "# Intro\n")
+    write_file(root / "manuscript/sections/README.md", "skip me\n")
+    write_file(root / "sources/source-pack.md", "# Sources\n")
+    write_file(root / "chapters/01-brief.md", "# Chapter\n")
+    write_file(root / "reviews/01-introduction-review.md", "# Review\n")
+
+    write_file(root / "articles/briefs/demo.md", "# Demo brief\n")
+    write_file(root / "articles/drafts/demo.md", "# Demo draft\n")
+    write_file(root / "articles/final/demo.md", "# Demo final\n")
+    write_file(root / "articles/final/demo-checklist.md", "# Demo checklist\n")
+
+    write_file(
+        root / "scripts/codex_thesis.sh",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+            mkdir -p "$ROOT_DIR/output/codex"
+            PRESET="${1:-}"
+            TARGET="${2:-}"
+            SLEEP_SECONDS="${TEST_SLEEP_SECONDS:-0}"
+            if [[ "$SLEEP_SECONDS" != "0" ]]; then
+              sleep "$SLEEP_SECONDS"
+            fi
+            TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+            OUT_FILE="$ROOT_DIR/output/codex/${TIMESTAMP}-${PRESET}.md"
+            MANIFEST_FILE="$ROOT_DIR/output/codex/${TIMESTAMP}-${PRESET}.meta.json"
+            printf 'thesis output\\n' > "$OUT_FILE"
+            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$PRESET" "$ROOT_DIR" "$TARGET" "$OUT_FILE" <<'PY'
+            import json
+            import sys
+            manifest = {
+                "timestamp": sys.argv[2],
+                "preset": sys.argv[3],
+                "target": {
+                    "absolute": f"{sys.argv[4]}/{sys.argv[5]}",
+                    "relative": sys.argv[5],
+                    "state": "existing",
+                },
+                "search_enabled": False,
+                "output_file": sys.argv[6],
+            }
+            with open(sys.argv[1], "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+                handle.write("\\n")
+            PY
+            """
+        ),
+        executable=True,
+    )
+
+    write_file(
+        root / "scripts/codex_academic.sh",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+            mkdir -p "$ROOT_DIR/articles/runs"
+            COMMAND="${1:-}"
+            shift || true
+            TARGET_PATH=""
+            TOPIC=""
+            INPUT_BRIEF=""
+            if [[ "$COMMAND" == "article" ]]; then
+              while [[ $# -gt 0 ]]; do
+                case "$1" in
+                  --topic)
+                    TOPIC="$2"
+                    shift 2
+                    ;;
+                  --brief)
+                    INPUT_BRIEF="$2"
+                    TARGET_PATH="$2"
+                    shift 2
+                    ;;
+                  *)
+                    shift 1
+                    ;;
+                esac
+              done
+            else
+              TARGET_PATH="${1:-}"
+            fi
+            TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+            OUT_FILE="$ROOT_DIR/articles/runs/${TIMESTAMP}-${COMMAND}-demo.md"
+            MANIFEST_FILE="$ROOT_DIR/articles/runs/${TIMESTAMP}-${COMMAND}-demo.meta.json"
+            printf 'article output\\n' > "$OUT_FILE"
+            python3 - "$MANIFEST_FILE" "$TIMESTAMP" "$COMMAND" "$ROOT_DIR" "$TARGET_PATH" "$TOPIC" "$INPUT_BRIEF" "$OUT_FILE" <<'PY'
+            import json
+            import sys
+            manifest = {
+                "timestamp": sys.argv[2],
+                "command": sys.argv[3],
+                "profile_id": "ru-law-article-v1",
+                "search_enabled": False,
+                "target_path": sys.argv[5] or None,
+                "topic": sys.argv[6] or None,
+                "input_brief": sys.argv[7] or None,
+                "output_file": sys.argv[8],
+                "bundle": {
+                    "slug": "demo",
+                    "brief": f"{sys.argv[4]}/articles/briefs/demo.md",
+                    "evidence_pack": f"{sys.argv[4]}/articles/evidence/demo.md",
+                    "claim_map": f"{sys.argv[4]}/articles/claim-maps/demo.md",
+                    "draft": f"{sys.argv[4]}/articles/drafts/demo.md",
+                    "review": f"{sys.argv[4]}/articles/reviews/demo.md",
+                    "final_markdown": f"{sys.argv[4]}/articles/final/demo.md",
+                    "checklist": f"{sys.argv[4]}/articles/final/demo-checklist.md",
+                    "docx": f"{sys.argv[4]}/output/docx/articles/demo.docx",
+                },
+            }
+            with open(sys.argv[1], "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+                handle.write("\\n")
+            PY
+            """
+        ),
+        executable=True,
+    )
+
+    write_file(
+        root / "scripts/export_docx.sh",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+            mkdir -p "$ROOT_DIR/output/docx"
+            OUT="$ROOT_DIR/output/docx/thesis-draft.docx"
+            printf 'fake thesis docx' > "$OUT"
+            printf 'Exported %s\\n' "$OUT"
+            """
+        ),
+        executable=True,
+    )
+    write_file(
+        root / "scripts/export_academic_docx.sh",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -euo pipefail
+            ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+            INPUT="${1:-}"
+            mkdir -p "$ROOT_DIR/output/docx/articles"
+            STEM="$(basename "${INPUT%.md}")"
+            OUT="$ROOT_DIR/output/docx/articles/${STEM}.docx"
+            printf 'fake article docx' > "$OUT"
+            printf 'Exported %s\\n' "$OUT"
+            """
+        ),
+        executable=True,
+    )
+
+
+def build_fake_codex(path: Path) -> None:
+    write_file(
+        path,
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            from __future__ import annotations
+
+            import json
+            import os
+            import sys
+            import time
+            from pathlib import Path
+
+
+            def main() -> int:
+                args = sys.argv[1:]
+                if not args or args[0] != "exec":
+                    print("unsupported command", file=sys.stderr)
+                    return 2
+                args = args[1:]
+                project_root = ""
+                output_path = None
+                resume = False
+                session_id = None
+                model = None
+                while args:
+                    token = args.pop(0)
+                    if token == "-C":
+                        project_root = args.pop(0)
+                    elif token in {"--skip-git-repo-check", "--full-auto", "--json"}:
+                        continue
+                    elif token == "-o":
+                        output_path = args.pop(0)
+                    elif token == "-m":
+                        model = args.pop(0)
+                    elif token == "resume":
+                        resume = True
+                    elif token == "-":
+                        break
+                    elif resume and session_id is None:
+                        session_id = token
+                    else:
+                        continue
+
+                prompt = sys.stdin.read().strip()
+                if resume and session_id == "broken-session":
+                    print("session not found", file=sys.stderr)
+                    return 1
+
+                sleep_seconds = float(os.getenv("FAKE_CODEX_SLEEP_SECONDS", "0") or "0")
+                if sleep_seconds:
+                    time.sleep(sleep_seconds)
+
+                root_name = Path(project_root).name or "project"
+                thread_id = session_id or f"session-{root_name}"
+                prefix = f"resume({thread_id})" if resume else f"new({thread_id})"
+                if model:
+                    prefix += f" model={model}"
+                reply = f"{prefix}: {prompt}".strip()
+
+                if output_path:
+                    Path(output_path).write_text(reply + "\\n", encoding="utf-8")
+
+                events = [
+                    {"type": "thread.started", "thread_id": thread_id},
+                    {"type": "turn.started"},
+                    {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": reply}},
+                    {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}},
+                ]
+                for item in events:
+                    print(json.dumps(item, ensure_ascii=False))
+                return 0
+
+
+            if __name__ == "__main__":
+                raise SystemExit(main())
+            """
+        ),
+        executable=True,
+    )
+
+
+def write_projects_registry(bot_home: Path, projects: list[dict[str, object]]) -> Path:
+    path = bot_home / "output" / "telegram" / "projects.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"projects": projects}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def write_thesis_manifest(root: Path, timestamp: str, output_label: str = "verify") -> None:
+    manifest = root / "output" / "codex" / f"{timestamp}-{output_label}.meta.json"
+    output = root / "output" / "codex" / f"{timestamp}-{output_label}.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("trace\n", encoding="utf-8")
+    payload = {
+        "timestamp": timestamp,
+        "preset": output_label,
+        "target": {
+            "absolute": str(root / "manuscript/sections/01-introduction.md"),
+            "relative": "manuscript/sections/01-introduction.md",
+            "state": "existing",
+        },
+        "output_file": str(output),
+    }
+    manifest.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+class FakeApi:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
+        self.callback_answers: list[dict[str, object]] = []
+
+    def send_message(self, chat_id: int, text: str, *, reply_markup: dict | None = None) -> dict:
+        payload = {"chat_id": chat_id, "text": text, "reply_markup": reply_markup}
+        self.messages.append(payload)
+        return payload
+
+    def send_document(self, chat_id: int, file_path: str | Path, *, caption: str | None = None) -> dict:
+        payload = {"chat_id": chat_id, "file_path": str(file_path), "caption": caption}
+        self.documents.append(payload)
+        return payload
+
+    def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> dict:
+        payload = {"callback_query_id": callback_query_id, "text": text}
+        self.callback_answers.append(payload)
+        return payload
+
+
+class FakeChatService:
+    def __init__(self) -> None:
+        self.started: list[dict[str, str]] = []
+        self.exports: list[dict[str, str]] = []
+        self.reset_calls: list[str] = []
+        self.notifications: list[AgentTurnNotification] = []
+        self.states: dict[str, ProjectChatState] = {}
+        self.raise_busy = False
+
+    def get_project_state(self, project_id: str) -> ProjectChatState:
+        return self.states.get(project_id, ProjectChatState(project_id=project_id))
+
+    def describe_project_focus(self, project_id: str) -> str:
+        state = self.get_project_state(project_id)
+        return state.last_assistant_summary or state.last_user_message or "Пока без истории."
+
+    def start_turn(self, project_id: str, prompt: str) -> dict[str, str]:
+        if self.raise_busy:
+            raise AgentBusyError("⏳ Я уже отвечаю в другом проекте.")
+        payload = {"project_id": project_id, "prompt": prompt}
+        self.started.append(payload)
+        self.states[project_id] = ProjectChatState(
+            project_id=project_id,
+            session_id="fake-session",
+            last_activity_at="2026-04-17T10:00:00+00:00",
+            last_user_message=prompt,
+            last_assistant_summary=self.get_project_state(project_id).last_assistant_summary,
+            busy=True,
+            last_export_path=self.get_project_state(project_id).last_export_path,
+        )
+        return payload
+
+    def sync_active_task(self) -> list[AgentTurnNotification]:
+        return []
+
+    def drain_notifications(self) -> list[AgentTurnNotification]:
+        items = list(self.notifications)
+        self.notifications.clear()
+        return items
+
+    def record_export(self, project_id: str, export_path: str | Path) -> None:
+        state = self.get_project_state(project_id)
+        self.exports.append({"project_id": project_id, "path": str(export_path)})
+        self.states[project_id] = ProjectChatState(
+            project_id=project_id,
+            session_id=state.session_id,
+            last_activity_at=state.last_activity_at,
+            last_user_message=state.last_user_message,
+            last_assistant_summary=state.last_assistant_summary,
+            busy=False,
+            last_export_path=str(export_path),
+        )
+
+    def reset_project_session(self, project_id: str) -> ProjectChatState:
+        self.reset_calls.append(project_id)
+        state = self.get_project_state(project_id)
+        self.states[project_id] = ProjectChatState(
+            project_id=project_id,
+            session_id=None,
+            last_activity_at=state.last_activity_at,
+            last_user_message=state.last_user_message,
+            last_assistant_summary=state.last_assistant_summary,
+            busy=False,
+            last_export_path=state.last_export_path,
+        )
+        return self.states[project_id]
+
+    def describe_active_task(self, payload: dict[str, object]) -> str:
+        return "⏳ Я уже отвечаю в другом проекте."
+
+
+class FakeMailer:
+    def __init__(self, recipient_email: str = "reader@example.com", error: Exception | None = None) -> None:
+        self.recipient_email = recipient_email
+        self.error = error
+        self.calls: list[dict[str, str]] = []
+
+    def send_export(self, file_path: str | Path, artifact_kind: str) -> None:
+        self.calls.append({"file_path": str(file_path), "artifact_kind": artifact_kind})
+        if self.error:
+            raise self.error
+
+
+class DummySmtpClient:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        timeout: int,
+        kind: str,
+        sink: list["DummySmtpClient"],
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.kind = kind
+        self.starttls_called = False
+        self.ehlo_calls = 0
+        self.login_called_with: tuple[str, str] | None = None
+        self.sent_messages: list[object] = []
+        sink.append(self)
+
+    def __enter__(self) -> "DummySmtpClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def ehlo(self) -> None:
+        self.ehlo_calls += 1
+
+    def starttls(self, context=None) -> None:
+        self.starttls_called = True
+
+    def login(self, username: str, password: str) -> None:
+        self.login_called_with = (username, password)
+
+    def send_message(self, message: object) -> None:
+        self.sent_messages.append(message)
+
+
+class TelegramConsoleConfigTests(unittest.TestCase):
+    def test_smtp_is_disabled_when_required_env_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "TELEGRAM_BOT_TOKEN": "test-token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "1",
+                },
+                clear=True,
+            ):
+                config = TelegramConsoleConfig.from_env(tempdir)
+
+        self.assertEqual(config.bot_home_dir, Path(tempdir).resolve())
+        self.assertIsNone(config.smtp_settings)
+
+    def test_smtp_settings_are_loaded_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            with patch.dict(
+                os.environ,
+                {
+                    "TELEGRAM_BOT_TOKEN": "test-token",
+                    "TELEGRAM_ALLOWED_CHAT_ID": "1",
+                    "SMTP_HOST": "smtp.example.com",
+                    "SMTP_PORT": "2525",
+                    "SMTP_SECURITY": "ssl",
+                    "SMTP_USERNAME": "mailer",
+                    "SMTP_PASSWORD": "secret",
+                    "SMTP_FROM_EMAIL": "bot@example.com",
+                    "SMTP_TO_EMAIL": "reader@example.com",
+                    "SMTP_TIMEOUT_SECONDS": "45",
+                },
+                clear=True,
+            ):
+                config = TelegramConsoleConfig.from_env(tempdir)
+
+        settings = config.smtp_settings
+        self.assertIsNotNone(settings)
+        assert settings is not None
+        self.assertEqual(settings.host, "smtp.example.com")
+        self.assertEqual(settings.port, 2525)
+        self.assertEqual(settings.security, "ssl")
+        self.assertEqual(settings.username, "mailer")
+        self.assertEqual(settings.password, "secret")
+        self.assertEqual(settings.from_email, "bot@example.com")
+        self.assertEqual(settings.to_email, "reader@example.com")
+        self.assertEqual(settings.timeout_seconds, 45)
+        self.assertEqual(settings.from_name, "Академический штурман")
+
+
+class SmtpDocxSenderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.docx_path = self.root / "output" / "docx" / "demo.docx"
+        self.docx_path.parent.mkdir(parents=True, exist_ok=True)
+        self.docx_path.write_bytes(b"fake docx")
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_build_export_message_contains_text_html_and_attachment(self) -> None:
+        sender = SmtpDocxSender(
+            SmtpSettings(
+                host="smtp.example.com",
+                from_email="bot@example.com",
+                to_email="reader@example.com",
+            )
+        )
+
+        message = sender.build_export_message(self.docx_path, "статья")
+
+        self.assertEqual(message["Subject"], "Готовый DOCX: demo.docx")
+        plain = message.get_body(preferencelist=("plain",))
+        html = message.get_body(preferencelist=("html",))
+        self.assertIsNotNone(plain)
+        self.assertIsNotNone(html)
+        self.assertIn("Готовый DOCX уже подготовлен", plain.get_content())
+        self.assertIn("Тип результата: статья", plain.get_content())
+        self.assertIn("demo.docx", html.get_content())
+        attachments = list(message.iter_attachments())
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0].get_filename(), "demo.docx")
+
+    def test_send_export_uses_starttls_when_requested(self) -> None:
+        clients: list[DummySmtpClient] = []
+        sender = SmtpDocxSender(
+            SmtpSettings(
+                host="smtp.example.com",
+                from_email="bot@example.com",
+                to_email="reader@example.com",
+                username="mailer",
+                password="secret",
+                security="starttls",
+            )
+        )
+
+        with patch(
+            "telegram_console.email_delivery.smtplib.SMTP",
+            side_effect=lambda host, port, timeout: DummySmtpClient(
+                host,
+                port,
+                timeout=timeout,
+                kind="smtp",
+                sink=clients,
+            ),
+        ):
+            sender.send_export(self.docx_path, "диплом")
+
+        self.assertEqual(len(clients), 1)
+        self.assertTrue(clients[0].starttls_called)
+        self.assertEqual(clients[0].login_called_with, ("mailer", "secret"))
+        self.assertEqual(len(clients[0].sent_messages), 1)
+
+    def test_send_export_uses_ssl_client_when_requested(self) -> None:
+        clients: list[DummySmtpClient] = []
+        sender = SmtpDocxSender(
+            SmtpSettings(
+                host="smtp.example.com",
+                from_email="bot@example.com",
+                to_email="reader@example.com",
+                security="ssl",
+            )
+        )
+
+        with patch(
+            "telegram_console.email_delivery.smtplib.SMTP",
+            side_effect=AssertionError("SMTP should not be used for SSL"),
+        ):
+            with patch(
+                "telegram_console.email_delivery.smtplib.SMTP_SSL",
+                side_effect=lambda host, port, timeout: DummySmtpClient(
+                    host,
+                    port,
+                    timeout=timeout,
+                    kind="ssl",
+                    sink=clients,
+                ),
+            ):
+                sender.send_export(self.docx_path, "статья")
+
+        self.assertEqual(len(clients), 1)
+        self.assertEqual(clients[0].kind, "ssl")
+        self.assertFalse(clients[0].starttls_called)
+        self.assertEqual(len(clients[0].sent_messages), 1)
+
+
+class WorkflowOrchestratorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        self.orchestrator = WorkflowOrchestrator(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def wait_for_completion(self, timeout: float = 5.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.orchestrator.sync_active_run()
+            if not self.orchestrator.store.get_active_run():
+                return
+            time.sleep(0.1)
+        self.fail("active run did not complete in time")
+
+    def test_list_targets_excludes_readme(self) -> None:
+        targets = self.orchestrator.list_targets("thesis", "write-section")
+        self.assertEqual(targets, ["manuscript/sections/01-introduction.md"])
+
+    def test_article_bundle_status_reports_missing_files(self) -> None:
+        status = self.orchestrator.get_artifact_status("article:demo")
+        self.assertEqual(status["kind"], "article-bundle")
+        self.assertTrue(status["files"]["brief"]["exists"])
+        self.assertTrue(status["files"]["final"]["exists"])
+        self.assertIn("evidence", status["missing"])
+        self.assertIn("docx", status["missing"])
+
+    def test_single_active_run_and_manifest_resolution(self) -> None:
+        previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
+        os.environ["TEST_SLEEP_SECONDS"] = "1"
+        try:
+            active = self.orchestrator.start_run(
+                "thesis",
+                "write-section",
+                "manuscript/sections/01-introduction.md",
+                notes="check",
+            )
+            self.assertEqual(active["action"], "write-section")
+            self.assertTrue(str(active["run_id"]).startswith("default:"))
+
+            with self.assertRaises(RunBusyError):
+                self.orchestrator.start_run(
+                    "thesis",
+                    "verify",
+                    "manuscript/sections/01-introduction.md",
+                )
+        finally:
+            if previous_sleep is None:
+                os.environ.pop("TEST_SLEEP_SECONDS", None)
+            else:
+                os.environ["TEST_SLEEP_SECONDS"] = previous_sleep
+
+        self.wait_for_completion()
+        notices = self.orchestrator.drain_notifications()
+        self.assertEqual(len(notices), 1)
+        record = notices[0]
+        self.assertEqual(record.status, "success")
+        self.assertEqual(record.project_id, "default")
+        self.assertTrue(record.manifest_path)
+        self.assertTrue(record.output_file)
+        self.assertTrue(Path(record.manifest_path).exists())
+        self.assertTrue(Path(record.output_file).exists())
+
+    def test_export_docx_uses_project_scripts(self) -> None:
+        thesis = self.orchestrator.export_docx("thesis")
+        article = self.orchestrator.export_docx("article:demo")
+        self.assertTrue(Path(thesis["path"]).exists())
+        self.assertTrue(Path(article["path"]).exists())
+
+    def test_stale_active_run_becomes_interrupted(self) -> None:
+        run_dir = self.orchestrator.store.runs_dir / "stale-run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:stale-run",
+            "run_dir": str(run_dir),
+            "lane": "thesis",
+            "action": "verify",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "target": "manuscript/sections/01-introduction.md",
+        }
+        self.orchestrator.store.write_json(run_dir / "request.json", request)
+        self.orchestrator.store.set_active_run(
+            {
+                "run_id": "default:stale-run",
+                "run_dir": str(run_dir),
+                "pid": 999999,
+                "lane": "thesis",
+                "action": "verify",
+                "started_at": request["started_at"],
+                "target": request["target"],
+            }
+        )
+
+        completed = self.orchestrator.sync_active_run()
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].status, "interrupted")
+        self.assertIsNone(self.orchestrator.store.get_active_run())
+
+    def test_localized_errors_and_russian_article_aliases(self) -> None:
+        self.assertEqual(self.orchestrator._resolve_article_input("тема: Биометрия"), ("topic", "Биометрия"))
+        self.assertEqual(
+            self.orchestrator._resolve_article_input("бриф:articles/briefs/demo.md"),
+            ("brief", "articles/briefs/demo.md"),
+        )
+
+        with self.assertRaisesRegex(Exception, "Не нашла файл"):
+            self.orchestrator._normalize_relative_path("missing.md")
+
+        busy_text = self.orchestrator.describe_active_run(
+            {
+                "lane": "thesis",
+                "action": "verify",
+                "target": "manuscript/sections/01-introduction.md",
+                "project_title": "Демо-проект",
+            }
+        )
+        self.assertIn("Сейчас уже идет другой запуск", busy_text)
+        self.assertIn("Демо-проект", busy_text)
+        self.assertIn("проверка", busy_text)
+
+
+class ProjectServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tempdir.name)
+        self.bot_home = self.workspace / "bot-home"
+        self.bot_home.mkdir(parents=True, exist_ok=True)
+        self.repo_a = self.workspace / "alpha"
+        self.repo_b = self.workspace / "beta"
+        build_fake_repo(self.repo_a)
+        build_fake_repo(self.repo_b)
+        write_file(self.repo_b / "manuscript/sections/02-custom.md", "# Another section\n")
+        write_projects_registry(
+            self.bot_home,
+            [
+                {
+                    "id": "alpha",
+                    "title": "Диплом А",
+                    "root_dir": str(self.repo_a),
+                    "capabilities": ["thesis", "article"],
+                },
+                {
+                    "id": "beta",
+                    "title": "Диплом Б",
+                    "root_dir": str(self.repo_b),
+                    "capabilities": ["thesis"],
+                },
+                {
+                    "id": "broken",
+                    "title": "Сломанный проект",
+                    "root_dir": str(self.workspace / "missing"),
+                    "capabilities": ["thesis"],
+                },
+            ],
+        )
+        self.service = ProjectService(self.bot_home)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def wait_for_no_active_run(self, timeout: float = 5.0) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.service.sync_active_run()
+            if not self.service.store.get_active_run():
+                return
+            time.sleep(0.1)
+        self.fail("active run did not complete in time")
+
+    def test_registry_marks_unavailable_project(self) -> None:
+        projects = {project.id: project for project in self.service.list_projects()}
+        self.assertTrue(projects["alpha"].available)
+        self.assertTrue(projects["beta"].available)
+        self.assertFalse(projects["broken"].available)
+        self.assertIn("Папка проекта не найдена", projects["broken"].problems[0])
+
+    def test_multiple_projects_require_explicit_selection(self) -> None:
+        self.assertIsNone(self.service.get_active_project())
+
+    def test_register_project_generates_slug_from_russian_title(self) -> None:
+        repo_c = self.workspace / "gamma"
+        build_fake_repo(repo_c)
+        result = self.service.register_project("Диплом по биометрии", repo_c)
+
+        self.assertTrue(result.created)
+        self.assertEqual(result.project.id, "diplom-po-biometrii")
+        payload = json.loads((self.bot_home / "output" / "telegram" / "projects.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["projects"][-1]["id"], "diplom-po-biometrii")
+
+    def test_register_project_adds_numeric_suffix_for_conflict(self) -> None:
+        repo_c = self.workspace / "gamma"
+        repo_d = self.workspace / "delta"
+        build_fake_repo(repo_c)
+        build_fake_repo(repo_d)
+
+        first = self.service.register_project("Диплом по биометрии", repo_c)
+        second = self.service.register_project("Диплом по биометрии", repo_d)
+
+        self.assertEqual(first.project.id, "diplom-po-biometrii")
+        self.assertEqual(second.project.id, "diplom-po-biometrii-2")
+
+    def test_register_project_returns_existing_entry_for_duplicate_path(self) -> None:
+        result = self.service.register_project("Любое новое имя", self.repo_a)
+
+        self.assertFalse(result.created)
+        self.assertEqual(result.project.id, "alpha")
+        payload = json.loads((self.bot_home / "output" / "telegram" / "projects.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(payload["projects"]), 3)
+
+    def test_register_project_rejects_invalid_root(self) -> None:
+        broken_root = self.workspace / "broken-local"
+        broken_root.mkdir(parents=True, exist_ok=True)
+
+        with self.assertRaisesRegex(Exception, "Этот проект пока нельзя добавить"):
+            self.service.register_project("Сломанный локальный", broken_root)
+
+        payload = json.loads((self.bot_home / "output" / "telegram" / "projects.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(payload["projects"]), 3)
+
+    def test_targets_and_recent_runs_are_project_scoped(self) -> None:
+        alpha_targets = self.service.list_targets("alpha", "thesis", "write-section")
+        beta_targets = self.service.list_targets("beta", "thesis", "write-section")
+        self.assertEqual(alpha_targets, ["manuscript/sections/01-introduction.md"])
+        self.assertIn("manuscript/sections/02-custom.md", beta_targets)
+
+        write_thesis_manifest(self.repo_a, "20260417-101010")
+        write_thesis_manifest(self.repo_b, "20260417-101010")
+        alpha_records = self.service.list_recent_runs("alpha", "thesis", limit=5)
+        beta_records = self.service.list_recent_runs("beta", "thesis", limit=5)
+        self.assertTrue(alpha_records[0].record_id.startswith("alpha:"))
+        self.assertTrue(beta_records[0].record_id.startswith("beta:"))
+
+    def test_global_lock_mentions_busy_project(self) -> None:
+        previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
+        os.environ["TEST_SLEEP_SECONDS"] = "1"
+        try:
+            self.service.start_run("alpha", "thesis", "verify", "manuscript/sections/01-introduction.md")
+            with self.assertRaises(RunBusyError) as ctx:
+                self.service.start_run("beta", "thesis", "verify", "manuscript/sections/01-introduction.md")
+        finally:
+            if previous_sleep is None:
+                os.environ.pop("TEST_SLEEP_SECONDS", None)
+            else:
+                os.environ["TEST_SLEEP_SECONDS"] = previous_sleep
+
+        self.assertIn("Диплом А", str(ctx.exception))
+        self.wait_for_no_active_run()
+
+    def test_attachment_lookup_uses_project_prefixed_record_id(self) -> None:
+        write_thesis_manifest(self.repo_a, "20260417-111111")
+        write_thesis_manifest(self.repo_b, "20260417-111111")
+        record_a = self.service.list_recent_runs("alpha", "thesis", limit=5)[0]
+        record_b = self.service.list_recent_runs("beta", "thesis", limit=5)[0]
+
+        manifest_a = self.service.get_run_attachment(record_a.record_id, "manifest")
+        manifest_b = self.service.get_run_attachment(record_b.record_id, "manifest")
+
+        self.assertIsNotNone(manifest_a)
+        self.assertIsNotNone(manifest_b)
+        assert manifest_a is not None
+        assert manifest_b is not None
+        self.assertIn(str(self.repo_a), str(manifest_a))
+        self.assertIn(str(self.repo_b), str(manifest_b))
+
+    def test_single_project_bootstrap_still_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            service = ProjectService(root)
+            project = service.get_active_project()
+            self.assertIsNotNone(project)
+            assert project is not None
+            self.assertEqual(project.id, "default")
+            self.assertTrue((root / "output" / "telegram" / "projects.json").exists())
+
+    def test_register_project_creates_registry_without_bootstrap_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            bot_home = Path(tempdir) / "bot-home"
+            bot_home.mkdir(parents=True, exist_ok=True)
+            repo = Path(tempdir) / "repo"
+            build_fake_repo(repo)
+
+            service = ProjectService(bot_home)
+            result = service.register_project("Диплом по биометрии", repo)
+
+            self.assertTrue(result.created)
+            self.assertEqual(result.project.id, "diplom-po-biometrii")
+            payload = json.loads((bot_home / "output" / "telegram" / "projects.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["id"] for item in payload["projects"]], ["diplom-po-biometrii"])
+
+
+class AgentChatServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        self.fake_codex = self.root / "bin" / "fake-codex"
+        build_fake_codex(self.fake_codex)
+        self.projects = ProjectService(self.root, codex_bin=str(self.fake_codex), codex_model="gpt-test")
+        self.chat = AgentChatService(self.projects, codex_bin=str(self.fake_codex), codex_model="gpt-test")
+        self.session_id = f"session-{self.root.name}"
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def wait_for_task_completion(self, timeout: float = 5.0) -> AgentTurnNotification:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.chat.sync_active_task()
+            if not self.chat.store.get_active_agent_task():
+                items = self.chat.drain_notifications()
+                if items:
+                    return items[-1]
+            time.sleep(0.1)
+        self.fail("agent task did not complete in time")
+
+    def test_new_turn_persists_session_and_summary(self) -> None:
+        self.chat.start_turn("default", "Допиши введение")
+        notification = self.wait_for_task_completion()
+
+        self.assertEqual(notification.status, "success")
+        self.assertIn("Допиши введение", notification.response_text or "")
+        state = self.chat.get_project_state("default")
+        self.assertEqual(state.session_id, self.session_id)
+        self.assertEqual(state.last_user_message, "Допиши введение")
+        self.assertIn("Допиши введение", state.last_assistant_summary or "")
+
+    def test_follow_up_uses_resume_session(self) -> None:
+        self.chat.store.set_project_chat(
+            "default",
+            {
+                "session_id": self.session_id,
+                "last_activity_at": "2026-04-17T10:00:00+00:00",
+                "last_user_message": "Первый запрос",
+                "last_assistant_summary": "Первый ответ",
+                "busy": False,
+                "last_export_path": None,
+            },
+        )
+
+        self.chat.start_turn("default", "Продолжай")
+        notification = self.wait_for_task_completion()
+
+        self.assertEqual(notification.session_id, self.session_id)
+        self.assertIn(f"resume({self.session_id})", notification.response_text or "")
+
+    def test_broken_session_falls_back_to_new_session(self) -> None:
+        self.chat.store.set_project_chat(
+            "default",
+            {
+                "session_id": "broken-session",
+                "last_activity_at": "2026-04-17T10:00:00+00:00",
+                "last_user_message": "Старый запрос",
+                "last_assistant_summary": "Старый ответ",
+                "busy": False,
+                "last_export_path": None,
+            },
+        )
+
+        self.chat.start_turn("default", "Продолжай после сбоя")
+        notification = self.wait_for_task_completion()
+
+        self.assertTrue(notification.reset_session)
+        self.assertEqual(notification.status, "success")
+        self.assertEqual(notification.session_id, self.session_id)
+        self.assertIn(f"new({self.session_id})", notification.response_text or "")
+
+    def test_busy_lock_blocks_second_project(self) -> None:
+        previous_sleep = os.environ.get("FAKE_CODEX_SLEEP_SECONDS")
+        os.environ["FAKE_CODEX_SLEEP_SECONDS"] = "1"
+        try:
+            self.chat.start_turn("default", "Первая задача")
+            with self.assertRaises(AgentBusyError):
+                self.chat.start_turn("default", "Вторая задача")
+        finally:
+            if previous_sleep is None:
+                os.environ.pop("FAKE_CODEX_SLEEP_SECONDS", None)
+            else:
+                os.environ["FAKE_CODEX_SLEEP_SECONDS"] = previous_sleep
+        self.wait_for_task_completion()
+
+    def test_record_export_updates_project_state(self) -> None:
+        export_path = self.root / "output" / "docx" / "thesis-draft.docx"
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        export_path.write_text("docx", encoding="utf-8")
+
+        self.chat.record_export("default", export_path)
+
+        state = self.chat.get_project_state("default")
+        self.assertEqual(state.last_export_path, str(export_path.resolve()))
+
+
+class TelegramConsoleBotUiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        self.projects = ProjectService(self.root)
+        self.api = FakeApi()
+        self.chat = FakeChatService()
+        self.config = TelegramConsoleConfig(
+            root_dir=self.root,
+            token="test-token",
+            allowed_chat_id=1,
+            poll_timeout=1,
+        )
+        self.bot = TelegramConsoleBot(self.config, self.api, self.projects, self.chat)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_dashboard_shows_minimal_menu(self) -> None:
+        self.bot._show_dashboard(1)
+        last_message = self.api.messages[-1]
+        self.assertIn("Удаленный Codex", str(last_message["text"]))
+        self.assertIn("Пиши мне обычным сообщением", str(last_message["text"]))
+        self.assertIn("Действующие проекты", str(last_message["text"]))
+        self.assertEqual(
+            last_message["reply_markup"]["keyboard"],
+            [[{"text": label} for label in row] for row in MAIN_MENU],
+        )
+
+    def test_free_text_is_sent_to_project_chat(self) -> None:
+        self.bot._handle_message({"chat": {"id": 1}, "text": "Продолжай писать диплом"})
+
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertEqual(self.chat.started[0]["project_id"], "default")
+        self.assertEqual(self.chat.started[0]["prompt"], "Продолжай писать диплом")
+        self.assertIn("Беру это в работу", str(self.api.messages[-1]["text"]))
+
+    def test_plain_greeting_is_sent_to_chat(self) -> None:
+        self.bot._handle_message({"chat": {"id": 1}, "text": "привет"})
+
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertEqual(self.chat.started[0]["prompt"], "привет")
+
+    def test_slash_text_is_sent_to_chat(self) -> None:
+        self.bot._handle_message({"chat": {"id": 1}, "text": "/run диплом проверить manuscript/sections/01-introduction.md"})
+
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertEqual(
+            self.chat.started[0]["prompt"],
+            "/run диплом проверить manuscript/sections/01-introduction.md",
+        )
+
+    def test_success_notification_sends_answer_text(self) -> None:
+        self.chat.notifications.append(
+            AgentTurnNotification(
+                task_id="default:chat",
+                project_id="default",
+                project_title="Тестовый диплом",
+                status="success",
+                started_at="2026-04-17T10:00:00+00:00",
+                finished_at="2026-04-17T10:01:00+00:00",
+                response_text="Готово. Я дописал введение.",
+                summary="Готово. Я дописал введение.",
+                session_id="session-demo",
+            )
+        )
+
+        self.bot.tick()
+
+        self.assertEqual(len(self.api.messages), 2)
+        self.assertIn("Ответ готов", str(self.api.messages[0]["text"]))
+        self.assertIn("Готово. Я дописал введение.", str(self.api.messages[1]["text"]))
+
+    def test_failed_notification_is_human_readable(self) -> None:
+        self.chat.notifications.append(
+            AgentTurnNotification(
+                task_id="default:chat",
+                project_id="default",
+                project_title="Тестовый диплом",
+                status="failed",
+                started_at="2026-04-17T10:00:00+00:00",
+                finished_at="2026-04-17T10:01:00+00:00",
+                error="Codex CLI завершился с ошибкой.",
+                reset_session=True,
+            )
+        )
+
+        self.bot.tick()
+
+        self.assertIn("Не получилось получить ответ Codex", str(self.api.messages[-1]["text"]))
+        self.assertIn("сессия", str(self.api.messages[-1]["text"]).lower())
+
+    def test_run_export_without_mailer_keeps_telegram_delivery(self) -> None:
+        self.bot._run_export(1, "default", "thesis")
+
+        self.assertEqual(len(self.api.documents), 1)
+        self.assertIn("thesis-draft.docx", self.api.documents[0]["file_path"])
+        self.assertEqual(len(self.chat.exports), 1)
+        self.assertTrue(any("Экспорт готов" in str(item["text"]) for item in self.api.messages))
+        self.assertFalse(any("ушла на почту" in str(item["text"]) for item in self.api.messages))
+
+    def test_run_export_with_mailer_sends_email_copy(self) -> None:
+        mailer = FakeMailer()
+        bot = TelegramConsoleBot(self.config, self.api, self.projects, self.chat, mailer=mailer)
+
+        bot._run_export(1, "default", "article:demo")
+
+        self.assertEqual(len(self.api.documents), 1)
+        self.assertEqual(len(mailer.calls), 1)
+        self.assertIn("demo.docx", mailer.calls[0]["file_path"])
+        self.assertEqual(mailer.calls[0]["artifact_kind"], "статья")
+        self.assertIn("ушла на почту", str(self.api.messages[-1]["text"]))
+
+    def test_run_export_mailer_failure_does_not_block_telegram_delivery(self) -> None:
+        mailer = FakeMailer(error=EmailDeliveryError("smtp timeout"))
+        bot = TelegramConsoleBot(self.config, self.api, self.projects, self.chat, mailer=mailer)
+
+        bot._run_export(1, "default", "thesis")
+
+        self.assertEqual(len(self.api.documents), 1)
+        self.assertEqual(len(mailer.calls), 1)
+        self.assertIn("не отправилась", str(self.api.messages[-1]["text"]))
+        self.assertIn("smtp timeout", str(self.api.messages[-1]["text"]))
+
+
+class TelegramConsoleBotProjectSelectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tempdir.name)
+        self.bot_home = self.workspace / "bot-home"
+        self.bot_home.mkdir(parents=True, exist_ok=True)
+        self.repo_a = self.workspace / "alpha"
+        self.repo_b = self.workspace / "beta"
+        build_fake_repo(self.repo_a)
+        build_fake_repo(self.repo_b)
+        write_projects_registry(
+            self.bot_home,
+            [
+                {
+                    "id": "alpha",
+                    "title": "Диплом А",
+                    "root_dir": str(self.repo_a),
+                    "capabilities": ["thesis", "article"],
+                },
+                {
+                    "id": "beta",
+                    "title": "Диплом Б",
+                    "root_dir": str(self.repo_b),
+                    "capabilities": ["thesis"],
+                },
+            ],
+        )
+        self.projects = ProjectService(self.bot_home)
+        self.api = FakeApi()
+        self.chat = FakeChatService()
+        self.chat.states["alpha"] = ProjectChatState(
+            project_id="alpha",
+            session_id="alpha-session",
+            last_assistant_summary="Дописываю введение и проверяю выводы.",
+        )
+        self.config = TelegramConsoleConfig(
+            root_dir=self.bot_home,
+            token="test-token",
+            allowed_chat_id=1,
+            poll_timeout=1,
+        )
+        self.bot = TelegramConsoleBot(self.config, self.api, self.projects, self.chat)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_text_without_active_project_opens_project_picker(self) -> None:
+        self.bot._handle_message({"chat": {"id": 1}, "text": "Продолжай работу"})
+        text = str(self.api.messages[-1]["text"])
+        self.assertIn("Сначала выбери активный проект", text)
+        self.assertIn("Диплом А", text)
+        buttons = self.api.messages[-1]["reply_markup"]["inline_keyboard"]
+        flat_labels = [button["text"] for row in buttons for button in row]
+        self.assertIn("📚 Диплом А · alpha", flat_labels)
+
+    def test_project_selection_happens_via_callback(self) -> None:
+        self.bot._handle_callback(
+            {
+                "id": "cb-1",
+                "from": {"id": 1},
+                "data": "project:use:beta",
+                "message": {"chat": {"id": 1}},
+            }
+        )
+        self.assertEqual(self.projects.store.get_active_project_id(), "beta")
+        self.assertIn("Проект переключен", str(self.api.messages[-1]["text"]))
+        self.assertIn("Диплом Б", str(self.api.messages[-1]["text"]))
+
+    def test_project_menu_shows_title_id_and_focus(self) -> None:
+        self.bot._show_projects_menu(1)
+        text = str(self.api.messages[-1]["text"])
+        self.assertIn("Диплом А", text)
+        self.assertIn("`alpha`", text)
+        self.assertIn("Дописываю введение", text)
+
+    def test_running_bot_sees_project_added_later_without_restart(self) -> None:
+        self.bot._show_projects_menu(1)
+        self.assertNotIn("Гамма", str(self.api.messages[-1]["text"]))
+
+        repo_c = self.workspace / "gamma"
+        build_fake_repo(repo_c)
+        self.projects.register_project("Гамма", repo_c)
+
+        self.bot._show_projects_menu(1)
+        text = str(self.api.messages[-1]["text"])
+        self.assertIn("Гамма", text)
+        self.assertIn("gamma", text)
+
+    def test_busy_chat_message_is_returned_to_user(self) -> None:
+        self.projects.set_active_project("alpha")
+        self.chat.raise_busy = True
+
+        self.bot._handle_message({"chat": {"id": 1}, "text": "Продолжай писать"})
+
+        self.assertIn("Я уже отвечаю", str(self.api.messages[-1]["text"]))
+
+    def test_export_button_uses_active_project(self) -> None:
+        self.projects.set_active_project("beta")
+        self.bot._handle_message({"chat": {"id": 1}, "text": "📦 Экспорт"})
+
+        self.assertEqual(len(self.api.documents), 1)
+        self.assertIn("thesis-draft.docx", self.api.documents[0]["file_path"])
+
+    def test_project_command_text_is_not_intercepted(self) -> None:
+        self.projects.set_active_project("alpha")
+        self.bot._handle_message({"chat": {"id": 1}, "text": "/project current"})
+
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertEqual(self.chat.started[0]["prompt"], "/project current")
+
+    def test_reset_chat_text_is_not_intercepted(self) -> None:
+        self.projects.set_active_project("alpha")
+
+        self.bot._handle_message({"chat": {"id": 1}, "text": "/resetchat"})
+
+        self.assertEqual(self.chat.reset_calls, [])
+        self.assertEqual(len(self.chat.started), 1)
+        self.assertEqual(self.chat.started[0]["prompt"], "/resetchat")
+
+
+class TelegramConsoleCliTests(unittest.TestCase):
+    def test_project_add_command_creates_registry_and_prints_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            bot_home = workspace / "bot-home"
+            bot_home.mkdir(parents=True, exist_ok=True)
+            repo = workspace / "repo"
+            build_fake_repo(repo)
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(
+                    [
+                        "--root",
+                        str(bot_home),
+                        "project",
+                        "add",
+                        "--title",
+                        "Диплом по биометрии",
+                        "--root",
+                        str(repo),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Проект добавлен", stdout.getvalue())
+            self.assertIn("ID: diplom-po-biometrii", stdout.getvalue())
+            payload = json.loads((bot_home / "output" / "telegram" / "projects.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["projects"][0]["id"], "diplom-po-biometrii")
+
+    def test_project_add_command_reports_existing_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            bot_home = workspace / "bot-home"
+            bot_home.mkdir(parents=True, exist_ok=True)
+            repo = workspace / "repo"
+            build_fake_repo(repo)
+            write_projects_registry(
+                bot_home,
+                [
+                    {
+                        "id": "alpha",
+                        "title": "Диплом А",
+                        "root_dir": str(repo),
+                        "capabilities": ["thesis", "article"],
+                    }
+                ],
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(
+                    [
+                        "--root",
+                        str(bot_home),
+                        "project",
+                        "add",
+                        "--title",
+                        "Новое имя",
+                        "--root",
+                        str(repo),
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Проект уже есть в реестре", stdout.getvalue())
+            self.assertIn("ID: alpha", stdout.getvalue())
+
+    def test_project_add_command_fails_for_invalid_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            bot_home = workspace / "bot-home"
+            bot_home.mkdir(parents=True, exist_ok=True)
+            repo = workspace / "broken"
+            repo.mkdir(parents=True, exist_ok=True)
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(
+                    [
+                        "--root",
+                        str(bot_home),
+                        "project",
+                        "add",
+                        "--title",
+                        "Сломанный проект",
+                        "--root",
+                        str(repo),
+                    ]
+                )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("Этот проект пока нельзя добавить", stderr.getvalue())
+
+
+class TelegramApiTests(unittest.TestCase):
+    def test_timeout_is_wrapped_into_telegram_api_error(self) -> None:
+        api = TelegramBotApi("test-token")
+        with patch("telegram_console.telegram_api.request.urlopen", side_effect=TimeoutError("boom")):
+            with self.assertRaisesRegex(TelegramApiError, "timeout"):
+                api.get_updates(timeout=1)
+
+
+if __name__ == "__main__":
+    unittest.main()

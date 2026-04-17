@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+from pathlib import Path
+import argparse
+import json
+import subprocess
+import sys
+
+
+def utc_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def append_text(path: Path, header: str, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(header)
+        handle.write("\n")
+        handle.write(content)
+        if content and not content.endswith("\n"):
+            handle.write("\n")
+        handle.write("\n")
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Codex chat turns in the background.")
+    parser.add_argument("--task-dir", required=True)
+    return parser.parse_args(argv)
+
+
+def read_request(task_dir: Path) -> dict[str, object]:
+    path = task_dir / "request.json"
+    if not path.exists():
+        raise RuntimeError(f"Missing request file: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def build_command(request: dict[str, object], response_path: Path, session_id: str | None) -> list[str]:
+    codex_bin = str(request.get("codex_bin") or "").strip() or "codex"
+    project_root = str(request.get("project_root") or "").strip()
+    if not project_root:
+        raise RuntimeError("request.project_root is required")
+
+    model = str(request.get("codex_model") or "").strip() or None
+    command = [
+        codex_bin,
+        "exec",
+        "-C",
+        project_root,
+        "--skip-git-repo-check",
+        "--full-auto",
+    ]
+    if session_id:
+        command.extend(["resume", "--json", "-o", str(response_path)])
+        if model:
+            command.extend(["-m", model])
+        command.extend([session_id, "-"])
+        return command
+
+    command.extend(["--json", "-o", str(response_path)])
+    if model:
+        command.extend(["-m", model])
+    command.append("-")
+    return command
+
+
+def parse_json_events(stdout_text: str) -> tuple[str | None, str | None]:
+    thread_id = None
+    last_message = None
+    for raw_line in stdout_text.splitlines():
+        line = raw_line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") == "thread.started":
+            value = payload.get("thread_id")
+            if isinstance(value, str) and value.strip():
+                thread_id = value.strip()
+        item = payload.get("item")
+        if payload.get("type") == "item.completed" and isinstance(item, dict):
+            if item.get("type") == "agent_message":
+                value = item.get("text")
+                if isinstance(value, str) and value.strip():
+                    last_message = value.strip()
+    return thread_id, last_message
+
+
+def run_attempt(
+    request: dict[str, object],
+    *,
+    session_id: str | None,
+    response_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    label: str,
+) -> dict[str, object]:
+    if response_path.exists():
+        response_path.unlink()
+
+    prompt = str(request.get("prompt") or "")
+    command = build_command(request, response_path, session_id)
+    completed = subprocess.run(
+        command,
+        input=prompt,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    append_text(stdout_path, f"[{label}] stdout", completed.stdout)
+    append_text(stderr_path, f"[{label}] stderr", completed.stderr)
+
+    thread_id, parsed_message = parse_json_events(completed.stdout)
+    response_text = None
+    if response_path.exists():
+        response_text = response_path.read_text(encoding="utf-8").strip() or None
+    if not response_text:
+        response_text = parsed_message
+
+    return {
+        "returncode": completed.returncode,
+        "thread_id": thread_id,
+        "response_text": response_text,
+        "command": command,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    task_dir = Path(args.task_dir).resolve()
+    task_dir.mkdir(parents=True, exist_ok=True)
+    request = read_request(task_dir)
+
+    stdout_path = task_dir / "codex.stdout.jsonl"
+    stderr_path = task_dir / "codex.stderr.log"
+    response_path = task_dir / "assistant.txt"
+    result_path = task_dir / "result.json"
+    if stdout_path.exists():
+        stdout_path.unlink()
+    if stderr_path.exists():
+        stderr_path.unlink()
+
+    started_at = str(request.get("started_at") or utc_now())
+    previous_session_id = str(request.get("session_id") or "").strip() or None
+    reset_session = False
+
+    attempt = run_attempt(
+        request,
+        session_id=previous_session_id,
+        response_path=response_path,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        label="resume" if previous_session_id else "start",
+    )
+
+    if attempt["returncode"] != 0 and previous_session_id:
+        reset_session = True
+        attempt = run_attempt(
+            request,
+            session_id=None,
+            response_path=response_path,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            label="restart-after-resume-failure",
+        )
+
+    payload: dict[str, object] = {
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "returncode": int(attempt["returncode"]),
+        "status": "success" if int(attempt["returncode"]) == 0 else "failed",
+        "thread_id": attempt.get("thread_id") or previous_session_id,
+        "response_text": attempt.get("response_text"),
+        "response_path": str(response_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "reset_session": reset_session,
+        "command": attempt.get("command"),
+    }
+    if int(attempt["returncode"]) != 0:
+        payload["error"] = "Codex CLI завершился с ошибкой. Смотри stderr log."
+    write_json(result_path, payload)
+    return int(attempt["returncode"])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
