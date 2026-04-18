@@ -1277,6 +1277,225 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(bundle_state["terminal_reason"], "blocked-standards")
         self.assertIn(record.record_id, bundle_state["latest_runtime_record_ids"])
 
+    def test_article_review_finalization_extracts_primary_support_blockers_from_review_artifact(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "review-artifact-demo")
+        write_file(bundle["brief"], "# Review artifact brief\n")
+        write_file(bundle["evidence_pack"], "# Evidence\n")
+        write_file(bundle["claim_map"], "# Claim map\n")
+        write_file(bundle["draft"], "# Review artifact draft\n")
+        write_file(
+            bundle["review"],
+            textwrap.dedent(
+                """\
+                # Review sheet
+
+                - Verdict: `strong-draft-with-blockers`
+                - Primary support is sufficient: no
+                - Unsafe or overstated claims: Key causal claim still relies on secondary literature only.
+                - Checklist blockers: Need primary-source support for the central doctrinal claim.
+                """
+            ),
+        )
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="review",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["draft"],
+            target_rel=relative_to_workspace(workspace, bundle["draft"]),
+        )
+        timestamp = "20260418-101800"
+        output_file = work.article.paths.output_runs_dir / f"{timestamp}-review-review-artifact-demo.md"
+        manifest_file = work.article.paths.output_runs_dir / f"{timestamp}-review-review-artifact-demo.meta.json"
+        write_file(output_file, "Evaluator completed. See managed review artifact for the verdict.\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "command": "review",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "topic": None,
+            "input_brief": None,
+            "target_path": relative_to_workspace(workspace, bundle["draft"]),
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "bundle": {
+                "slug": "review-artifact-demo",
+                "brief": str(bundle["brief"]),
+                "evidence_pack": str(bundle["evidence_pack"]),
+                "claim_map": str(bundle["claim_map"]),
+                "draft": str(bundle["draft"]),
+                "review": str(bundle["review"]),
+                "final_markdown": str(bundle["final_markdown"]),
+                "checklist": str(bundle["checklist"]),
+                "docx": str(bundle["docx"]),
+                "state_manifest": str(article_bundle_manifest_path(work, "review-artifact-demo")),
+            },
+            "related_context": [str(self.root / "AGENTS.md")],
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "article-review-artifact-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-article-review-artifact",
+            "lane": "article",
+            "action": "review",
+            "started_at": "2026-04-18T10:18:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": relative_to_workspace(workspace, bundle["draft"]),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:19:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["terminal_reason"], "blocked-primary-support")
+        self.assertEqual(status["repair_decision"]["action"], "repair")
+        self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
+
+        bundle_state = json.loads(article_bundle_manifest_path(work, "review-artifact-demo").read_text(encoding="utf-8"))
+        self.assertEqual(bundle_state["current_status"], "strong-draft-with-blockers")
+        self.assertEqual(bundle_state["terminal_reason"], "blocked-primary-support")
+        self.assertTrue(any(item["category"] == "primary-support" for item in bundle_state["blockers"]))
+
+    def test_article_review_finalization_downgrades_submission_ready_from_checklist_blockers(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "checklist-blocker-demo")
+        write_file(bundle["brief"], "# Checklist blocker brief\n")
+        write_file(bundle["evidence_pack"], "# Evidence\n")
+        write_file(bundle["claim_map"], "# Claim map\n")
+        write_file(bundle["draft"], "# Checklist blocker draft\n")
+        write_file(bundle["review"], "# Review sheet\n")
+        write_file(bundle["final_markdown"], "# Final markdown\n")
+        write_file(
+            bundle["checklist"],
+            textwrap.dedent(
+                """\
+                # Submission Checklist
+
+                - Status: `submission-ready`
+                - Formatting blockers: none
+                - What still blocks formal submission: Need primary-source support for the lead empirical claim.
+                """
+            ),
+        )
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="review",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["draft"],
+            target_rel=relative_to_workspace(workspace, bundle["draft"]),
+        )
+        timestamp = "20260418-101900"
+        output_file = work.article.paths.output_runs_dir / f"{timestamp}-review-checklist-blocker-demo.md"
+        manifest_file = work.article.paths.output_runs_dir / f"{timestamp}-review-checklist-blocker-demo.meta.json"
+        write_file(output_file, "Evaluator verdict: submission-ready\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "command": "review",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "topic": None,
+            "input_brief": None,
+            "target_path": relative_to_workspace(workspace, bundle["draft"]),
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "bundle": {
+                "slug": "checklist-blocker-demo",
+                "brief": str(bundle["brief"]),
+                "evidence_pack": str(bundle["evidence_pack"]),
+                "claim_map": str(bundle["claim_map"]),
+                "draft": str(bundle["draft"]),
+                "review": str(bundle["review"]),
+                "final_markdown": str(bundle["final_markdown"]),
+                "checklist": str(bundle["checklist"]),
+                "docx": str(bundle["docx"]),
+                "state_manifest": str(article_bundle_manifest_path(work, "checklist-blocker-demo")),
+            },
+            "related_context": [str(self.root / "AGENTS.md")],
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "article-checklist-blocker-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-article-checklist-blocker",
+            "lane": "article",
+            "action": "review",
+            "started_at": "2026-04-18T10:19:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": relative_to_workspace(workspace, bundle["draft"]),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:20:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["terminal_reason"], "blocked-primary-support")
+        self.assertEqual(status["repair_decision"]["action"], "repair")
+        self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
+
+        bundle_state = json.loads(article_bundle_manifest_path(work, "checklist-blocker-demo").read_text(encoding="utf-8"))
+        self.assertEqual(bundle_state["current_status"], "strong-draft-with-blockers")
+        self.assertEqual(bundle_state["terminal_reason"], "blocked-primary-support")
+        self.assertTrue(any(item["category"] == "primary-support" for item in bundle_state["blockers"]))
+
     def test_article_review_finalization_marks_ready_with_caveats_for_strong_draft(self) -> None:
         write_sample_standards_registry(self.root)
         write_sample_normalized_profiles(self.root)
@@ -1288,9 +1507,31 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         write_file(bundle["evidence_pack"], "# Evidence\n")
         write_file(bundle["claim_map"], "# Claim map\n")
         write_file(bundle["draft"], "# Review draft\n")
-        write_file(bundle["review"], "# Review sheet\n")
+        write_file(
+            bundle["review"],
+            textwrap.dedent(
+                """\
+                # Review sheet
+
+                - Verdict: `strong-draft`
+                - Primary support is sufficient: yes
+                - Checklist blockers: none
+                """
+            ),
+        )
         write_file(bundle["final_markdown"], "# Final markdown\n")
-        write_file(bundle["checklist"], "# Checklist\n")
+        write_file(
+            bundle["checklist"],
+            textwrap.dedent(
+                """\
+                # Submission Checklist
+
+                - Status: `strong-draft`
+                - Formatting blockers: none
+                - What still blocks formal submission: none
+                """
+            ),
+        )
         contract = build_article_execution_contract(
             work=work,
             profile=profile,
