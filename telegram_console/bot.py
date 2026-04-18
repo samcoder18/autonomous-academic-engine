@@ -706,6 +706,12 @@ def _format_runtime_records(records: list[Any]) -> str:
                 f"Статус: {record.status} · stage={record.stage}",
                 f"Проект: {record.project_title or record.project_id or 'не указан'}",
                 f"Работа: {record.work_title or record.work_id or 'не указана'}",
+                (
+                    "Repair: "
+                    f"iteration={record.repair_iteration or 0}, "
+                    f"terminal_reason={record.terminal_reason or 'n/a'}, "
+                    f"blockers={len(record.blockers)}"
+                ),
                 f"Summary: {record.summary or 'нет'}",
                 "",
             ]
@@ -733,6 +739,16 @@ def _format_runtime_record(record: Any) -> str:
         lines.append(f"Failure: {json.dumps(record.failure, ensure_ascii=False)}")
     else:
         lines.append("Failure: none")
+    if record.blockers:
+        lines.append(f"Blockers: {json.dumps(list(record.blockers), ensure_ascii=False)}")
+    else:
+        lines.append("Blockers: none")
+    if record.repair_decision:
+        lines.append(f"Repair decision: {json.dumps(record.repair_decision, ensure_ascii=False)}")
+    else:
+        lines.append("Repair decision: none")
+    lines.append(f"Repair iteration: {record.repair_iteration if record.repair_iteration is not None else 'n/a'}")
+    lines.append(f"Terminal reason: {record.terminal_reason or 'n/a'}")
     lines.append("Attachments:")
     if record.attachments:
         for name, payload in sorted(record.attachments.items()):

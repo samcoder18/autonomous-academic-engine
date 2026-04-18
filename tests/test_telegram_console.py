@@ -23,6 +23,11 @@ from telegram_console.action_specs import (
     build_thesis_execution_contract,
     list_action_specs,
 )
+from telegram_console.repair_kernel import (
+    Blocker,
+    build_repair_plan,
+    run_bounded_repair_loop,
+)
 from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
 from telegram_console.config import TelegramConsoleConfig
 from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
@@ -30,6 +35,7 @@ from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServi
 from telegram_console.orchestrator import RunBusyError, WorkflowOrchestrator
 from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.projects import ProjectService
+from telegram_console.runtime_status import build_runtime_status, record_from_payload
 from telegram_console import chat_wrapper as chat_wrapper_module
 from telegram_console import run_wrapper as run_wrapper_module
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
@@ -2160,6 +2166,188 @@ class ActionSpecRegistryTests(unittest.TestCase):
         self.assertEqual(contract.repair_policy.max_iterations, 2)
         self.assertTrue(any(item.name == "review-sheet" for item in contract.required_outputs))
         self.assertTrue(any(gate.gate_id == "standards-consistency" for gate in contract.quality_gates))
+
+
+class RepairKernelTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def load_active_work(self):
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        return workspace, work
+
+    def test_bounded_article_repair_loop_recovers_after_one_iteration(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = {
+            "brief": self.root / TEST_ARTICLE_BRIEF,
+            "evidence_pack": self.root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+            "claim_map": self.root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+            "draft": self.root / TEST_ARTICLE_DRAFT,
+            "review": self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md",
+            "final_markdown": self.root / TEST_ARTICLE_FINAL,
+            "checklist": self.root / TEST_ARTICLE_CHECKLIST,
+            "docx": self.root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx",
+        }
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="repair",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=self.root / TEST_ARTICLE_DRAFT,
+            target_rel=TEST_ARTICLE_DRAFT.as_posix(),
+        )
+        initial_blockers = [
+            Blocker(
+                category="primary-support",
+                code="unsupported-claim",
+                message="Strong claim is missing primary support.",
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+            )
+        ]
+
+        repair_calls: list[int] = []
+
+        def repair_fn(plan):
+            repair_calls.append(plan.repair_iteration)
+            return {"patched": True}
+
+        def evaluate_fn(plan, repair_result):
+            self.assertTrue(repair_result["patched"])
+            return []
+
+        outcome = run_bounded_repair_loop(
+            contract=contract,
+            initial_blockers=initial_blockers,
+            repair_fn=repair_fn,
+            evaluate_fn=evaluate_fn,
+        )
+
+        self.assertEqual(repair_calls, [1])
+        self.assertEqual(outcome.terminal_reason, "ready")
+        self.assertEqual(outcome.repair_iteration, 1)
+        self.assertEqual(outcome.remaining_blockers, ())
+        self.assertEqual(len(outcome.decisions), 2)
+        self.assertEqual(outcome.decisions[0].action, "repair")
+        self.assertEqual(outcome.decisions[-1].action, "stop")
+
+    def test_bounded_article_repair_loop_stops_at_max_iterations(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = {
+            "brief": self.root / TEST_ARTICLE_BRIEF,
+            "evidence_pack": self.root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+            "claim_map": self.root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+            "draft": self.root / TEST_ARTICLE_DRAFT,
+            "review": self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md",
+            "final_markdown": self.root / TEST_ARTICLE_FINAL,
+            "checklist": self.root / TEST_ARTICLE_CHECKLIST,
+            "docx": self.root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx",
+        }
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="repair",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=self.root / TEST_ARTICLE_DRAFT,
+            target_rel=TEST_ARTICLE_DRAFT.as_posix(),
+        )
+        blocker = Blocker(
+            category="primary-support",
+            code="persistent-gap",
+            message="Primary support gap still remains.",
+            repairable=True,
+            blocks_statuses=("submission-ready",),
+        )
+
+        outcome = run_bounded_repair_loop(
+            contract=contract,
+            initial_blockers=[blocker],
+            repair_fn=lambda plan: {"iteration": plan.repair_iteration},
+            evaluate_fn=lambda plan, result: [blocker],
+        )
+
+        self.assertEqual(outcome.terminal_reason, "max-repair-iterations")
+        self.assertEqual(outcome.repair_iteration, 2)
+        self.assertEqual(len(outcome.plans), 2)
+        self.assertEqual(outcome.remaining_blockers, (blocker,))
+
+    def test_thesis_safe_repair_plan_filters_broad_style_blockers(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="thesis", requested_profile_id=None)
+        contract = build_thesis_execution_contract(
+            work=work,
+            profile=profile,
+            action="verify",
+            target_path=self.root / TEST_THESIS_SECTION,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            review_path=self.root / TEST_THESIS_REVIEW,
+            sync_hint_path=work.thesis.sync_dir / "{date}-verify-01-introduction.md",
+        )
+        plan = build_repair_plan(
+            contract=contract,
+            blockers=[
+                Blocker(category="style", code="generic-voice", message="Text sounds too generic.", repairable=True),
+                Blocker(category="citation", code="missing-footnote", message="A strong claim lacks a footnote.", repairable=True),
+                Blocker(category="review", code="overclaim", message="Conclusion is overstated.", repairable=True),
+            ],
+            repair_iteration=1,
+        )
+
+        self.assertTrue(plan.safe_only)
+        self.assertEqual({item.category for item in plan.blockers}, {"citation", "review"})
+        self.assertIn("citation", plan.focus_areas)
+        self.assertIn("review", plan.focus_areas)
+        self.assertNotIn("style", plan.focus_areas)
+
+    def test_runtime_status_round_trip_preserves_repair_fields(self) -> None:
+        payload = build_runtime_status(
+            record_id="alpha:repair-run",
+            entity_kind="workflow-run",
+            status="failed",
+            stage="repairing",
+            project_id="alpha",
+            work_id=TEST_WORK_ID,
+            lane="article",
+            action="repair",
+            summary="Repair loop stopped on unresolved blocker.",
+            repair_iteration=2,
+            terminal_reason="max-repair-iterations",
+            blockers=[
+                {
+                    "category": "primary-support",
+                    "code": "persistent-gap",
+                    "message": "Primary support gap still remains.",
+                }
+            ],
+            repair_decision={
+                "action": "stop",
+                "reason": "repair-limit-reached",
+                "terminal_reason": "max-repair-iterations",
+            },
+        )
+
+        record = record_from_payload(payload, runtime_dir=None, status_path=None, source="status")
+
+        assert record is not None
+        self.assertEqual(record.repair_iteration, 2)
+        self.assertEqual(record.terminal_reason, "max-repair-iterations")
+        self.assertEqual(record.blockers[0]["code"], "persistent-gap")
+        self.assertEqual(record.repair_decision["action"], "stop")
 
 
 class TelegramConsoleCliTests(unittest.TestCase):

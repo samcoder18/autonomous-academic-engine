@@ -34,6 +34,10 @@ class RuntimeRecord:
     finished_at: str | None = None
     summary: str | None = None
     failure: dict[str, Any] | None = None
+    blockers: tuple[dict[str, Any], ...] = ()
+    repair_decision: dict[str, Any] | None = None
+    repair_iteration: int | None = None
+    terminal_reason: str | None = None
     checkpoints: tuple[dict[str, Any], ...] = ()
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     runtime_dir: str | None = None
@@ -63,6 +67,10 @@ class RuntimeRecord:
             "finished_at": self.finished_at,
             "summary": self.summary,
             "failure": self.failure,
+            "blockers": list(self.blockers),
+            "repair_decision": self.repair_decision,
+            "repair_iteration": self.repair_iteration,
+            "terminal_reason": self.terminal_reason,
             "checkpoints": list(self.checkpoints),
             "attachments": self.attachments,
             "runtime_dir": self.runtime_dir,
@@ -144,6 +152,10 @@ def build_runtime_status(
     finished_at: str | None = None,
     summary: str | None = None,
     failure: dict[str, Any] | None = None,
+    blockers: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    repair_decision: dict[str, Any] | None = None,
+    repair_iteration: int | None = None,
+    terminal_reason: str | None = None,
     checkpoints: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     attachments: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -165,6 +177,10 @@ def build_runtime_status(
         "finished_at": finished_at,
         "summary": summary,
         "failure": failure,
+        "blockers": list(blockers or []),
+        "repair_decision": repair_decision,
+        "repair_iteration": repair_iteration,
+        "terminal_reason": terminal_reason,
         "checkpoints": list(checkpoints or []),
         "attachments": attachments or {},
     }
@@ -225,9 +241,15 @@ def record_from_payload(
     attachments = payload.get("attachments")
     if not isinstance(attachments, dict):
         attachments = {}
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list):
+        blockers = []
     checkpoints = payload.get("checkpoints")
     if not isinstance(checkpoints, list):
         checkpoints = []
+    repair_iteration = payload.get("repair_iteration")
+    if not isinstance(repair_iteration, int):
+        repair_iteration = None
     return RuntimeRecord(
         record_id=record_id,
         entity_kind=entity_kind,
@@ -245,6 +267,10 @@ def record_from_payload(
         finished_at=_optional_text(payload.get("finished_at")),
         summary=_optional_text(payload.get("summary")),
         failure=payload.get("failure") if isinstance(payload.get("failure"), dict) else None,
+        blockers=tuple(item for item in blockers if isinstance(item, dict)),
+        repair_decision=payload.get("repair_decision") if isinstance(payload.get("repair_decision"), dict) else None,
+        repair_iteration=repair_iteration,
+        terminal_reason=_optional_text(payload.get("terminal_reason")),
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},
         runtime_dir=str(runtime_dir) if runtime_dir else None,
