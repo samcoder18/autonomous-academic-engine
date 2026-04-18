@@ -21,6 +21,7 @@ from telegram_console.agent_chat import (
 from telegram_console.article_bundle_state import article_bundle_manifest_path
 from telegram_console.article_runtime_signals import extract_article_artifact_signals
 from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
+from telegram_console.thesis_repair_planner import build_thesis_repair_plan
 from telegram_console.guarded_prose import load_guarded_prose_rules
 from telegram_console.action_specs import (
     build_article_execution_contract,
@@ -715,6 +716,7 @@ def write_runtime_status_fixture(
     repair_decision: dict[str, object] | None = None,
     repair_iteration: int | None = None,
     terminal_reason: str | None = None,
+    thesis_repair_plan: dict[str, object] | None = None,
     checkpoints: list[dict[str, object]] | None = None,
 ) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -755,6 +757,7 @@ def write_runtime_status_fixture(
         "repair_decision": repair_decision,
         "repair_iteration": repair_iteration,
         "terminal_reason": terminal_reason,
+        "thesis_repair_plan": thesis_repair_plan,
         "checkpoints": checkpoints
         or [
             {
@@ -1908,14 +1911,24 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(status["repair_decision"]["action"], "repair")
         self.assertEqual(status["terminal_reason"], "blocked-primary-support")
         self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
+        self.assertEqual(status["thesis_repair_plan"]["kind"], "thesis-repair-plan")
+        self.assertTrue(status["thesis_repair_plan"]["eligible"])
+        self.assertEqual(status["thesis_repair_plan"]["suggested_action"], "verify")
+        self.assertIn("launch-thesis verify", status["thesis_repair_plan"]["suggested_command"])
+        self.assertEqual(status["thesis_repair_plan"]["readiness_claim"], "none")
 
         resolution = json.loads((run_dir / "resolution.json").read_text(encoding="utf-8"))
         self.assertEqual(resolution["thesis_runtime"]["summary_block"]["kind"], "thesis-section-summary")
         self.assertEqual(resolution["thesis_runtime"]["summary_block"]["blocker_count"], 1)
+        self.assertEqual(resolution["thesis_runtime"]["thesis_repair_plan"]["suggested_action"], "verify")
 
         section_status = self.orchestrator.get_artifact_status(f"thesis:{TEST_THESIS_SECTION.as_posix()}")
         self.assertEqual(section_status["summary"]["blocker_count"], 1)
         self.assertEqual(section_status["summary"]["terminal_reason"], "blocked-primary-support")
+
+        work_state = self.orchestrator.get_artifact_status("work")
+        self.assertEqual(work_state["runtime"]["recent"][0]["repair_decision"]["action"], "repair")
+        self.assertEqual(work_state["runtime"]["recent"][0]["thesis_repair_plan"]["suggested_action"], "verify")
 
     def test_thesis_write_section_finalization_skips_repair_metadata_for_noneligible_action(self) -> None:
         write_sample_standards_registry(self.root)
@@ -3499,6 +3512,121 @@ class RepairKernelTests(unittest.TestCase):
         self.assertEqual(record.repair_decision["action"], "stop")
 
 
+class ThesisRepairPlannerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        workspace = load_workspace_config(self.root)
+        self.work = load_work_config(workspace, TEST_WORK_ID)
+        self.profile = resolve_standard_profile(self.root, workspace, self.work, lane="thesis", requested_profile_id=None)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def build_contract(self, action: str = "verify"):
+        return build_thesis_execution_contract(
+            work=self.work,
+            profile=self.profile,
+            action=action,
+            target_path=self.root / TEST_THESIS_SECTION,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", self.work.work_canon_path],
+            review_path=self.root / TEST_THESIS_REVIEW,
+            sync_hint_path=self.work.thesis.sync_dir / "{date}-verify-01-introduction.md",
+        )
+
+    def test_planner_routes_primary_support_blocker_to_verify(self) -> None:
+        plan = build_thesis_repair_plan(
+            section_summary={"kind": "thesis-section-summary", "target": TEST_THESIS_SECTION.as_posix()},
+            blockers=[
+                Blocker(
+                    category="primary-support",
+                    code="primary-support-gap",
+                    message="Need primary support for the central claim.",
+                    repairable=True,
+                )
+            ],
+            contract=self.build_contract(),
+            target=TEST_THESIS_SECTION.as_posix(),
+            repair_iteration=0,
+        )
+        payload = plan.to_dict()
+
+        self.assertTrue(payload["eligible"])
+        self.assertEqual(payload["suggested_action"], "verify")
+        self.assertEqual(payload["target"], TEST_THESIS_SECTION.as_posix())
+        self.assertIn("launch-thesis verify", payload["suggested_command"])
+        self.assertEqual(payload["terminal_reason"], None)
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_planner_rejects_broad_style_only_blocker(self) -> None:
+        plan = build_thesis_repair_plan(
+            section_summary={"kind": "thesis-section-summary", "target": TEST_THESIS_SECTION.as_posix()},
+            blockers=[
+                Blocker(
+                    category="style",
+                    code="generic-voice",
+                    message="The whole section sounds too generic.",
+                    repairable=True,
+                )
+            ],
+            contract=self.build_contract(action="full-cycle"),
+            target=TEST_THESIS_SECTION.as_posix(),
+            repair_iteration=0,
+        )
+        payload = plan.to_dict()
+
+        self.assertFalse(payload["eligible"])
+        self.assertEqual(payload["safe_repair_actions"], [])
+        self.assertIn("no-safe-thesis-repair-actions", payload["blocked_reasons"])
+        self.assertEqual(payload["terminal_reason"], "ready-with-caveats")
+        self.assertIsNone(payload["suggested_command"])
+
+    def test_planner_stops_at_max_iteration(self) -> None:
+        plan = build_thesis_repair_plan(
+            section_summary={"kind": "thesis-section-summary", "target": TEST_THESIS_SECTION.as_posix()},
+            blockers=[
+                Blocker(
+                    category="citation",
+                    code="missing-footnote",
+                    message="A strong claim still lacks a footnote.",
+                    repairable=True,
+                )
+            ],
+            contract=self.build_contract(),
+            target=TEST_THESIS_SECTION.as_posix(),
+            repair_iteration=1,
+        )
+        payload = plan.to_dict()
+
+        self.assertFalse(payload["eligible"])
+        self.assertEqual(payload["safe_repair_actions"], [])
+        self.assertIn("repair-limit-reached", payload["blocked_reasons"])
+        self.assertEqual(payload["terminal_reason"], "max-repair-iterations")
+
+    def test_planner_routes_dynamic_legal_material_to_verify(self) -> None:
+        plan = build_thesis_repair_plan(
+            section_summary={"kind": "thesis-section-summary", "target": TEST_THESIS_SECTION.as_posix()},
+            blockers=[
+                Blocker(
+                    category="dynamic-material",
+                    code="dynamic-material-not-refreshed",
+                    message="Dynamic legal material still needs a fresh check.",
+                    repairable=True,
+                )
+            ],
+            contract=self.build_contract(action="review-section"),
+            target=TEST_THESIS_SECTION.as_posix(),
+            repair_iteration=0,
+        )
+        payload = plan.to_dict()
+
+        self.assertTrue(payload["eligible"])
+        self.assertEqual(payload["suggested_action"], "verify")
+        self.assertIn("requires verification before drafting", payload["safe_repair_actions"][0]["reason"])
+
+
 class ArticleBundleLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -3946,6 +4074,74 @@ class TelegramConsoleCliTests(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             self.assertEqual(payload["kind"], "work-state")
             self.assertEqual(payload["suggested_next_action"]["action_id"], "article-review")
+
+    def test_work_status_cli_exposes_thesis_repair_plan_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_runtime_status_fixture(
+                root / "output" / "telegram" / "runtime" / "runs" / "thesis-plan-runtime",
+                record_id="default:20260418-thesis-verify",
+                entity_kind="workflow-run",
+                project_id="default",
+                project_title=root.name,
+                project_root=root,
+                work_id=TEST_WORK_ID,
+                work_title="Demo work",
+                lane="thesis",
+                action="verify",
+                blockers=[
+                    {
+                        "category": "primary-support",
+                        "code": "primary-support-gap",
+                        "message": "Thesis section needs primary support.",
+                        "repairable": True,
+                    }
+                ],
+                repair_decision={
+                    "action": "repair",
+                    "reason": "repairable-blockers-available",
+                    "repair_iteration": 1,
+                    "blocker_count": 1,
+                },
+                repair_iteration=0,
+                terminal_reason="blocked-primary-support",
+                thesis_repair_plan={
+                    "kind": "thesis-repair-plan",
+                    "eligible": True,
+                    "target": TEST_THESIS_SECTION.as_posix(),
+                    "suggested_action": "verify",
+                    "suggested_command": f"launch-thesis verify {TEST_THESIS_SECTION.as_posix()}",
+                    "safe_repair_actions": [],
+                    "blocked_reasons": [],
+                    "terminal_reason": None,
+                    "readiness_claim": "none",
+                },
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Thesis repair plan:", stdout.getvalue())
+            self.assertIn("launch-thesis verify", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status", "--json"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            latest = payload["runtime"]["recent"][0]
+            self.assertEqual(latest["repair_decision"]["action"], "repair")
+            self.assertEqual(latest["thesis_repair_plan"]["suggested_action"], "verify")
 
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

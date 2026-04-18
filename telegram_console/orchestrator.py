@@ -14,6 +14,7 @@ from .article_bundle_state import article_bundle_manifest_path, build_article_bu
 from .article_runtime_signals import extract_article_artifact_signals
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .thesis_runtime_signals import extract_thesis_runtime_signals
+from .thesis_repair_planner import build_thesis_repair_plan
 from .runtime_status import (
     RuntimeRecord,
     build_attachments,
@@ -1373,6 +1374,17 @@ class WorkflowOrchestrator:
                         message=f"{decision_action}: {decision_reason}",
                     )
                 )
+            thesis_repair_plan = thesis_runtime.get("thesis_repair_plan")
+            if isinstance(thesis_repair_plan, dict) and thesis_repair_plan.get("suggested_command"):
+                checkpoints.append(
+                    build_checkpoint(
+                        "thesis-repair-plan-issued",
+                        status=final_status,
+                        stage=thesis_stage,
+                        timestamp=finished_at or utc_now(),
+                        message=str(thesis_repair_plan.get("suggested_command")),
+                    )
+                )
         attachments = build_attachments(
             {
                 "status": status_path,
@@ -1408,6 +1420,7 @@ class WorkflowOrchestrator:
                 repair_decision=runtime_enrichment.get("repair_decision") if runtime_enrichment else None,
                 repair_iteration=runtime_enrichment.get("repair_iteration") if runtime_enrichment else None,
                 terminal_reason=_optional_text(runtime_enrichment.get("terminal_reason")) if runtime_enrichment else None,
+                thesis_repair_plan=runtime_enrichment.get("thesis_repair_plan") if runtime_enrichment else None,
                 target_resolution=target_resolution if isinstance(target_resolution, dict) else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
@@ -1544,10 +1557,15 @@ class WorkflowOrchestrator:
         )
         blockers = signals.blockers
         terminal_reason = self._thesis_terminal_reason(signals.status_hint, blockers)
+        current_iteration = (
+            _optional_int(request.get("repair_iteration"))
+            or _optional_int(manifest.get("repair_iteration"))
+            or 0
+        )
         repair_decision = self._thesis_repair_decision(
             contract=contract,
             blockers=blockers,
-            repair_iteration=0,
+            repair_iteration=current_iteration,
             terminal_reason=terminal_reason,
         )
         summary_block = self._compose_thesis_section_summary(
@@ -1558,6 +1576,13 @@ class WorkflowOrchestrator:
             blocker_count=len(blockers),
             terminal_reason=terminal_reason,
         )
+        thesis_repair_plan = build_thesis_repair_plan(
+            section_summary=summary_block,
+            blockers=blockers,
+            contract=contract,
+            target=target_rel,
+            repair_iteration=current_iteration,
+        ).to_dict()
         summary = record.summary
         if blockers:
             summary = f"{summary} · blockers={len(blockers)}"
@@ -1568,8 +1593,9 @@ class WorkflowOrchestrator:
             "stage": "reviewed" if review_present else "drafted",
             "blockers": [item.to_dict() for item in blockers],
             "repair_decision": repair_decision,
-            "repair_iteration": 0,
+            "repair_iteration": current_iteration,
             "terminal_reason": terminal_reason,
+            "thesis_repair_plan": thesis_repair_plan,
             "summary_block": summary_block,
             "summary": summary,
         }
@@ -1740,4 +1766,14 @@ def _optional_text(value: object) -> str | None:
         cleaned = value.strip()
         if cleaned:
             return cleaned
+    return None
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
     return None

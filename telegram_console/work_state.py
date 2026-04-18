@@ -362,6 +362,11 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
             lines.append("Standards: " + "; ".join(standards_parts))
     recent = runtime.get("recent") if isinstance(runtime, dict) else None
     lines.append(f"Recent runtime: {len(recent) if isinstance(recent, list) else 0}")
+    thesis_repair_plan = _latest_thesis_repair_plan(runtime)
+    if thesis_repair_plan is not None:
+        plan_command = _optional_text(thesis_repair_plan.get("suggested_command"))
+        plan_status = "eligible" if thesis_repair_plan.get("eligible") else "blocked"
+        lines.append(f"Thesis repair plan: {plan_command or plan_status}")
     if isinstance(next_action, dict):
         lines.append(f"Next safe action: {next_action.get('command') or next_action.get('label')}")
         reason = _optional_text(next_action.get("reason"))
@@ -375,6 +380,19 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
         if continuation_command and continuation_command != next_command:
             lines.append(f"Unblocked work action: {continuation_command}")
     return "\n".join(lines)
+
+
+def _latest_thesis_repair_plan(runtime: dict[str, Any]) -> dict[str, Any] | None:
+    recent = runtime.get("recent") if isinstance(runtime, dict) else None
+    if not isinstance(recent, list):
+        return None
+    for item in recent:
+        if not isinstance(item, dict) or item.get("lane") != "thesis":
+            continue
+        plan = item.get("thesis_repair_plan")
+        if isinstance(plan, dict):
+            return plan
+    return None
 
 
 def format_work_state_dashboard_lines(state: dict[str, Any]) -> list[str]:
@@ -593,6 +611,9 @@ def _compact_runtime_state(records: Iterable[Any], active_run: dict[str, Any] | 
                 "blocker_count": len(record_blockers),
                 "terminal_reason": payload.get("terminal_reason"),
                 "repair_decision": payload.get("repair_decision"),
+                "thesis_repair_plan": payload.get("thesis_repair_plan")
+                if isinstance(payload.get("thesis_repair_plan"), dict)
+                else None,
             }
         )
         for raw_blocker in record_blockers:
