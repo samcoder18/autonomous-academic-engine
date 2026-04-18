@@ -1930,6 +1930,84 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(work_state["runtime"]["recent"][0]["repair_decision"]["action"], "repair")
         self.assertEqual(work_state["runtime"]["recent"][0]["thesis_repair_plan"]["suggested_action"], "verify")
 
+    def test_thesis_repair_iteration_derives_from_previous_runtime_record(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="thesis", requested_profile_id=None)
+        target_path = self.root / TEST_THESIS_SECTION
+        review_path = self.root / TEST_THESIS_REVIEW
+        write_file(
+            review_path,
+            "- Есть ли утверждения без опоры: да\n",
+        )
+        contract = build_thesis_execution_contract(
+            work=work,
+            profile=profile,
+            action="verify",
+            target_path=target_path,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path, target_path],
+            review_path=review_path,
+            sync_hint_path=work.thesis.sync_dir / "{date}-verify-01-introduction.md",
+        )
+
+        def finalize_verify(timestamp: str, run_name: str) -> dict[str, object]:
+            output_file = work.thesis.paths.output_runs_dir / f"{timestamp}-verify.md"
+            manifest_file = work.thesis.paths.output_runs_dir / f"{timestamp}-verify.meta.json"
+            write_file(output_file, "Terminal status: blocked-primary-support\n")
+            manifest_payload = {
+                "timestamp": timestamp,
+                "preset": "verify",
+                "work_id": work.slug,
+                "work_title": work.title,
+                "target": {
+                    "absolute": str(target_path),
+                    "relative": TEST_THESIS_SECTION.as_posix(),
+                    "state": "existing",
+                },
+                "output_file": str(output_file),
+                "expected_review_file": str(review_path),
+                "execution_contract": contract.to_dict(),
+            }
+            manifest_file.parent.mkdir(parents=True, exist_ok=True)
+            manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            run_dir = self.orchestrator.store.runs_dir / run_name
+            run_dir.mkdir(parents=True, exist_ok=True)
+            request = {
+                "run_id": f"default:{timestamp}-thesis-verify",
+                "lane": "thesis",
+                "action": "verify",
+                "started_at": "2026-04-18T10:30:00+00:00",
+                "project_id": "default",
+                "project_title": self.root.name,
+                "project_root": str(self.root),
+                "work_id": work.slug,
+                "work_title": work.title,
+                "target": TEST_THESIS_SECTION.as_posix(),
+            }
+            result = {
+                "status": "success",
+                "returncode": 0,
+                "started_at": request["started_at"],
+                "finished_at": "2026-04-18T10:31:00+00:00",
+                "log_path": str(run_dir / "launcher.log"),
+            }
+            self.orchestrator._finalize_runtime_run(run_dir, request, result)
+            return json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+
+        first_status = finalize_verify("20260418-103000", "thesis-verify-first-runtime")
+        second_status = finalize_verify("20260418-103200", "thesis-verify-second-runtime")
+
+        self.assertEqual(first_status["repair_iteration"], 0)
+        self.assertEqual(first_status["repair_decision"]["action"], "repair")
+        self.assertEqual(second_status["repair_iteration"], 1)
+        self.assertEqual(second_status["repair_decision"]["action"], "stop")
+        self.assertEqual(second_status["repair_decision"]["reason"], "repair-limit-reached")
+        self.assertFalse(second_status["thesis_repair_plan"]["eligible"])
+        self.assertEqual(second_status["thesis_repair_plan"]["terminal_reason"], "max-repair-iterations")
+
     def test_thesis_write_section_finalization_skips_repair_metadata_for_noneligible_action(self) -> None:
         write_sample_standards_registry(self.root)
         write_sample_normalized_profiles(self.root)

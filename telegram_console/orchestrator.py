@@ -1557,10 +1557,11 @@ class WorkflowOrchestrator:
         )
         blockers = signals.blockers
         terminal_reason = self._thesis_terminal_reason(signals.status_hint, blockers)
-        current_iteration = (
-            _optional_int(request.get("repair_iteration"))
-            or _optional_int(manifest.get("repair_iteration"))
-            or 0
+        current_iteration = self._thesis_repair_iteration(
+            request=request,
+            manifest=manifest,
+            record=record,
+            target=target_rel,
         )
         repair_decision = self._thesis_repair_decision(
             contract=contract,
@@ -1695,6 +1696,50 @@ class WorkflowOrchestrator:
             return previous_iteration + 1
         return previous_iteration
 
+    def _thesis_repair_iteration(
+        self,
+        *,
+        request: dict[str, Any],
+        manifest: dict[str, Any],
+        record: RunRecord,
+        target: str,
+    ) -> int:
+        explicit_iteration = _optional_int(request.get("repair_iteration"))
+        if explicit_iteration is not None:
+            return explicit_iteration
+        explicit_iteration = _optional_int(manifest.get("repair_iteration"))
+        if explicit_iteration is not None:
+            return explicit_iteration
+        return self._previous_thesis_repair_iteration(record, target)
+
+    def _previous_thesis_repair_iteration(self, record: RunRecord, target: str) -> int:
+        if not record.work_id:
+            return 0
+        current_run_dir = Path(record.runtime_run_dir).resolve() if record.runtime_run_dir else None
+        latest_iteration = 0
+        for run_dir in self.store.list_run_dirs():
+            if current_run_dir is not None and run_dir.resolve() == current_run_dir:
+                continue
+            runtime_record = load_runtime_record(run_dir, "workflow-run")
+            if runtime_record is None or runtime_record.lane != "thesis":
+                continue
+            if str(runtime_record.work_id or "").strip() != record.work_id:
+                continue
+            if not self._runtime_record_matches_project(runtime_record):
+                continue
+            if self._runtime_record_target(run_dir) != target:
+                continue
+            latest_iteration = max(latest_iteration, _effective_repair_iteration(runtime_record))
+        return latest_iteration
+
+    def _runtime_record_target(self, run_dir: Path) -> str | None:
+        request = self.store.read_json(run_dir / "request.json", default={}) or {}
+        request_target = _optional_text(request.get("target"))
+        if request_target:
+            return request_target
+        resolution = self.store.read_json(run_dir / "resolution.json", default={}) or {}
+        return _optional_text(resolution.get("target"))
+
     def _thesis_terminal_reason(self, status_hint: str | None, blockers: tuple[Blocker, ...]) -> str | None:
         if blockers:
             return determine_terminal_reason(blockers)
@@ -1777,3 +1822,12 @@ def _optional_int(value: object) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def _effective_repair_iteration(record: RuntimeRecord) -> int:
+    iteration = record.repair_iteration if isinstance(record.repair_iteration, int) else 0
+    decision = record.repair_decision if isinstance(record.repair_decision, dict) else {}
+    decision_iteration = _optional_int(decision.get("repair_iteration"))
+    if decision_iteration is not None:
+        iteration = max(iteration, decision_iteration)
+    return iteration
