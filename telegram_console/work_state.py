@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .contract_gates import blocking_gate_blockers
+
 
 WORK_STATE_VERSION = "v1"
 
@@ -362,6 +364,9 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
             lines.append("Standards: " + "; ".join(standards_parts))
     recent = runtime.get("recent") if isinstance(runtime, dict) else None
     lines.append(f"Recent runtime: {len(recent) if isinstance(recent, list) else 0}")
+    gate_summary = _runtime_contract_gate_summary(runtime)
+    if gate_summary["total_count"]:
+        lines.append(f"Contract gates: blocks={gate_summary['block_count']} warnings={gate_summary['warn_count']}")
     thesis_repair_plan = _latest_thesis_repair_plan(runtime)
     if thesis_repair_plan is not None:
         plan_command = _optional_text(thesis_repair_plan.get("suggested_command"))
@@ -598,6 +603,8 @@ def _compact_runtime_state(records: Iterable[Any], active_run: dict[str, Any] | 
         if not payload:
             continue
         record_blockers = payload.get("blockers") if isinstance(payload.get("blockers"), list) else []
+        contract_gates = payload.get("contract_gates") if isinstance(payload.get("contract_gates"), list) else []
+        contract_gate_summary = _contract_gate_summary(contract_gates)
         recent.append(
             {
                 "record_id": payload.get("record_id"),
@@ -614,6 +621,8 @@ def _compact_runtime_state(records: Iterable[Any], active_run: dict[str, Any] | 
                 "thesis_repair_plan": payload.get("thesis_repair_plan")
                 if isinstance(payload.get("thesis_repair_plan"), dict)
                 else None,
+                "contract_gates": contract_gates,
+                "contract_gate_summary": contract_gate_summary,
             }
         )
         for raw_blocker in record_blockers:
@@ -626,6 +635,19 @@ def _compact_runtime_state(records: Iterable[Any], active_run: dict[str, Any] | 
                         record_id=_optional_text(payload.get("record_id")),
                     )
                 )
+        for raw_blocker in blocking_gate_blockers(
+            contract_gates,
+            lane=_optional_text(payload.get("lane")),
+            action=_optional_text(payload.get("action")),
+        ):
+            blockers.append(
+                _enrich_blocker(
+                    raw_blocker,
+                    lane=_optional_text(payload.get("lane")),
+                    source="runtime-contract-gate",
+                    record_id=_optional_text(payload.get("record_id")),
+                )
+            )
     return {
         "active_run": active_run,
         "recent": recent,
@@ -696,6 +718,36 @@ def _dedupe_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized["message"] = _optional_text(normalized.get("message")) or code
         result.append(normalized)
     return result
+
+
+def _runtime_contract_gate_summary(runtime: dict[str, Any]) -> dict[str, int]:
+    recent = runtime.get("recent") if isinstance(runtime, dict) else None
+    if not isinstance(recent, list):
+        return {"total_count": 0, "block_count": 0, "warn_count": 0}
+    total = {"total_count": 0, "block_count": 0, "warn_count": 0}
+    for item in recent:
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("contract_gate_summary")
+        if not isinstance(summary, dict):
+            continue
+        for key in total:
+            total[key] += _optional_int(summary.get(key)) or 0
+    return total
+
+
+def _contract_gate_summary(gates: list[dict[str, Any]]) -> dict[str, int]:
+    total = {"total_count": 0, "block_count": 0, "warn_count": 0}
+    for item in gates:
+        if not isinstance(item, dict):
+            continue
+        total["total_count"] += 1
+        status = _optional_text(item.get("status"))
+        if status == "block":
+            total["block_count"] += 1
+        elif status == "warn":
+            total["warn_count"] += 1
+    return total
 
 
 def _strip_internal(payload: dict[str, Any]) -> dict[str, Any]:

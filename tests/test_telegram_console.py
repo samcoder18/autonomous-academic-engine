@@ -28,6 +28,7 @@ from telegram_console.action_specs import (
     build_thesis_execution_contract,
     list_action_specs,
 )
+from telegram_console.contract_gates import evaluate_contract_gates
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -717,6 +718,7 @@ def write_runtime_status_fixture(
     repair_iteration: int | None = None,
     terminal_reason: str | None = None,
     thesis_repair_plan: dict[str, object] | None = None,
+    contract_gates: list[dict[str, object]] | None = None,
     checkpoints: list[dict[str, object]] | None = None,
 ) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -758,6 +760,7 @@ def write_runtime_status_fixture(
         "repair_iteration": repair_iteration,
         "terminal_reason": terminal_reason,
         "thesis_repair_plan": thesis_repair_plan,
+        "contract_gates": contract_gates or [],
         "checkpoints": checkpoints
         or [
             {
@@ -1819,6 +1822,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(status["terminal_reason"], "ready-with-caveats")
         self.assertEqual(status["blockers"], [])
         self.assertEqual(status["repair_decision"]["action"], "stop")
+        self.assertIn("contract_gates", status)
+        self.assertTrue(any(item["gate_id"] == "standards-raw" for item in status["contract_gates"]))
+        self.assertEqual(status["target_resolution"], None)
 
         bundle_state = json.loads(article_bundle_manifest_path(work, "review-demo").read_text(encoding="utf-8"))
         self.assertEqual(bundle_state["current_status"], "strong-draft")
@@ -3408,6 +3414,99 @@ class ActionSpecRegistryTests(unittest.TestCase):
         self.assertTrue(any(item.name == "docx" for item in contract.required_outputs))
 
 
+class ContractGateEvaluatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        self.workspace = load_workspace_config(self.root)
+        self.work = load_work_config(self.workspace, TEST_WORK_ID)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def build_article_contract(self, slug: str, action: str = "article"):
+        profile = resolve_standard_profile(self.root, self.workspace, self.work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(self.work, slug)
+        return (
+            profile,
+            bundle,
+            build_article_execution_contract(
+                work=self.work,
+                profile=profile,
+                action=action,
+                related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", self.work.work_canon_path],
+                bundle=bundle,
+                topic=None,
+                input_brief_path=bundle["brief"],
+                target_path=bundle["draft"] if action != "article" else None,
+                target_rel=relative_to_workspace(self.workspace, bundle["draft"]) if action != "article" else None,
+            ),
+        )
+
+    def test_missing_required_output_blocks_export(self) -> None:
+        profile, bundle, contract = self.build_article_contract("gate-missing-output")
+        write_file(bundle["brief"], "# Brief\n")
+
+        gates = [item.to_dict() for item in evaluate_contract_gates(contract=contract, profile=profile)]
+
+        evidence_gate = next(item for item in gates if item["gate_id"] == "required-output:evidence-pack")
+        self.assertEqual(evidence_gate["status"], "block")
+        self.assertTrue(evidence_gate["blocks_export"])
+        self.assertTrue(evidence_gate["blocks_submission_ready"])
+
+    def test_raw_standards_missing_blocks_formal_readiness(self) -> None:
+        profile, _, contract = self.build_article_contract("gate-raw-missing", action="review")
+
+        gates = [item.to_dict() for item in evaluate_contract_gates(contract=contract, profile=profile)]
+
+        raw_gate = next(item for item in gates if item["gate_id"] == "standards-raw")
+        self.assertEqual(raw_gate["status"], "block")
+        self.assertTrue(raw_gate["blocks_submission_ready"])
+        self.assertTrue(raw_gate["blocks_export"])
+
+    def test_conflict_flag_blocks_formal_readiness(self) -> None:
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        write_raw_manifest(self.root, "journal-jrp")
+        work = load_work_config(self.workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, self.workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "gate-conflict")
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="review",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["draft"],
+            target_rel=relative_to_workspace(self.workspace, bundle["draft"]),
+        )
+
+        gates = [item.to_dict() for item in evaluate_contract_gates(contract=contract, profile=profile)]
+
+        conflict_gate = next(item for item in gates if item["gate_id"] == "standards-conflict")
+        self.assertEqual(conflict_gate["status"], "block")
+        self.assertTrue(conflict_gate["blocks_submission_ready"])
+        self.assertTrue(conflict_gate["blocks_export"])
+
+    def test_clean_gates_do_not_block_export(self) -> None:
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        profile, bundle, contract = self.build_article_contract("gate-clean")
+        write_file(bundle["brief"], "# Brief\n")
+        write_file(bundle["evidence_pack"], "# Evidence\n")
+        write_file(bundle["claim_map"], "# Claim map\n")
+        write_file(bundle["draft"], "# Draft\n")
+
+        gates = [item.to_dict() for item in evaluate_contract_gates(contract=contract, profile=profile)]
+
+        self.assertTrue(gates)
+        self.assertFalse(any(item["blocks_export"] for item in gates))
+        self.assertTrue(all(item["status"] in {"pass", "not-applicable"} for item in gates))
+
+
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -3579,15 +3678,28 @@ class RepairKernelTests(unittest.TestCase):
                 "reason": "repair-limit-reached",
                 "terminal_reason": "max-repair-iterations",
             },
+            contract_gates=[
+                {
+                    "gate_id": "required-output:checklist",
+                    "status": "block",
+                    "reason": "Checklist is missing.",
+                    "blocks_export": True,
+                    "blocks_submission_ready": True,
+                }
+            ],
         )
 
         record = record_from_payload(payload, runtime_dir=None, status_path=None, source="status")
 
         assert record is not None
+        self.assertIn("blockers", payload)
+        self.assertIn("repair_decision", payload)
+        self.assertIn("contract_gates", payload)
         self.assertEqual(record.repair_iteration, 2)
         self.assertEqual(record.terminal_reason, "max-repair-iterations")
         self.assertEqual(record.blockers[0]["code"], "persistent-gap")
         self.assertEqual(record.repair_decision["action"], "stop")
+        self.assertEqual(record.contract_gates[0]["gate_id"], "required-output:checklist")
 
 
 class ThesisRepairPlannerTests(unittest.TestCase):
@@ -4221,6 +4333,60 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(latest["repair_decision"]["action"], "repair")
             self.assertEqual(latest["thesis_repair_plan"]["suggested_action"], "verify")
 
+    def test_work_status_cli_exposes_contract_gate_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_runtime_status_fixture(
+                root / "output" / "telegram" / "runtime" / "runs" / "article-contract-gate-runtime",
+                record_id="default:20260418-article-finalize",
+                entity_kind="workflow-run",
+                project_id="default",
+                project_title=root.name,
+                project_root=root,
+                work_id=TEST_WORK_ID,
+                work_title="Demo work",
+                lane="article",
+                action="finalize",
+                contract_gates=[
+                    {
+                        "gate_id": "required-output:checklist",
+                        "status": "block",
+                        "reason": "Required artifact `checklist` is missing.",
+                        "blocks_export": True,
+                        "blocks_submission_ready": True,
+                        "lane": "article",
+                        "action": "finalize",
+                        "artifact": str(root / TEST_ARTICLE_CHECKLIST),
+                    }
+                ],
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Contract gates: blocks=1 warnings=0", stdout.getvalue())
+            self.assertNotIn("[{", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status", "--json"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            latest = payload["runtime"]["recent"][0]
+            self.assertEqual(latest["contract_gate_summary"]["block_count"], 1)
+            self.assertTrue(any(item["category"] == "contract-gate" for item in payload["known_blockers"]))
+            self.assertEqual(payload["suggested_next_action"]["action_id"], "article-repair")
+
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workspace = Path(tempdir)
@@ -4419,6 +4585,17 @@ class TelegramConsoleCliTests(unittest.TestCase):
                     "resolution": str(workflow_resolution),
                 },
                 summary="Workflow verification completed.",
+                contract_gates=[
+                    {
+                        "gate_id": "required-output:target-file",
+                        "status": "block",
+                        "reason": "Target file is missing.",
+                        "blocks_export": True,
+                        "blocks_submission_ready": True,
+                        "lane": "thesis",
+                        "action": "verify",
+                    }
+                ],
             )
             workflow_resolution.write_text(
                 json.dumps(
@@ -4489,6 +4666,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("alpha:20260418-thesis-verify", stdout.getvalue())
             self.assertIn("Lane summary:", stdout.getvalue())
+            self.assertIn("gates=1/0", stdout.getvalue())
             self.assertIn("Resolution warning:", stdout.getvalue())
             self.assertNotIn("beta:20260418-chat", stdout.getvalue())
 
@@ -4510,6 +4688,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("workflow-run", stdout.getvalue())
             self.assertIn("next=review-section", stdout.getvalue())
+            self.assertIn("Contract gates: blocks=1 warnings=0", stdout.getvalue())
             self.assertIn("Resolution warning:", stdout.getvalue())
             self.assertIn(TEST_THESIS_SECTION.as_posix(), stdout.getvalue())
             self.assertIn(str(workflow_manifest), stdout.getvalue())

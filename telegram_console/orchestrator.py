@@ -12,6 +12,7 @@ import sys
 from .action_specs import execution_contract_from_payload
 from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
 from .article_runtime_signals import extract_article_artifact_signals
+from .contract_gates import evaluate_contract_gates
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .thesis_repair_planner import build_thesis_repair_plan
@@ -1385,6 +1386,21 @@ class WorkflowOrchestrator:
                         message=str(thesis_repair_plan.get("suggested_command")),
                     )
                 )
+        if runtime_enrichment:
+            gate_summary = _contract_gate_summary(runtime_enrichment.get("contract_gates"))
+            if gate_summary["total_count"]:
+                checkpoints.append(
+                    build_checkpoint(
+                        "contract-gates-evaluated",
+                        status=final_status,
+                        stage=final_stage,
+                        timestamp=finished_at or utc_now(),
+                        message=(
+                            f"blocks={gate_summary['block_count']}, "
+                            f"warnings={gate_summary['warn_count']}, total={gate_summary['total_count']}"
+                        ),
+                    )
+                )
         attachments = build_attachments(
             {
                 "status": status_path,
@@ -1421,6 +1437,7 @@ class WorkflowOrchestrator:
                 repair_iteration=runtime_enrichment.get("repair_iteration") if runtime_enrichment else None,
                 terminal_reason=_optional_text(runtime_enrichment.get("terminal_reason")) if runtime_enrichment else None,
                 thesis_repair_plan=runtime_enrichment.get("thesis_repair_plan") if runtime_enrichment else None,
+                contract_gates=runtime_enrichment.get("contract_gates") if runtime_enrichment else None,
                 target_resolution=target_resolution if isinstance(target_resolution, dict) else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
@@ -1468,6 +1485,7 @@ class WorkflowOrchestrator:
         terminal_reason = self._article_terminal_reason(effective_status, blockers)
         current_iteration = self._article_repair_iteration(record.action, previous_state)
         contract = execution_contract_from_payload(manifest.get("execution_contract"))
+        contract_gates = self._contract_gate_payloads(contract=contract, work=work, lane="article", manifest=manifest)
         repair_decision = self._article_repair_decision(
             contract=contract,
             blockers=blockers,
@@ -1520,6 +1538,7 @@ class WorkflowOrchestrator:
             "repair_decision": repair_decision,
             "repair_iteration": current_iteration,
             "terminal_reason": terminal_reason,
+            "contract_gates": contract_gates,
             "bundle_state_manifest": str(state_path),
             "summary_block": summary_block,
             "summary": summary,
@@ -1563,6 +1582,7 @@ class WorkflowOrchestrator:
             record=record,
             target=target_rel,
         )
+        contract_gates = self._contract_gate_payloads(contract=contract, work=work, lane="thesis", manifest=manifest)
         repair_decision = self._thesis_repair_decision(
             contract=contract,
             blockers=blockers,
@@ -1597,6 +1617,7 @@ class WorkflowOrchestrator:
             "repair_iteration": current_iteration,
             "terminal_reason": terminal_reason,
             "thesis_repair_plan": thesis_repair_plan,
+            "contract_gates": contract_gates,
             "summary_block": summary_block,
             "summary": summary,
         }
@@ -1789,6 +1810,46 @@ class WorkflowOrchestrator:
             payload["terminal_reason"] = terminal_reason
         return payload
 
+    def _contract_gate_payloads(
+        self,
+        *,
+        contract: Any,
+        work: WorkConfig,
+        lane: str,
+        manifest: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        profile = self._runtime_standard_profile(work, lane, manifest)
+        return [item.to_dict() for item in evaluate_contract_gates(contract=contract, profile=profile)]
+
+    def _runtime_standard_profile(
+        self,
+        work: WorkConfig,
+        lane: str,
+        manifest: dict[str, Any],
+    ) -> Any:
+        requested = (
+            _optional_text(manifest.get("requested_profile_id"))
+            or _optional_text(manifest.get("resolved_profile_id"))
+            or _optional_text(manifest.get("profile_id"))
+        )
+        try:
+            return resolve_standard_profile(
+                self.root_dir,
+                self._workspace_config(),
+                work,
+                lane=lane,
+                requested_profile_id=requested,
+            )
+        except WorkspaceConfigError:
+            return {
+                "profile_id": requested,
+                "resolved_profile_id": _optional_text(manifest.get("resolved_profile_id")) or requested,
+                "normalized_path": _optional_text(manifest.get("profile_path")),
+                "raw_status": _optional_text(manifest.get("profile_raw_status")),
+                "official_only": manifest.get("profile_official_only", True),
+                "conflict_flag": bool(manifest.get("profile_conflict_flag")),
+            }
+
     def _merge_runtime_record_ids(self, existing: tuple[str, ...], record_id: str) -> tuple[str, ...]:
         merged: list[str] = []
         for item in (*existing, record_id):
@@ -1831,3 +1892,21 @@ def _effective_repair_iteration(record: RuntimeRecord) -> int:
     if decision_iteration is not None:
         iteration = max(iteration, decision_iteration)
     return iteration
+
+
+def _contract_gate_summary(gates: object) -> dict[str, int]:
+    if not isinstance(gates, list):
+        return {"total_count": 0, "block_count": 0, "warn_count": 0}
+    block_count = 0
+    warn_count = 0
+    total_count = 0
+    for item in gates:
+        if not isinstance(item, dict):
+            continue
+        total_count += 1
+        status = _optional_text(item.get("status"))
+        if status == "block":
+            block_count += 1
+        elif status == "warn":
+            warn_count += 1
+    return {"total_count": total_count, "block_count": block_count, "warn_count": warn_count}

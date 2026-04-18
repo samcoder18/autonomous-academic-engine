@@ -39,6 +39,7 @@ class RuntimeRecord:
     repair_iteration: int | None = None
     terminal_reason: str | None = None
     thesis_repair_plan: dict[str, Any] | None = None
+    contract_gates: tuple[dict[str, Any], ...] = ()
     target_resolution: dict[str, Any] | None = None
     checkpoints: tuple[dict[str, Any], ...] = ()
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -74,6 +75,7 @@ class RuntimeRecord:
             "repair_iteration": self.repair_iteration,
             "terminal_reason": self.terminal_reason,
             "thesis_repair_plan": self.thesis_repair_plan,
+            "contract_gates": list(self.contract_gates),
             "target_resolution": self.target_resolution,
             "checkpoints": list(self.checkpoints),
             "attachments": self.attachments,
@@ -161,6 +163,7 @@ def build_runtime_status(
     repair_iteration: int | None = None,
     terminal_reason: str | None = None,
     thesis_repair_plan: dict[str, Any] | None = None,
+    contract_gates: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     target_resolution: dict[str, Any] | None = None,
     checkpoints: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     attachments: dict[str, dict[str, Any]] | None = None,
@@ -188,6 +191,7 @@ def build_runtime_status(
         "repair_iteration": repair_iteration,
         "terminal_reason": terminal_reason,
         "thesis_repair_plan": thesis_repair_plan,
+        "contract_gates": list(contract_gates or []),
         "target_resolution": target_resolution,
         "checkpoints": list(checkpoints or []),
         "attachments": attachments or {},
@@ -255,6 +259,9 @@ def record_from_payload(
     checkpoints = payload.get("checkpoints")
     if not isinstance(checkpoints, list):
         checkpoints = []
+    contract_gates = payload.get("contract_gates")
+    if not isinstance(contract_gates, list):
+        contract_gates = []
     repair_iteration = payload.get("repair_iteration")
     if not isinstance(repair_iteration, int):
         repair_iteration = None
@@ -280,6 +287,7 @@ def record_from_payload(
         repair_iteration=repair_iteration,
         terminal_reason=_optional_text(payload.get("terminal_reason")),
         thesis_repair_plan=payload.get("thesis_repair_plan") if isinstance(payload.get("thesis_repair_plan"), dict) else None,
+        contract_gates=tuple(item for item in contract_gates if isinstance(item, dict)),
         target_resolution=payload.get("target_resolution") if isinstance(payload.get("target_resolution"), dict) else None,
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},

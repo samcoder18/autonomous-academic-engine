@@ -786,6 +786,11 @@ def _format_runtime_record(record: Any) -> str:
         lines.append(f"Repair decision: {json.dumps(record.repair_decision, ensure_ascii=False)}")
     else:
         lines.append("Repair decision: none")
+    gate_summary = _contract_gate_summary(getattr(record, "contract_gates", None))
+    if gate_summary["total_count"]:
+        lines.append(f"Contract gates: blocks={gate_summary['block_count']} warnings={gate_summary['warn_count']}")
+    else:
+        lines.append("Contract gates: none")
     lines.append(f"Repair iteration: {record.repair_iteration if record.repair_iteration is not None else 'n/a'}")
     lines.append(f"Terminal reason: {record.terminal_reason or 'n/a'}")
     lines.append("Attachments:")
@@ -809,7 +814,11 @@ def _format_runtime_lane_summary(record: Any) -> str:
         )
     summary_block = _load_runtime_summary_block(record)
     if isinstance(summary_block, dict):
-        return _format_summary_block_line(summary_block)
+        line = _format_summary_block_line(summary_block)
+        gate_summary = _contract_gate_summary(getattr(record, "contract_gates", None))
+        if gate_summary["total_count"]:
+            line = f"{line} · gates={gate_summary['block_count']}/{gate_summary['warn_count']}"
+        return line
     parts = [
         f"lane={getattr(record, 'lane', None) or 'n/a'}",
         f"action={getattr(record, 'action', None) or 'n/a'}",
@@ -819,7 +828,26 @@ def _format_runtime_lane_summary(record: Any) -> str:
     repair_decision = getattr(record, "repair_decision", None)
     if isinstance(repair_decision, dict):
         parts.append(f"repair={repair_decision.get('action') or 'n/a'}@{getattr(record, 'repair_iteration', None) or 0}")
+    gate_summary = _contract_gate_summary(getattr(record, "contract_gates", None))
+    if gate_summary["total_count"]:
+        parts.append(f"gates={gate_summary['block_count']}/{gate_summary['warn_count']}")
     return "Lane summary: " + " · ".join(parts)
+
+
+def _contract_gate_summary(gates: Any) -> dict[str, int]:
+    if not isinstance(gates, (list, tuple)):
+        return {"total_count": 0, "block_count": 0, "warn_count": 0}
+    total = {"total_count": 0, "block_count": 0, "warn_count": 0}
+    for item in gates:
+        if not isinstance(item, dict):
+            continue
+        total["total_count"] += 1
+        status = str(item.get("status") or "").strip()
+        if status == "block":
+            total["block_count"] += 1
+        elif status == "warn":
+            total["warn_count"] += 1
+    return total
 
 
 def _load_runtime_summary_block(record: Any) -> dict[str, Any] | None:
