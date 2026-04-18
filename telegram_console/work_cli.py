@@ -22,6 +22,7 @@ from .article_bundle_state import (
     load_article_bundle_state,
     write_article_bundle_state,
 )
+from .orchestrator import WorkflowOrchestrator
 from .standards import (
     StandardProfileResolution,
     format_profile_resolution_lines,
@@ -30,6 +31,7 @@ from .standards import (
     resolve_status_profile,
     sync_standard_profile,
 )
+from .work_state import format_work_state_summary
 from .workspace import (
     TargetResolution,
     WorkspaceConfig,
@@ -106,6 +108,10 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     standards_status_parser = subparsers.add_parser("standards-status")
     standards_status_parser.add_argument("profile_id", nargs="?")
 
+    work_status_parser = subparsers.add_parser("work-status")
+    work_status_parser.add_argument("--work", dest="work_id")
+    work_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
     args = parser.parse_args(argv)
     root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(__file__).resolve().parents[1]
 
@@ -126,6 +132,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_refresh(root_path, args.profile_id)
         if args.command == "standards-status":
             return standards_status(root_path, args.profile_id)
+        if args.command == "work-status":
+            return work_status(root_path, args.work_id, as_json=args.as_json)
     except WorkspaceConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -527,6 +535,15 @@ def standards_status(root_dir: Path, profile_id: str | None) -> int:
     work = resolve_work_config(workspace)
     resolution = resolve_status_profile(root_dir, profile_id, workspace=workspace, work=work)
     print("\n".join(format_profile_resolution_lines(resolution)))
+    return 0
+
+
+def work_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -> int:
+    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
+    if as_json:
+        print(json.dumps(state, ensure_ascii=False, indent=2))
+    else:
+        print(format_work_state_summary(state))
     return 0
 
 

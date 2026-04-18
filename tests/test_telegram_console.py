@@ -457,6 +457,24 @@ def write_sample_normalized_profiles(root: Path) -> None:
     write_file(root / "meta/standards/normalized/journal-kmp-yurist.md", "# journal-kmp-yurist\n")
 
 
+def write_raw_manifest(root: Path, profile_id: str, synced_at: str = "2026-04-18T10:00:00+00:00") -> None:
+    raw_dir = root / "meta" / "standards" / "raw" / profile_id
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "profile_id": profile_id,
+                "synced_at": synced_at,
+                "sources": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def rewrite_work_profiles(root: Path, *, thesis_profile: str | None = None, article_profile: str | None = None) -> None:
     work_path = root / TEST_WORK_ROOT / "work.toml"
     content = work_path.read_text(encoding="utf-8")
@@ -693,6 +711,10 @@ def write_runtime_status_fixture(
     summary: str = "Runtime finished successfully.",
     attachments: dict[str, str] | None = None,
     failure: dict[str, object] | None = None,
+    blockers: list[dict[str, object]] | None = None,
+    repair_decision: dict[str, object] | None = None,
+    repair_iteration: int | None = None,
+    terminal_reason: str | None = None,
     checkpoints: list[dict[str, object]] | None = None,
 ) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -729,6 +751,10 @@ def write_runtime_status_fixture(
         "finished_at": "2026-04-18T10:01:00+00:00",
         "summary": summary,
         "failure": failure,
+        "blockers": blockers or [],
+        "repair_decision": repair_decision,
+        "repair_iteration": repair_iteration,
+        "terminal_reason": terminal_reason,
         "checkpoints": checkpoints
         or [
             {
@@ -1106,6 +1132,105 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(status["summary"]["review_present"])
         self.assertEqual(status["summary"]["blocker_count"], 0)
         self.assertEqual(status["summary"]["suggested_next_action"], "write-section")
+
+    def test_work_state_reports_compact_state_and_next_safe_action(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["kind"], "work-state")
+        self.assertEqual(state["work_id"], TEST_WORK_ID)
+        self.assertEqual(state["work_title"], "Demo work")
+        self.assertEqual(state["active_lanes"], ["thesis", "article"])
+        self.assertEqual(state["thesis"]["summary"]["section_count"], 1)
+        self.assertEqual(state["article"]["summary"]["bundle_count"], 1)
+        self.assertEqual(state["standards"]["profiles"]["article"]["raw_status"], "available")
+        self.assertEqual(state["known_blocker_count"], 0)
+        self.assertEqual(state["suggested_next_action"]["action_id"], "article-review")
+        self.assertIn("launch-academic review", state["suggested_next_action"]["command"])
+        self.assertNotIn("submission-ready", state["suggested_next_action"]["command"])
+
+    def test_work_state_empty_work_avoids_export_suggestion(self) -> None:
+        add_empty_work_scaffold(self.root)
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+
+        state = self.orchestrator.get_artifact_status("work", work_id="empty-work")
+
+        self.assertEqual(state["work_id"], "empty-work")
+        self.assertEqual(state["thesis"]["sections"], [])
+        self.assertEqual(state["article"]["bundles"], [])
+        self.assertEqual(state["known_blocker_count"], 0)
+        self.assertIsNotNone(state["suggested_next_action"])
+        self.assertNotEqual(state["suggested_next_action"]["action_id"], "export-docx")
+
+    def test_work_state_routes_blockers_to_repair_before_export(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        run_dir = self.orchestrator.store.runs_dir / "article-blocker-runtime"
+        write_runtime_status_fixture(
+            run_dir,
+            record_id="default:20260418-article-review",
+            entity_kind="workflow-run",
+            project_id="default",
+            project_title=self.root.name,
+            project_root=self.root,
+            work_id=TEST_WORK_ID,
+            work_title="Demo work",
+            lane="article",
+            action="review",
+            summary="Article review found a primary support blocker.",
+            blockers=[
+                {
+                    "category": "primary-support",
+                    "code": "unsupported-lead-claim",
+                    "message": "Lead claim still needs primary support.",
+                    "repairable": True,
+                    "blocks_statuses": ["submission-ready"],
+                }
+            ],
+            repair_decision={
+                "action": "repair",
+                "reason": "repairable-blockers-available",
+                "repair_iteration": 1,
+                "blocker_count": 1,
+            },
+            repair_iteration=0,
+            terminal_reason="blocked-primary-support",
+        )
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertGreaterEqual(state["known_blocker_count"], 1)
+        self.assertEqual(state["suggested_next_action"]["action_id"], "article-repair")
+        self.assertEqual(state["suggested_next_action"]["lane"], "article")
+        self.assertIn("launch-academic repair", state["suggested_next_action"]["command"])
+        self.assertNotIn("export", state["suggested_next_action"]["command"])
+
+    def test_work_state_flags_standards_raw_missing_and_conflicts(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["standards"]["profiles"]["article"]["profile_id"], "journal-jrp")
+        self.assertEqual(state["standards"]["profiles"]["article"]["raw_status"], "missing")
+        blocker_codes = {item["code"] for item in state["known_blockers"]}
+        self.assertIn("article-standards-raw-missing", blocker_codes)
+        self.assertIn("article-standards-conflict", blocker_codes)
+        self.assertEqual(state["suggested_next_action"]["action_id"], "standards-refresh")
+
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "journal-jrp")
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["standards"]["profiles"]["article"]["raw_status"], "available")
+        blocker_codes = {item["code"] for item in state["known_blockers"]}
+        self.assertNotIn("article-standards-raw-missing", blocker_codes)
+        self.assertIn("article-standards-conflict", blocker_codes)
+        self.assertEqual(state["suggested_next_action"]["action_id"], "standards-review")
 
     def test_single_active_run_and_manifest_resolution(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
@@ -2715,6 +2840,7 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         self.assertIn("Удаленный Codex", str(last_message["text"]))
         self.assertIn("Пиши мне обычным сообщением", str(last_message["text"]))
         self.assertIn("Действующие проекты", str(last_message["text"]))
+        self.assertIn("Что дальше:", str(last_message["text"]))
         self.assertEqual(
             last_message["reply_markup"]["keyboard"],
             [[{"text": label} for label in row] for row in MAIN_MENU],
@@ -3685,6 +3811,36 @@ class TelegramConsoleCliTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(stderr.getvalue(), "")
                 self.assertTrue((root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx").exists())
+
+    def test_work_status_cli_prints_compact_next_safe_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Work status:", stdout.getvalue())
+            self.assertIn("Next safe action:", stdout.getvalue())
+            self.assertIn("launch-academic review", stdout.getvalue())
+            self.assertNotIn("{", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status", "--json"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "work-state")
+            self.assertEqual(payload["suggested_next_action"]["action_id"], "article-review")
 
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

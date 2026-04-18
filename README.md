@@ -85,6 +85,7 @@
 - `python3 -m telegram_console.work_cli standards-intake <profile-id>`
 - `python3 -m telegram_console.work_cli standards-refresh <profile-id>`
 - `python3 -m telegram_console.work_cli standards-status [profile-id]`
+- `python3 -m telegram_console.work_cli work-status [--json]`
 
 ## Telegram console
 

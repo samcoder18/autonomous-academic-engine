@@ -23,8 +23,10 @@ from .runtime_status import (
     load_runtime_record,
     write_status,
 )
+from .standards import resolve_standard_profile
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
+from .work_state import build_work_state
 from .workspace import (
     WorkConfig,
     WorkspaceConfigError,
@@ -383,6 +385,9 @@ class WorkflowOrchestrator:
 
     def get_artifact_status(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
         work = self._work(work_id)
+        if subject == "work":
+            return self.get_work_state(work_id=work.slug)
+
         if subject == "thesis":
             sections = [self._thesis_section_status(path, work.slug) for path in self.list_thesis_sections(work_id=work.slug)]
             return {
@@ -408,6 +413,41 @@ class WorkflowOrchestrator:
             return self._article_bundle_status(subject.split(":", 1)[1], work.slug)
 
         raise WorkflowError(f"Не смогла определить, какой артефакт ты хочешь открыть: {subject}")
+
+    def get_work_state(self, *, work_id: str | None = None) -> dict[str, Any]:
+        work = self._work(work_id)
+        thesis_overview: dict[str, Any] | None = None
+        article_overview: dict[str, Any] | None = None
+
+        if work.supports("thesis") and work.thesis:
+            sections = [self._thesis_section_status(path, work.slug) for path in self.list_thesis_sections(work_id=work.slug)]
+            thesis_overview = {
+                "kind": "thesis-overview",
+                "work_id": work.slug,
+                "sections": sections,
+                "summary": self._build_thesis_overview_summary(sections),
+            }
+
+        if work.supports("article") and work.article:
+            bundles = [self._article_bundle_status(slug, work.slug) for slug in self.list_article_slugs(work_id=work.slug)]
+            article_overview = {
+                "kind": "article-overview",
+                "work_id": work.slug,
+                "bundles": bundles,
+                "summary": self._build_article_overview_summary(bundles),
+            }
+
+        return build_work_state(
+            root_dir=self.root_dir,
+            work_id=work.slug,
+            work_title=work.title,
+            active_lanes=work.active_lanes,
+            thesis_overview=thesis_overview,
+            article_overview=article_overview,
+            standards_profiles=self._resolve_work_standards_profiles(work),
+            runtime_records=self._recent_workflow_runtime_records(work.slug, limit=5),
+            active_run=self._active_workflow_run_for_work(work.slug),
+        )
 
     def export_docx(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
         work = self._work(work_id)
@@ -1109,6 +1149,51 @@ class WorkflowOrchestrator:
         if not records:
             return None
         return sorted(records, key=lambda item: item.sort_key, reverse=True)[0]
+
+    def _recent_workflow_runtime_records(self, work_id: str, *, limit: int = 5) -> list[RuntimeRecord]:
+        records: list[RuntimeRecord] = []
+        for run_dir in self.store.list_run_dirs():
+            record = load_runtime_record(run_dir, "workflow-run")
+            if record is None:
+                continue
+            if str(record.work_id or "").strip() != work_id:
+                continue
+            if not self._runtime_record_matches_project(record):
+                continue
+            records.append(record)
+        return sorted(records, key=lambda item: item.sort_key, reverse=True)[:limit]
+
+    def _active_workflow_run_for_work(self, work_id: str) -> dict[str, Any] | None:
+        active = self.store.get_active_run()
+        if not isinstance(active, dict) or not self._active_run_matches(active):
+            return None
+        if str(active.get("work_id") or "").strip() != work_id:
+            return None
+        return {
+            "run_id": active.get("run_id"),
+            "lane": active.get("lane"),
+            "action": active.get("action"),
+            "started_at": active.get("started_at"),
+            "target": active.get("target"),
+            "topic": active.get("topic"),
+        }
+
+    def _resolve_work_standards_profiles(self, work: WorkConfig) -> dict[str, Any]:
+        profiles: dict[str, Any] = {}
+        for lane in work.active_lanes:
+            if lane not in ("thesis", "article"):
+                continue
+            try:
+                profiles[lane] = resolve_standard_profile(
+                    self.root_dir,
+                    self._workspace_config(),
+                    work,
+                    lane=lane,
+                    requested_profile_id=None,
+                )
+            except WorkspaceConfigError as exc:
+                profiles[lane] = {"lane": lane, "error": str(exc)}
+        return profiles
 
     def _runtime_record_matches_project(self, record: RuntimeRecord) -> bool:
         project_id = str(record.project_id or "").strip()

@@ -610,6 +610,11 @@ class ProjectService:
         work = self.get_active_work(project.id)
         return self._get_orchestrator(project).get_artifact_status(subject, work_id=work.slug)
 
+    def get_work_state(self, project_id: str) -> dict[str, object]:
+        project = self.require_project(project_id)
+        work = self.get_active_work(project.id)
+        return self._get_orchestrator(project).get_work_state(work_id=work.slug)
+
     def export_docx(self, project_id: str, subject: str) -> dict[str, object]:
         project = self.require_project(project_id)
         work = self.get_active_work(project.id)

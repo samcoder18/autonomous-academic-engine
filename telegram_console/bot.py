@@ -16,6 +16,7 @@ from .projects import ProjectRecord, ProjectRegistrationResult, ProjectService
 from .runtime_status import load_runtime_record
 from .telegram_api import TelegramApiError, TelegramBotApi
 from .utils import shorten_text, split_message
+from .work_state import format_work_state_dashboard_lines
 
 
 MAIN_MENU = (
@@ -257,6 +258,11 @@ class TelegramConsoleBot:
                     f"Что сейчас в разработке: {self.chat.describe_project_focus(current.id)}",
                 ]
             )
+            if active_work:
+                try:
+                    lines.extend(format_work_state_dashboard_lines(self.projects.get_work_state(current.id)))
+                except WorkflowError:
+                    pass
         else:
             lines.extend(
                 [
