@@ -11,8 +11,9 @@ from .agent_chat import AgentBusyError, AgentChatError, AgentChatService, AgentT
 from .config import TelegramConsoleConfig
 from .email_delivery import EmailDeliveryError, SmtpDocxSender
 from .launchd_service import LaunchdServiceError, LaunchdServiceManager
-from .orchestrator import WorkflowError
+from .orchestrator import RunRecord, WorkflowError, action_title, lane_title
 from .projects import ProjectRecord, ProjectRegistrationResult, ProjectService
+from .runtime_status import load_runtime_record
 from .telegram_api import TelegramApiError, TelegramBotApi
 from .utils import shorten_text, split_message
 
@@ -95,6 +96,9 @@ class TelegramConsoleBot:
             self.tick()
 
     def tick(self) -> None:
+        self.projects.sync_active_run()
+        for notification in self.projects.drain_notifications():
+            self._send_workflow_notification(notification)
         self.chat.sync_active_task()
         for notification in self.chat.drain_notifications():
             self._send_chat_notification(notification)
@@ -512,6 +516,29 @@ class TelegramConsoleBot:
         lines.append("Можешь просто отправить запрос еще раз, и я попробую снова.")
         self.safe_send(self.config.allowed_chat_id, "\n".join(lines), reply_markup=self.main_menu_markup)
 
+    def _send_workflow_notification(self, notification: RunRecord) -> None:
+        lines = [
+            "✅ Workflow завершен" if notification.status == "success" else "⚠️ Workflow завершился с проблемой",
+            f"📚 Проект: {notification.project_title or notification.project_id or 'не указан'}",
+        ]
+        if notification.work_title:
+            lines.append(f"🗂 Работа: {notification.work_title} (`{notification.work_id}`)")
+        lines.append(f"Контур: {lane_title(notification.lane)} · {action_title(notification.action)}")
+        runtime_summary = self._workflow_runtime_summary(notification)
+        if runtime_summary:
+            lines.append(runtime_summary)
+        if notification.summary:
+            lines.append(f"Summary: {notification.summary}")
+        self.safe_send(self.config.allowed_chat_id, "\n".join(lines), reply_markup=self.main_menu_markup)
+
+    def _workflow_runtime_summary(self, notification: RunRecord) -> str | None:
+        if not notification.runtime_run_dir:
+            return None
+        runtime_record = load_runtime_record(Path(notification.runtime_run_dir), "workflow-run")
+        if runtime_record is None:
+            return None
+        return _format_runtime_lane_summary(runtime_record)
+
     def _project_card_lines(
         self,
         project: ProjectRecord,
@@ -700,18 +727,14 @@ def _format_runtime_records(records: list[Any]) -> str:
         return "Runtime records не найдены."
     lines: list[str] = []
     for record in records:
+        lane_summary = _format_runtime_lane_summary(record)
         lines.extend(
             [
                 f"{record.record_id} [{record.entity_kind}]",
                 f"Статус: {record.status} · stage={record.stage}",
                 f"Проект: {record.project_title or record.project_id or 'не указан'}",
                 f"Работа: {record.work_title or record.work_id or 'не указана'}",
-                (
-                    "Repair: "
-                    f"iteration={record.repair_iteration or 0}, "
-                    f"terminal_reason={record.terminal_reason or 'n/a'}, "
-                    f"blockers={len(record.blockers)}"
-                ),
+                lane_summary,
                 f"Summary: {record.summary or 'нет'}",
                 "",
             ]
@@ -735,6 +758,9 @@ def _format_runtime_record(record: Any) -> str:
         f"Finished: {record.finished_at or 'n/a'}",
         f"Summary: {record.summary or 'нет'}",
     ]
+    lane_summary = _format_runtime_lane_summary(record)
+    if lane_summary:
+        lines.append(lane_summary)
     if record.failure:
         lines.append(f"Failure: {json.dumps(record.failure, ensure_ascii=False)}")
     else:
@@ -758,6 +784,85 @@ def _format_runtime_record(record: Any) -> str:
     else:
         lines.append("- none")
     return "\n".join(lines)
+
+
+def _format_runtime_lane_summary(record: Any) -> str:
+    if getattr(record, "entity_kind", None) != "workflow-run":
+        return (
+            "Repair: "
+            f"iteration={getattr(record, 'repair_iteration', None) or 0}, "
+            f"terminal_reason={getattr(record, 'terminal_reason', None) or 'n/a'}, "
+            f"blockers={len(getattr(record, 'blockers', ()) or ())}"
+        )
+    summary_block = _load_runtime_summary_block(record)
+    if isinstance(summary_block, dict):
+        return _format_summary_block_line(summary_block)
+    parts = [
+        f"lane={getattr(record, 'lane', None) or 'n/a'}",
+        f"action={getattr(record, 'action', None) or 'n/a'}",
+        f"blockers={len(getattr(record, 'blockers', ()) or ())}",
+        f"terminal_reason={getattr(record, 'terminal_reason', None) or 'n/a'}",
+    ]
+    repair_decision = getattr(record, "repair_decision", None)
+    if isinstance(repair_decision, dict):
+        parts.append(f"repair={repair_decision.get('action') or 'n/a'}@{getattr(record, 'repair_iteration', None) or 0}")
+    return "Lane summary: " + " · ".join(parts)
+
+
+def _load_runtime_summary_block(record: Any) -> dict[str, Any] | None:
+    attachments = getattr(record, "attachments", None)
+    if not isinstance(attachments, dict):
+        return None
+    resolution = attachments.get("resolution")
+    if not isinstance(resolution, dict):
+        return None
+    raw_path = resolution.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    candidate = Path(raw_path)
+    if not candidate.exists():
+        return None
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("thesis_runtime", "article_runtime"):
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            continue
+        summary_block = value.get("summary_block")
+        if isinstance(summary_block, dict):
+            return summary_block
+    return None
+
+
+def _format_summary_block_line(summary_block: dict[str, Any]) -> str:
+    kind = summary_block.get("kind")
+    if kind == "thesis-section-summary":
+        return (
+            "Lane summary: "
+            f"thesis target={summary_block.get('target') or 'n/a'}"
+            f" · review={'yes' if summary_block.get('review_present') else 'no'}"
+            f" · last_run={summary_block.get('last_run_action') or 'n/a'}/{summary_block.get('last_run_status') or 'n/a'}"
+            f" · blockers={summary_block.get('blocker_count') or 0}"
+            f" · terminal_reason={summary_block.get('terminal_reason') or 'n/a'}"
+            f" · next={summary_block.get('suggested_next_action') or 'n/a'}"
+        )
+    if kind == "article-bundle-summary":
+        return (
+            "Lane summary: "
+            f"article slug={summary_block.get('slug') or 'n/a'}"
+            f" · phase={summary_block.get('current_phase') or 'n/a'}"
+            f" · status={summary_block.get('current_status') or 'n/a'}"
+            f" · blockers={summary_block.get('blocker_count') or 0}"
+            f" · repair={summary_block.get('repair_action') or 'n/a'}@{summary_block.get('repair_iteration') or 0}"
+            f" · review={'yes' if summary_block.get('review_present') else 'no'}"
+            f" · checklist={'yes' if summary_block.get('checklist_present') else 'no'}"
+            f" · next={summary_block.get('suggested_next_action') or 'n/a'}"
+        )
+    return "Lane summary: " + json.dumps(summary_block, ensure_ascii=False)
 
 
 def main(argv: list[str] | None = None) -> int:

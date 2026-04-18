@@ -13,7 +13,15 @@ from .action_specs import execution_contract_from_payload
 from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
 from .article_runtime_signals import extract_article_artifact_signals
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
-from .runtime_status import build_attachments, build_checkpoint, build_failure, build_runtime_status, write_status
+from .runtime_status import (
+    RuntimeRecord,
+    build_attachments,
+    build_checkpoint,
+    build_failure,
+    build_runtime_status,
+    load_runtime_record,
+    write_status,
+)
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
 from .workspace import (
@@ -375,20 +383,24 @@ class WorkflowOrchestrator:
     def get_artifact_status(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
         work = self._work(work_id)
         if subject == "thesis":
+            sections = [self._thesis_section_status(path, work.slug) for path in self.list_thesis_sections(work_id=work.slug)]
             return {
                 "kind": "thesis-overview",
                 "work_id": work.slug,
-                "sections": [self._thesis_section_status(path, work.slug) for path in self.list_thesis_sections(work_id=work.slug)],
+                "sections": sections,
+                "summary": self._build_thesis_overview_summary(sections),
             }
 
         if subject.startswith("thesis:"):
             return self._thesis_section_status(subject.split(":", 1)[1], work.slug)
 
         if subject == "article":
+            bundles = [self._article_bundle_status(slug, work.slug) for slug in self.list_article_slugs(work_id=work.slug)]
             return {
                 "kind": "article-overview",
                 "work_id": work.slug,
-                "bundles": [self._article_bundle_status(slug, work.slug) for slug in self.list_article_slugs(work_id=work.slug)],
+                "bundles": bundles,
+                "summary": self._build_article_overview_summary(bundles),
             }
 
         if subject.startswith("article:"):
@@ -825,14 +837,17 @@ class WorkflowOrchestrator:
             for record in self.list_recent_runs("thesis", limit=20, work_id=work.slug)
             if record.target == section
         ][:3]
+        latest_runtime = self._latest_workflow_runtime_record("thesis", work.slug, target=section)
+        review_exists = review_path.exists() if review_path else False
         return {
             "kind": "thesis-section",
             "work_id": work.slug,
             "target": section,
             "review_path": str(review_path) if review_path else None,
-            "review_exists": review_path.exists() if review_path else False,
+            "review_exists": review_exists,
             "available_actions": list(THESIS_ACTIONS),
             "recent_runs": recent,
+            "summary": self._build_thesis_section_summary(section, review_exists, recent, latest_runtime),
         }
 
     def _article_bundle_status(self, slug: str, work_id: str) -> dict[str, Any]:
@@ -852,18 +867,7 @@ class WorkflowOrchestrator:
                 article_slug=clean_slug,
                 bundle=files,
             )
-        exposed_files = {
-            "brief": files["brief"],
-            "evidence": files["evidence_pack"],
-            "claim_map": files["claim_map"],
-            "draft": files["draft"],
-            "review": files["review"],
-            "final": files["final_markdown"],
-            "checklist": files["checklist"],
-            "docx": files["docx"],
-        }
-        present = {name: {"path": str(path), "exists": path.exists()} for name, path in exposed_files.items()}
-        missing = [name for name, info in present.items() if not info["exists"]]
+        present, missing = self._article_present_files(files)
         recent = [
             record.to_dict()
             for record in self.list_recent_runs("article", limit=20, work_id=work.slug)
@@ -881,7 +885,179 @@ class WorkflowOrchestrator:
             "missing": missing,
             "complete": not missing,
             "recent_runs": recent,
+            "summary": self._build_article_bundle_summary(clean_slug, state, present),
         }
+
+    def _build_thesis_section_summary(
+        self,
+        target: str,
+        review_present: bool,
+        recent_runs: list[dict[str, Any]],
+        runtime_record: RuntimeRecord | None,
+    ) -> dict[str, Any]:
+        last_run = recent_runs[0] if recent_runs else {}
+        blocker_count = len(runtime_record.blockers) if runtime_record else 0
+        terminal_reason = runtime_record.terminal_reason if runtime_record else None
+        if not recent_runs:
+            suggested_next_action = "write-section"
+        elif blocker_count:
+            suggested_next_action = "review-section" if last_run.get("action") == "review-section" else "verify"
+        elif not review_present:
+            suggested_next_action = "review-section"
+        else:
+            suggested_next_action = "style-pass"
+        return {
+            "kind": "thesis-section-summary",
+            "target": target,
+            "review_present": review_present,
+            "last_run_action": last_run.get("action"),
+            "last_run_status": last_run.get("status"),
+            "blocker_count": blocker_count,
+            "terminal_reason": terminal_reason,
+            "suggested_next_action": suggested_next_action,
+        }
+
+    def _build_thesis_overview_summary(self, sections: list[dict[str, Any]]) -> dict[str, Any]:
+        review_count = sum(1 for item in sections if item.get("review_exists"))
+        blocked_count = sum(
+            1
+            for item in sections
+            if isinstance(item.get("summary"), dict) and int(item["summary"].get("blocker_count") or 0) > 0
+        )
+        if not sections:
+            suggested_next_action = "write-section"
+        elif blocked_count:
+            suggested_next_action = "verify"
+        elif review_count < len(sections):
+            suggested_next_action = "review-section"
+        else:
+            suggested_next_action = "style-pass"
+        return {
+            "kind": "thesis-overview-summary",
+            "section_count": len(sections),
+            "reviewed_count": review_count,
+            "blocked_count": blocked_count,
+            "suggested_next_action": suggested_next_action,
+        }
+
+    def _build_article_bundle_summary(
+        self,
+        slug: str,
+        state: Any,
+        files: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        review_present = bool((files.get("review") or {}).get("exists"))
+        checklist_present = bool((files.get("checklist") or {}).get("exists"))
+        blocker_count = int(getattr(state, "blocker_count", 0) or 0)
+        repair_decision = getattr(state, "repair_decision", None)
+        repair_action = repair_decision.get("action") if isinstance(repair_decision, dict) else None
+        if blocker_count:
+            suggested_next_action = "repair"
+        elif not review_present and bool((files.get("draft") or {}).get("exists")):
+            suggested_next_action = "review"
+        elif not bool((files.get("final") or {}).get("exists")):
+            suggested_next_action = "article"
+        elif not checklist_present:
+            suggested_next_action = "repair"
+        elif getattr(state, "current_status", None) == "strong-draft":
+            suggested_next_action = "review"
+        else:
+            suggested_next_action = None
+        return {
+            "kind": "article-bundle-summary",
+            "slug": slug,
+            "current_phase": getattr(state, "current_phase", None),
+            "current_status": getattr(state, "current_status", None),
+            "readiness_status": getattr(state, "readiness_status", None),
+            "blocker_count": blocker_count,
+            "repair_action": repair_action,
+            "repair_iteration": getattr(state, "repair_iteration", None),
+            "review_present": review_present,
+            "checklist_present": checklist_present,
+            "suggested_next_action": suggested_next_action,
+        }
+
+    def _build_article_overview_summary(self, bundles: list[dict[str, Any]]) -> dict[str, Any]:
+        blocked_count = sum(
+            1
+            for item in bundles
+            if isinstance(item.get("summary"), dict) and int(item["summary"].get("blocker_count") or 0) > 0
+        )
+        ready_count = sum(
+            1
+            for item in bundles
+            if isinstance(item.get("summary"), dict) and item["summary"].get("current_status") == "submission-ready"
+        )
+        review_missing_count = sum(
+            1
+            for item in bundles
+            if isinstance(item.get("summary"), dict) and not bool(item["summary"].get("review_present"))
+        )
+        if not bundles:
+            suggested_next_action = "article"
+        elif blocked_count:
+            suggested_next_action = "repair"
+        elif review_missing_count:
+            suggested_next_action = "review"
+        else:
+            suggested_next_action = "article"
+        return {
+            "kind": "article-overview-summary",
+            "bundle_count": len(bundles),
+            "blocked_count": blocked_count,
+            "submission_ready_count": ready_count,
+            "review_missing_count": review_missing_count,
+            "suggested_next_action": suggested_next_action,
+        }
+
+    def _article_present_files(self, files: dict[str, Path]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+        exposed_files = {
+            "brief": files["brief"],
+            "evidence": files["evidence_pack"],
+            "claim_map": files["claim_map"],
+            "draft": files["draft"],
+            "review": files["review"],
+            "final": files["final_markdown"],
+            "checklist": files["checklist"],
+            "docx": files["docx"],
+        }
+        present = {name: {"path": str(path), "exists": path.exists()} for name, path in exposed_files.items()}
+        missing = [name for name, info in present.items() if not info["exists"]]
+        return present, missing
+
+    def _latest_workflow_runtime_record(
+        self,
+        lane: str,
+        work_id: str,
+        *,
+        target: str | None = None,
+    ) -> RuntimeRecord | None:
+        records: list[RuntimeRecord] = []
+        for run_dir in self.store.list_run_dirs():
+            record = load_runtime_record(run_dir, "workflow-run")
+            if record is None or record.lane != lane:
+                continue
+            if str(record.work_id or "").strip() != work_id:
+                continue
+            if not self._runtime_record_matches_project(record):
+                continue
+            if target is not None:
+                request = self.store.read_json(run_dir / "request.json", default={}) or {}
+                if str(request.get("target") or "").strip() != target:
+                    continue
+            records.append(record)
+        if not records:
+            return None
+        return sorted(records, key=lambda item: item.sort_key, reverse=True)[0]
+
+    def _runtime_record_matches_project(self, record: RuntimeRecord) -> bool:
+        project_id = str(record.project_id or "").strip()
+        if project_id:
+            return project_id == self.project_id
+        project_root = str(record.project_root or "").strip()
+        if project_root:
+            return Path(project_root).expanduser().resolve() == self.root_dir
+        return self.root_dir == self.store.root_dir
 
     def _build_record_summary(
         self,
@@ -1139,6 +1315,8 @@ class WorkflowOrchestrator:
         from .article_bundle_state import write_article_bundle_state
 
         write_article_bundle_state(state_path, updated_state)
+        present_files, _ = self._article_present_files(bundle)
+        summary_block = self._build_article_bundle_summary(article_slug, updated_state, present_files)
         blocker_count = len(blockers)
         summary = record.summary
         if effective_status:
@@ -1156,6 +1334,7 @@ class WorkflowOrchestrator:
             "repair_iteration": current_iteration,
             "terminal_reason": terminal_reason,
             "bundle_state_manifest": str(state_path),
+            "summary_block": summary_block,
             "summary": summary,
         }
 

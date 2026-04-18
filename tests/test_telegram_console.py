@@ -34,7 +34,7 @@ from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
 from telegram_console.config import TelegramConsoleConfig
 from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
 from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
-from telegram_console.orchestrator import RunBusyError, WorkflowOrchestrator
+from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
 from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.projects import ProjectService
 from telegram_console.runtime_status import build_runtime_status, record_from_payload
@@ -1081,6 +1081,20 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(status["files"]["final"]["exists"])
         self.assertIn("evidence", status["missing"])
         self.assertIn("docx", status["missing"])
+        self.assertEqual(status["summary"]["kind"], "article-bundle-summary")
+        self.assertEqual(status["summary"]["slug"], "demo")
+        self.assertEqual(status["summary"]["blocker_count"], 0)
+        self.assertEqual(status["summary"]["suggested_next_action"], "review")
+
+    def test_thesis_section_status_includes_compact_summary(self) -> None:
+        status = self.orchestrator.get_artifact_status("thesis:manuscript/sections/01-introduction.md")
+
+        self.assertEqual(status["kind"], "thesis-section")
+        self.assertEqual(status["summary"]["kind"], "thesis-section-summary")
+        self.assertEqual(status["summary"]["target"], TEST_THESIS_SECTION.as_posix())
+        self.assertTrue(status["summary"]["review_present"])
+        self.assertEqual(status["summary"]["blocker_count"], 0)
+        self.assertEqual(status["summary"]["suggested_next_action"], "write-section")
 
     def test_single_active_run_and_manifest_resolution(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
@@ -2018,8 +2032,12 @@ class ProjectServiceTests(unittest.TestCase):
         article_status = self.service.get_artifact_status("alpha", "article")
         self.assertEqual(thesis_status["kind"], "thesis-overview")
         self.assertEqual(thesis_status["sections"], [])
+        self.assertEqual(thesis_status["summary"]["kind"], "thesis-overview-summary")
+        self.assertEqual(thesis_status["summary"]["section_count"], 0)
         self.assertEqual(article_status["kind"], "article-overview")
         self.assertEqual(article_status["bundles"], [])
+        self.assertEqual(article_status["summary"]["kind"], "article-overview-summary")
+        self.assertEqual(article_status["summary"]["bundle_count"], 0)
 
     def test_global_lock_mentions_busy_project(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
@@ -2408,6 +2426,70 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
 
         self.assertIn("Не получилось получить ответ Codex", str(self.api.messages[-1]["text"]))
         self.assertIn("сессия", str(self.api.messages[-1]["text"]).lower())
+
+    def test_workflow_notification_uses_lane_summary(self) -> None:
+        run_dir = self.root / "output" / "telegram" / "runtime" / "runs" / "20260418-100000-default-thesis-verify"
+        resolution_path = run_dir / "resolution.json"
+        write_runtime_status_fixture(
+            run_dir,
+            record_id="default:20260418-thesis-verify",
+            entity_kind="workflow-run",
+            project_id="default",
+            project_title=self.root.name,
+            project_root=self.root,
+            work_id=TEST_WORK_ID,
+            work_title="Demo work",
+            lane="thesis",
+            action="verify",
+            attachments={"resolution": str(resolution_path)},
+            summary="Workflow verification completed.",
+        )
+        resolution_path.write_text(
+            json.dumps(
+                {
+                    "thesis_runtime": {
+                        "summary_block": {
+                            "kind": "thesis-section-summary",
+                            "target": TEST_THESIS_SECTION.as_posix(),
+                            "review_present": True,
+                            "last_run_action": "verify",
+                            "last_run_status": "success",
+                            "blocker_count": 0,
+                            "terminal_reason": None,
+                            "suggested_next_action": "review-section",
+                        }
+                    }
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.projects.store.append_notification(
+            RunRecord(
+                record_id="default:20260418-thesis-verify",
+                lane="thesis",
+                action="verify",
+                status="success",
+                started_at="2026-04-18T10:00:00+00:00",
+                project_id="default",
+                project_title=self.root.name,
+                project_root=str(self.root),
+                work_id=TEST_WORK_ID,
+                work_title="Demo work",
+                finished_at="2026-04-18T10:01:00+00:00",
+                target=TEST_THESIS_SECTION.as_posix(),
+                runtime_run_dir=str(run_dir),
+                summary="Workflow verification completed.",
+            ).to_dict()
+        )
+
+        self.bot.tick()
+
+        self.assertTrue(any("Workflow завершен" in str(item["text"]) for item in self.api.messages))
+        self.assertTrue(any("Lane summary:" in str(item["text"]) for item in self.api.messages))
+        self.assertTrue(any("next=review-section" in str(item["text"]) for item in self.api.messages))
 
     def test_run_export_without_mailer_keeps_telegram_delivery(self) -> None:
         self.bot._run_export(1, "default", "thesis")
@@ -3302,6 +3384,28 @@ class TelegramConsoleCliTests(unittest.TestCase):
                 },
                 summary="Workflow verification completed.",
             )
+            workflow_resolution.write_text(
+                json.dumps(
+                    {
+                        "thesis_runtime": {
+                            "summary_block": {
+                                "kind": "thesis-section-summary",
+                                "target": TEST_THESIS_SECTION.as_posix(),
+                                "review_present": True,
+                                "last_run_action": "verify",
+                                "last_run_status": "success",
+                                "blocker_count": 0,
+                                "terminal_reason": None,
+                                "suggested_next_action": "review-section",
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
             chat_dir = bot_home / "output" / "telegram" / "runtime" / "agent_tasks" / "20260418-101500-beta-chat"
             chat_request = chat_dir / "request.json"
@@ -3337,6 +3441,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("alpha:20260418-thesis-verify", stdout.getvalue())
+            self.assertIn("Lane summary:", stdout.getvalue())
             self.assertNotIn("beta:20260418-chat", stdout.getvalue())
 
             stdout = StringIO()
@@ -3356,6 +3461,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("workflow-run", stdout.getvalue())
+            self.assertIn("next=review-section", stdout.getvalue())
             self.assertIn(str(workflow_manifest), stdout.getvalue())
             self.assertIn(str(workflow_trace), stdout.getvalue())
 
