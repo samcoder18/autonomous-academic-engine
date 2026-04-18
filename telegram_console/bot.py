@@ -524,20 +524,22 @@ class TelegramConsoleBot:
         if notification.work_title:
             lines.append(f"🗂 Работа: {notification.work_title} (`{notification.work_id}`)")
         lines.append(f"Контур: {lane_title(notification.lane)} · {action_title(notification.action)}")
-        runtime_summary = self._workflow_runtime_summary(notification)
-        if runtime_summary:
-            lines.append(runtime_summary)
+        runtime_record = self._load_workflow_runtime_record(notification)
+        if runtime_record is not None:
+            runtime_summary = _format_runtime_lane_summary(runtime_record)
+            if runtime_summary:
+                lines.append(runtime_summary)
+            resolution_warning = _format_target_resolution_line(runtime_record)
+            if resolution_warning:
+                lines.append(resolution_warning)
         if notification.summary:
             lines.append(f"Summary: {notification.summary}")
         self.safe_send(self.config.allowed_chat_id, "\n".join(lines), reply_markup=self.main_menu_markup)
 
-    def _workflow_runtime_summary(self, notification: RunRecord) -> str | None:
+    def _load_workflow_runtime_record(self, notification: RunRecord) -> Any | None:
         if not notification.runtime_run_dir:
             return None
-        runtime_record = load_runtime_record(Path(notification.runtime_run_dir), "workflow-run")
-        if runtime_record is None:
-            return None
-        return _format_runtime_lane_summary(runtime_record)
+        return load_runtime_record(Path(notification.runtime_run_dir), "workflow-run")
 
     def _project_card_lines(
         self,
@@ -728,6 +730,7 @@ def _format_runtime_records(records: list[Any]) -> str:
     lines: list[str] = []
     for record in records:
         lane_summary = _format_runtime_lane_summary(record)
+        resolution_warning = _format_target_resolution_line(record)
         lines.extend(
             [
                 f"{record.record_id} [{record.entity_kind}]",
@@ -735,6 +738,7 @@ def _format_runtime_records(records: list[Any]) -> str:
                 f"Проект: {record.project_title or record.project_id or 'не указан'}",
                 f"Работа: {record.work_title or record.work_id or 'не указана'}",
                 lane_summary,
+                resolution_warning or "Resolution warning: none",
                 f"Summary: {record.summary or 'нет'}",
                 "",
             ]
@@ -761,6 +765,9 @@ def _format_runtime_record(record: Any) -> str:
     lane_summary = _format_runtime_lane_summary(record)
     if lane_summary:
         lines.append(lane_summary)
+    resolution_warning = _format_target_resolution_line(record)
+    if resolution_warning:
+        lines.append(resolution_warning)
     if record.failure:
         lines.append(f"Failure: {json.dumps(record.failure, ensure_ascii=False)}")
     else:
@@ -810,6 +817,20 @@ def _format_runtime_lane_summary(record: Any) -> str:
 
 
 def _load_runtime_summary_block(record: Any) -> dict[str, Any] | None:
+    payload = _load_runtime_resolution_payload(record)
+    if not isinstance(payload, dict):
+        return None
+    for key in ("thesis_runtime", "article_runtime"):
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            continue
+        summary_block = value.get("summary_block")
+        if isinstance(summary_block, dict):
+            return summary_block
+    return None
+
+
+def _load_runtime_resolution_payload(record: Any) -> dict[str, Any] | None:
     attachments = getattr(record, "attachments", None)
     if not isinstance(attachments, dict):
         return None
@@ -826,15 +847,27 @@ def _load_runtime_summary_block(record: Any) -> dict[str, Any] | None:
         payload = json.loads(candidate.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _load_target_resolution(record: Any) -> dict[str, Any] | None:
+    direct = getattr(record, "target_resolution", None)
+    if isinstance(direct, dict):
+        return direct
+    payload = _load_runtime_resolution_payload(record)
     if not isinstance(payload, dict):
         return None
-    for key in ("thesis_runtime", "article_runtime"):
-        value = payload.get(key)
-        if not isinstance(value, dict):
-            continue
-        summary_block = value.get("summary_block")
-        if isinstance(summary_block, dict):
-            return summary_block
+    target_resolution = payload.get("target_resolution")
+    return target_resolution if isinstance(target_resolution, dict) else None
+
+
+def _format_target_resolution_line(record: Any) -> str | None:
+    target_resolution = _load_target_resolution(record)
+    if not isinstance(target_resolution, dict):
+        return None
+    message = target_resolution.get("warning_message")
+    if isinstance(message, str) and message.strip():
+        return f"Resolution warning: {message.strip()}"
     return None
 
 

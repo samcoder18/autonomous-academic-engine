@@ -98,6 +98,38 @@ class WorkspaceConfig:
         return slug in self.works
 
 
+@dataclass(frozen=True)
+class WorkSelection:
+    work: WorkConfig
+    source: str
+
+
+@dataclass(frozen=True)
+class TargetResolution:
+    raw_target: str
+    normalized_path: str
+    absolute_path: Path
+    resolution_mode: str
+    work_id: str
+    work_source: str
+    used_legacy_root_mapping: bool
+    warning_code: str | None = None
+    warning_message: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "raw_target": self.raw_target,
+            "normalized_path": self.normalized_path,
+            "absolute_path": str(self.absolute_path),
+            "resolution_mode": self.resolution_mode,
+            "work_id": self.work_id,
+            "work_source": self.work_source,
+            "used_legacy_root_mapping": self.used_legacy_root_mapping,
+            "warning_code": self.warning_code,
+            "warning_message": self.warning_message,
+        }
+
+
 def load_workspace_config(root_dir: str | Path) -> WorkspaceConfig:
     root = Path(root_dir).expanduser().resolve()
     workspace_file = root / "workspace.toml"
@@ -194,15 +226,24 @@ def resolve_work_config(
     work_id: str | None = None,
     target: str | Path | None = None,
 ) -> WorkConfig:
+    return resolve_work_selection(workspace, work_id=work_id, target=target).work
+
+
+def resolve_work_selection(
+    workspace: WorkspaceConfig,
+    *,
+    work_id: str | None = None,
+    target: str | Path | None = None,
+) -> WorkSelection:
     chosen = _optional_text(work_id)
     if chosen:
-        return load_work_config(workspace, chosen)
+        return WorkSelection(work=load_work_config(workspace, chosen), source="explicit")
 
     detected = detect_work_id_for_target(workspace, target)
     if detected:
-        return load_work_config(workspace, detected)
+        return WorkSelection(work=load_work_config(workspace, detected), source="detected")
 
-    return load_work_config(workspace, workspace.default_work)
+    return WorkSelection(work=load_work_config(workspace, workspace.default_work), source="default")
 
 
 def list_work_ids(workspace: WorkspaceConfig) -> list[str]:
@@ -275,41 +316,95 @@ def normalize_target_for_action(
     action: str,
     raw_target: str,
 ) -> str:
-    normalized = normalize_target_path(workspace, work, raw_target)
-    allowed = set(list_targets_for_action(work, lane, action, workspace))
-    if normalized not in allowed:
-        raise WorkspaceConfigError(
-            f"Этот файл не подходит для сценария `{lane} / {action}` в work `{work.slug}`:\n{normalized}"
-        )
+    normalized = resolve_target_for_action(
+        workspace,
+        work,
+        lane,
+        action,
+        raw_target,
+    ).normalized_path
     return normalized
 
 
+def resolve_target_for_action(
+    workspace: WorkspaceConfig,
+    work: WorkConfig,
+    lane: str,
+    action: str,
+    raw_target: str,
+    *,
+    work_source: str = "explicit",
+) -> TargetResolution:
+    resolution = resolve_target_path(workspace, work, raw_target, work_source=work_source)
+    allowed = set(list_targets_for_action(work, lane, action, workspace))
+    if resolution.normalized_path not in allowed:
+        raise WorkspaceConfigError(
+            f"Этот файл не подходит для сценария `{lane} / {action}` в work `{work.slug}`:\n{resolution.normalized_path}"
+        )
+    return resolution
+
+
 def normalize_target_path(workspace: WorkspaceConfig, work: WorkConfig, raw_target: str) -> str:
+    return resolve_target_path(workspace, work, raw_target).normalized_path
+
+
+def resolve_target_path(
+    workspace: WorkspaceConfig,
+    work: WorkConfig,
+    raw_target: str,
+    *,
+    work_source: str = "explicit",
+) -> TargetResolution:
     raw = raw_target.strip()
     if not raw:
         raise WorkspaceConfigError("Путь к target не может быть пустым.")
 
     raw_path = Path(raw).expanduser()
-    candidates: list[Path] = []
+    candidates: list[tuple[str, Path, bool]] = []
     if raw_path.is_absolute():
-        candidates.append(raw_path)
+        candidates.append(("absolute", raw_path, False))
     else:
-        candidates.append(workspace.root_dir / raw_path)
-        candidates.append(work.work_dir / raw_path)
+        mapped = _map_legacy_target(work, raw)
+        if mapped is not None and _looks_like_legacy_root_target(raw):
+            candidates.append(("legacy-root", mapped, True))
+        candidates.append(("workspace-relative", workspace.root_dir / raw_path, False))
+        candidates.append(("work-relative", work.work_dir / raw_path, False))
+        if mapped is not None and not _looks_like_legacy_root_target(raw):
+            candidates.append(("legacy-root", mapped, True))
 
-    mapped = _map_legacy_target(work, raw)
-    if mapped is not None:
-        candidates.append(mapped)
-
-    for candidate in candidates:
+    seen: set[tuple[str, str]] = set()
+    for resolution_mode, candidate, used_legacy_root_mapping in candidates:
+        marker = (resolution_mode, str(candidate))
+        if marker in seen:
+            continue
+        seen.add(marker)
         try:
             resolved = candidate.resolve(strict=True)
         except FileNotFoundError:
             continue
         try:
-            return resolved.relative_to(workspace.root_dir).as_posix()
+            normalized = resolved.relative_to(workspace.root_dir).as_posix()
         except ValueError as exc:
             raise WorkspaceConfigError(f"Путь находится вне workspace:\n{raw_target}") from exc
+        warning_code = None
+        warning_message = None
+        if used_legacy_root_mapping:
+            warning_code = "legacy-root-target"
+            warning_message = (
+                f"Legacy target path `{raw}` resolved to `{normalized}`. "
+                "Prefer the canonical `works/<slug>/...` path."
+            )
+        return TargetResolution(
+            raw_target=raw,
+            normalized_path=normalized,
+            absolute_path=resolved,
+            resolution_mode=resolution_mode,
+            work_id=work.slug,
+            work_source=work_source,
+            used_legacy_root_mapping=used_legacy_root_mapping,
+            warning_code=warning_code,
+            warning_message=warning_message,
+        )
 
     raise WorkspaceConfigError(f"Не найден файл: {raw_target}")
 
@@ -541,6 +636,25 @@ def _map_legacy_target(work: WorkConfig, raw_target: str) -> Path | None:
                 suffix = normalized[len(prefix) :]
                 return destination / suffix
     return None
+
+
+def _looks_like_legacy_root_target(raw_target: str) -> bool:
+    normalized = raw_target.strip().lstrip("./")
+    return normalized.startswith(
+        (
+            "chapters/",
+            "sources/",
+            "manuscript/sections/",
+            "reviews/",
+            "sync/",
+            "articles/briefs/",
+            "articles/evidence/",
+            "articles/claim-maps/",
+            "articles/drafts/",
+            "articles/reviews/",
+            "articles/final/",
+        )
+    ) or normalized == "manuscript/full-draft.md"
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

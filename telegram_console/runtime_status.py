@@ -38,6 +38,7 @@ class RuntimeRecord:
     repair_decision: dict[str, Any] | None = None
     repair_iteration: int | None = None
     terminal_reason: str | None = None
+    target_resolution: dict[str, Any] | None = None
     checkpoints: tuple[dict[str, Any], ...] = ()
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     runtime_dir: str | None = None
@@ -71,6 +72,7 @@ class RuntimeRecord:
             "repair_decision": self.repair_decision,
             "repair_iteration": self.repair_iteration,
             "terminal_reason": self.terminal_reason,
+            "target_resolution": self.target_resolution,
             "checkpoints": list(self.checkpoints),
             "attachments": self.attachments,
             "runtime_dir": self.runtime_dir,
@@ -156,6 +158,7 @@ def build_runtime_status(
     repair_decision: dict[str, Any] | None = None,
     repair_iteration: int | None = None,
     terminal_reason: str | None = None,
+    target_resolution: dict[str, Any] | None = None,
     checkpoints: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     attachments: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -181,6 +184,7 @@ def build_runtime_status(
         "repair_decision": repair_decision,
         "repair_iteration": repair_iteration,
         "terminal_reason": terminal_reason,
+        "target_resolution": target_resolution,
         "checkpoints": list(checkpoints or []),
         "attachments": attachments or {},
     }
@@ -271,6 +275,7 @@ def record_from_payload(
         repair_decision=payload.get("repair_decision") if isinstance(payload.get("repair_decision"), dict) else None,
         repair_iteration=repair_iteration,
         terminal_reason=_optional_text(payload.get("terminal_reason")),
+        target_resolution=payload.get("target_resolution") if isinstance(payload.get("target_resolution"), dict) else None,
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},
         runtime_dir=str(runtime_dir) if runtime_dir else None,
@@ -304,6 +309,7 @@ def synthesize_runtime_record(runtime_dir: Path, entity_kind: str) -> RuntimeRec
             finished_at=_optional_text((result or {}).get("finished_at")),
             summary=_optional_text(request.get("target")) or _optional_text(request.get("topic")),
             failure=(result or {}).get("failure") if isinstance((result or {}).get("failure"), dict) else None,
+            target_resolution=request.get("target_resolution") if isinstance(request.get("target_resolution"), dict) else None,
             attachments=attachments,
             runtime_dir=str(runtime_dir),
             status_path=None,

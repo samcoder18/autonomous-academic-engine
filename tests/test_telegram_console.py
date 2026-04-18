@@ -44,7 +44,14 @@ from telegram_console import run_wrapper as run_wrapper_module
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
-from telegram_console.workspace import article_bundle_paths, load_work_config, load_workspace_config, relative_to_workspace
+from telegram_console.workspace import (
+    article_bundle_paths,
+    load_work_config,
+    load_workspace_config,
+    relative_to_workspace,
+    resolve_target_for_action,
+    resolve_work_selection,
+)
 
 
 TEST_WORK_ID = "demo-work"
@@ -1882,6 +1889,54 @@ class ThesisRuntimeSignalsTests(unittest.TestCase):
         self.assertEqual(signals.blockers, ())
 
 
+class WorkspaceTargetResolutionTests(unittest.TestCase):
+    def test_resolve_target_for_action_marks_thesis_legacy_root_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            selection = resolve_work_selection(workspace, target="manuscript/sections/01-introduction.md")
+
+            resolution = resolve_target_for_action(
+                workspace,
+                selection.work,
+                "thesis",
+                "write-section",
+                "manuscript/sections/01-introduction.md",
+                work_source=selection.source,
+            )
+
+            self.assertEqual(selection.source, "default")
+            self.assertEqual(resolution.normalized_path, TEST_THESIS_SECTION.as_posix())
+            self.assertEqual(resolution.resolution_mode, "legacy-root")
+            self.assertTrue(resolution.used_legacy_root_mapping)
+            self.assertEqual(resolution.warning_code, "legacy-root-target")
+            self.assertIn(TEST_THESIS_SECTION.as_posix(), resolution.warning_message or "")
+
+    def test_resolve_target_for_action_marks_article_legacy_root_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            selection = resolve_work_selection(workspace, target="articles/drafts/demo.md")
+
+            resolution = resolve_target_for_action(
+                workspace,
+                selection.work,
+                "article",
+                "review",
+                "articles/drafts/demo.md",
+                work_source=selection.source,
+            )
+
+            self.assertEqual(selection.source, "default")
+            self.assertEqual(resolution.normalized_path, TEST_ARTICLE_DRAFT.as_posix())
+            self.assertEqual(resolution.resolution_mode, "legacy-root")
+            self.assertTrue(resolution.used_legacy_root_mapping)
+            self.assertEqual(resolution.warning_code, "legacy-root-target")
+            self.assertIn(TEST_ARTICLE_DRAFT.as_posix(), resolution.warning_message or "")
+
+
 class RuntimeObservabilityWrapperTests(unittest.TestCase):
     def test_run_wrapper_writes_status_for_success_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2649,6 +2704,17 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         resolution_path.write_text(
             json.dumps(
                 {
+                    "target_resolution": {
+                        "normalized_path": TEST_THESIS_SECTION.as_posix(),
+                        "resolution_mode": "legacy-root",
+                        "work_source": "default",
+                        "used_legacy_root_mapping": True,
+                        "warning_code": "legacy-root-target",
+                        "warning_message": (
+                            "Legacy target path `manuscript/sections/01-introduction.md` "
+                            f"resolved to `{TEST_THESIS_SECTION.as_posix()}`."
+                        ),
+                    },
                     "thesis_runtime": {
                         "summary_block": {
                             "kind": "thesis-section-summary",
@@ -2692,6 +2758,7 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         self.assertTrue(any("Workflow завершен" in str(item["text"]) for item in self.api.messages))
         self.assertTrue(any("Lane summary:" in str(item["text"]) for item in self.api.messages))
         self.assertTrue(any("next=review-section" in str(item["text"]) for item in self.api.messages))
+        self.assertTrue(any("Legacy target path" in str(item["text"]) for item in self.api.messages))
 
     def test_run_export_without_mailer_keeps_telegram_delivery(self) -> None:
         self.bot._run_export(1, "default", "thesis")
@@ -3327,6 +3394,37 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertIn("Execution contract:", stdout.getvalue())
             self.assertIn("Target validation:", stdout.getvalue())
             self.assertIn("Repair policy:", stdout.getvalue())
+            self.assertIn("Target resolution mode: legacy-root", stdout.getvalue())
+            self.assertIn("Legacy target warning:", stdout.getvalue())
+            self.assertIn(TEST_THESIS_SECTION.as_posix(), stdout.getvalue())
+
+    def test_launch_thesis_manifest_includes_target_resolution_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            def fake_run_codex(_: Path, __: str, out_file: Path, ___: bool, ____: str | None) -> None:
+                write_file(out_file, "thesis output\n")
+
+            with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        ["launch-thesis", "write-section", "manuscript/sections/01-introduction.md"],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            manifests = sorted((root / "output" / "runs" / TEST_WORK_ID / "thesis").glob("*-write-section.meta.json"))
+            self.assertTrue(manifests)
+            payload = json.loads(manifests[-1].read_text(encoding="utf-8"))
+            self.assertEqual(payload["target"]["relative"], TEST_THESIS_SECTION.as_posix())
+            self.assertEqual(payload["target_resolution"]["warning_code"], "legacy-root-target")
+            self.assertEqual(payload["target_resolution"]["resolution_mode"], "legacy-root")
 
     def test_launch_academic_dry_run_uses_requested_journal_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3358,6 +3456,64 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertIn("Execution contract:", stdout.getvalue())
             self.assertIn("Terminal statuses:", stdout.getvalue())
 
+    def test_launch_academic_review_dry_run_shows_legacy_target_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "review",
+                        "articles/drafts/demo.md",
+                        "--dry-run",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Target resolution mode: legacy-root", stdout.getvalue())
+            self.assertIn("Legacy target warning:", stdout.getvalue())
+            self.assertIn(TEST_ARTICLE_DRAFT.as_posix(), stdout.getvalue())
+
+    def test_launch_academic_review_manifest_includes_target_resolution_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            def fake_run_codex(_: Path, __: str, out_file: Path, ___: bool, ____: str | None) -> None:
+                write_file(out_file, "article output\n")
+
+            with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        [
+                            "launch-academic",
+                            "review",
+                            "articles/drafts/demo.md",
+                        ],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            manifests = sorted((root / "output" / "runs" / TEST_WORK_ID / "article").glob("*-review-*.meta.json"))
+            self.assertTrue(manifests)
+            payload = json.loads(manifests[-1].read_text(encoding="utf-8"))
+            self.assertEqual(payload["target_path"], TEST_ARTICLE_DRAFT.as_posix())
+            self.assertEqual(payload["target_resolution"]["warning_code"], "legacy-root-target")
+            self.assertEqual(payload["target_resolution"]["resolution_mode"], "legacy-root")
+
     def test_launch_academic_dry_run_falls_back_to_generic_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -3386,6 +3542,42 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertIn("Requested profile: missing-profile", stdout.getvalue())
             self.assertIn("Resolved profile: ru-law-article-v1", stdout.getvalue())
             self.assertIn("Fallback profile: ru-law-article-v1", stdout.getvalue())
+
+    def test_assemble_and_export_commands_remain_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+
+            def fake_run_pandoc(input_md: Path, output_docx: Path) -> None:
+                write_file(output_docx, f"docx from {input_md}\n")
+
+            with patch.object(work_cli_module, "_run_pandoc", side_effect=fake_run_pandoc):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(["assemble-thesis"], root_dir=root)
+                self.assertEqual(code, 0)
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertTrue((root / TEST_WORK_ROOT / "thesis" / "manuscript" / "full-draft.md").exists())
+
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(["export-thesis-docx"], root_dir=root)
+                self.assertEqual(code, 0)
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertTrue((root / "output" / "docx" / TEST_WORK_ID / "thesis-draft.docx").exists())
+
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        ["export-article-docx", "articles/final/demo.md"],
+                        root_dir=root,
+                    )
+                self.assertEqual(code, 0)
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertTrue((root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx").exists())
 
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3589,6 +3781,17 @@ class TelegramConsoleCliTests(unittest.TestCase):
             workflow_resolution.write_text(
                 json.dumps(
                     {
+                        "target_resolution": {
+                            "normalized_path": TEST_THESIS_SECTION.as_posix(),
+                            "resolution_mode": "legacy-root",
+                            "work_source": "default",
+                            "used_legacy_root_mapping": True,
+                            "warning_code": "legacy-root-target",
+                            "warning_message": (
+                                "Legacy target path `manuscript/sections/01-introduction.md` "
+                                f"resolved to `{TEST_THESIS_SECTION.as_posix()}`."
+                            ),
+                        },
                         "thesis_runtime": {
                             "summary_block": {
                                 "kind": "thesis-section-summary",
@@ -3644,6 +3847,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("alpha:20260418-thesis-verify", stdout.getvalue())
             self.assertIn("Lane summary:", stdout.getvalue())
+            self.assertIn("Resolution warning:", stdout.getvalue())
             self.assertNotIn("beta:20260418-chat", stdout.getvalue())
 
             stdout = StringIO()
@@ -3664,6 +3868,8 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("workflow-run", stdout.getvalue())
             self.assertIn("next=review-section", stdout.getvalue())
+            self.assertIn("Resolution warning:", stdout.getvalue())
+            self.assertIn(TEST_THESIS_SECTION.as_posix(), stdout.getvalue())
             self.assertIn(str(workflow_manifest), stdout.getvalue())
             self.assertIn(str(workflow_trace), stdout.getvalue())
 

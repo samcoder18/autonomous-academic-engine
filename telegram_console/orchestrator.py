@@ -33,9 +33,9 @@ from .workspace import (
     list_targets_for_action,
     load_work_config,
     load_workspace_config,
-    normalize_target_for_action,
-    normalize_target_path,
     relative_to_workspace,
+    resolve_target_for_action,
+    resolve_target_path,
     resolve_work_config,
 )
 
@@ -489,7 +489,8 @@ class WorkflowOrchestrator:
         if lane == "thesis":
             if action not in THESIS_ACTIONS:
                 raise WorkflowError(f"Для диплома пока не поддерживается действие: {action}")
-            target = self._validate_target("thesis", action, target_or_topic, work_id=work_id)
+            target_resolution = self._resolve_target_for_action("thesis", action, target_or_topic, work_id=work_id)
+            target = target_resolution.normalized_path
             cmd = ["bash", "scripts/codex_thesis.sh", action, target, "--work", work_id]
             if notes_clean:
                 cmd.extend(["--notes", notes_clean])
@@ -500,7 +501,12 @@ class WorkflowOrchestrator:
             if model_override:
                 cmd.extend(["--model", model_override])
             work = self._work(work_id)
-            return cmd, {"target": target, "work_id": work.slug, "work_title": work.title}
+            return cmd, {
+                "target": target,
+                "target_resolution": target_resolution.to_dict(),
+                "work_id": work.slug,
+                "work_title": work.title,
+            }
 
         if lane == "article":
             if action not in ARTICLE_ACTIONS:
@@ -510,9 +516,11 @@ class WorkflowOrchestrator:
             if action == "article":
                 target_mode, target_value = self._resolve_article_input(target_or_topic)
                 if target_mode == "brief":
-                    brief = self._validate_target("article", "article-brief", target_value, work_id=work_id)
+                    brief_resolution = self._resolve_target_for_action("article", "article-brief", target_value, work_id=work_id)
+                    brief = brief_resolution.normalized_path
                     base.extend(["--brief", brief])
                     metadata["target"] = brief
+                    metadata["target_resolution"] = brief_resolution.to_dict()
                     metadata["input_mode"] = "brief"
                 else:
                     topic = target_value.strip()
@@ -522,9 +530,11 @@ class WorkflowOrchestrator:
                     metadata["topic"] = topic
                     metadata["input_mode"] = "topic"
             else:
-                target = self._validate_target("article", action, target_or_topic, work_id=work_id)
+                target_resolution = self._resolve_target_for_action("article", action, target_or_topic, work_id=work_id)
+                target = target_resolution.normalized_path
                 base.append(target)
                 metadata["target"] = target
+                metadata["target_resolution"] = target_resolution.to_dict()
 
             if notes_clean:
                 base.extend(["--notes", notes_clean])
@@ -558,16 +568,29 @@ class WorkflowOrchestrator:
         return ("topic", raw)
 
     def _validate_target(self, lane: str, action: str, target: str, *, work_id: str | None = None) -> str:
+        return self._resolve_target_for_action(lane, action, target, work_id=work_id).normalized_path
+
+    def _resolve_target_for_action(
+        self,
+        lane: str,
+        action: str,
+        target: str,
+        *,
+        work_id: str | None = None,
+    ) -> Any:
         work = self._work(work_id, target)
         try:
-            return normalize_target_for_action(self._workspace_config(), work, lane, action, target)
+            return resolve_target_for_action(self._workspace_config(), work, lane, action, target, work_source="explicit")
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
 
     def _normalize_relative_path(self, raw: str, *, work_id: str | None = None) -> str:
+        return self._resolve_relative_path(raw, work_id=work_id).normalized_path
+
+    def _resolve_relative_path(self, raw: str, *, work_id: str | None = None) -> Any:
         work = self._work(work_id, raw)
         try:
-            return normalize_target_path(self._workspace_config(), work, raw)
+            return resolve_target_path(self._workspace_config(), work, raw, work_source="explicit")
         except WorkspaceConfigError as exc:
             message = str(exc)
             if message.startswith("Не найден файл:"):
@@ -652,6 +675,9 @@ class WorkflowOrchestrator:
         article_runtime = self._sync_article_runtime_state(request, record)
         thesis_runtime = self._sync_thesis_runtime_state(request, record)
         resolution_payload = record.to_dict()
+        target_resolution = request.get("target_resolution")
+        if isinstance(target_resolution, dict):
+            resolution_payload["target_resolution"] = target_resolution
         if article_runtime:
             resolution_payload["article_runtime"] = article_runtime
         if thesis_runtime:
@@ -1273,6 +1299,7 @@ class WorkflowOrchestrator:
                 "bundle_state": article_runtime.get("bundle_state_manifest") if article_runtime else None,
             }
         )
+        target_resolution = request.get("target_resolution")
         write_status(
             status_path,
             build_runtime_status(
@@ -1295,6 +1322,7 @@ class WorkflowOrchestrator:
                 repair_decision=runtime_enrichment.get("repair_decision") if runtime_enrichment else None,
                 repair_iteration=runtime_enrichment.get("repair_iteration") if runtime_enrichment else None,
                 terminal_reason=_optional_text(runtime_enrichment.get("terminal_reason")) if runtime_enrichment else None,
+                target_resolution=target_resolution if isinstance(target_resolution, dict) else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
             ),

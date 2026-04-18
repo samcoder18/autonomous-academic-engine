@@ -31,6 +31,7 @@ from .standards import (
     sync_standard_profile,
 )
 from .workspace import (
+    TargetResolution,
     WorkspaceConfig,
     WorkspaceConfigError,
     WorkConfig,
@@ -39,9 +40,11 @@ from .workspace import (
     list_targets_for_action,
     load_work_config,
     load_workspace_config,
-    normalize_target_for_action,
     relative_to_workspace,
+    resolve_target_for_action,
+    resolve_target_path,
     resolve_work_config,
+    resolve_work_selection,
 )
 
 
@@ -131,12 +134,21 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
 
 def launch_thesis(root_dir: Path, args: Any) -> int:
     workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=args.work_id, target=args.target)
+    work_selection = resolve_work_selection(workspace, work_id=args.work_id, target=args.target)
+    work = work_selection.work
     if not work.thesis:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
     profile = resolve_standard_profile(root_dir, workspace, work, lane="thesis", requested_profile_id=None)
 
-    target_rel = normalize_target_for_action(workspace, work, "thesis", args.preset, args.target)
+    target_resolution = resolve_target_for_action(
+        workspace,
+        work,
+        "thesis",
+        args.preset,
+        args.target,
+        work_source=work_selection.source,
+    )
+    target_rel = target_resolution.normalized_path
     if target_rel == relative_to_workspace(workspace, work.thesis.full_draft_path):
         raise WorkspaceConfigError("Use manuscript/sections as the editable target, not the assembled full draft.")
 
@@ -184,6 +196,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
             review_path,
             sync_hint_path,
             args.model,
+            target_resolution,
             related_context,
             prompt,
         )
@@ -207,6 +220,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
                 "relative": target_rel,
                 "state": target_state,
             },
+            "target_resolution": target_resolution.to_dict(),
             "requested_profile_id": profile.requested_profile_id,
             "resolved_profile_id": profile.resolved_profile_id,
             "fallback_profile_id": profile.fallback_profile_id,
@@ -232,7 +246,8 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     workspace = load_workspace_config(root_dir)
 
     target_hint = args.brief or args.target
-    work = resolve_work_config(workspace, work_id=args.work_id, target=target_hint)
+    work_selection = resolve_work_selection(workspace, work_id=args.work_id, target=target_hint)
+    work = work_selection.work
     if not work.article:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает article lane.")
 
@@ -250,12 +265,21 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     input_brief_path: Path | None = None
     target_path: Path | None = None
     target_rel: str | None = None
+    target_resolution: TargetResolution | None = None
 
     if args.workflow == "article":
         if bool(args.topic) == bool(args.brief):
             raise WorkspaceConfigError("Для команды article нужно указать ровно один из аргументов: --topic или --brief.")
         if args.brief:
-            target_rel = normalize_target_for_action(workspace, work, "article", "article-brief", args.brief)
+            target_resolution = resolve_target_for_action(
+                workspace,
+                work,
+                "article",
+                "article-brief",
+                args.brief,
+                work_source=work_selection.source,
+            )
+            target_rel = target_resolution.normalized_path
             input_brief_path = workspace.root_dir / target_rel
         else:
             topic = args.topic.strip()
@@ -264,7 +288,15 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     else:
         if not args.target:
             raise WorkspaceConfigError(f"Команда `{args.workflow}` ожидает target-файл.")
-        target_rel = normalize_target_for_action(workspace, work, "article", args.workflow, args.target)
+        target_resolution = resolve_target_for_action(
+            workspace,
+            work,
+            "article",
+            args.workflow,
+            args.target,
+            work_source=work_selection.source,
+        )
+        target_rel = target_resolution.normalized_path
         target_path = workspace.root_dir / target_rel
 
     article_slug = _slugify_text(
@@ -351,6 +383,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             target_rel,
             article_slug,
             args.model,
+            target_resolution,
             bundle,
             bundle_state_path,
             related_context,
@@ -381,6 +414,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         "topic": topic,
         "input_brief": input_brief_rel,
         "target_path": target_rel_value,
+        "target_resolution": target_resolution.to_dict() if target_resolution else None,
         "root_dir": str(root_dir),
         "output_file": str(out_file),
         "bundle": {
@@ -528,9 +562,10 @@ def export_thesis_docx(root_dir: Path, work_id: str | None) -> int:
 
 def export_article_docx(root_dir: Path, raw_input: str, raw_output: str | None, work_id: str | None) -> int:
     workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=work_id, target=raw_input)
+    work_selection = resolve_work_selection(workspace, work_id=work_id, target=raw_input)
+    work = work_selection.work
 
-    input_rel = normalize_target_path_for_export(workspace, work, raw_input)
+    input_rel = normalize_target_path_for_export(workspace, work, raw_input, work_source=work_selection.source)
     input_path = workspace.root_dir / input_rel
     if raw_output:
         output_path = _resolve_path(root_dir, raw_output)
@@ -543,21 +578,17 @@ def export_article_docx(root_dir: Path, raw_input: str, raw_output: str | None, 
     return 0
 
 
-def normalize_target_path_for_export(workspace: WorkspaceConfig, work: WorkConfig, raw_input: str) -> str:
-    raw_path = Path(raw_input).expanduser()
-    candidates = []
-    if raw_path.is_absolute():
-        candidates.append(raw_path)
-    else:
-        candidates.append(workspace.root_dir / raw_path)
-        candidates.append(work.work_dir / raw_path)
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve(strict=True)
-        except FileNotFoundError:
-            continue
-        return resolved.relative_to(workspace.root_dir).as_posix()
-    raise WorkspaceConfigError(f"Input markdown not found: {raw_input}")
+def normalize_target_path_for_export(
+    workspace: WorkspaceConfig,
+    work: WorkConfig,
+    raw_input: str,
+    *,
+    work_source: str = "explicit",
+) -> str:
+    try:
+        return resolve_target_path(workspace, work, raw_input, work_source=work_source).normalized_path
+    except WorkspaceConfigError as exc:
+        raise WorkspaceConfigError(f"Input markdown not found: {raw_input}") from exc
 
 
 def _build_thesis_prompt(
@@ -871,6 +902,7 @@ def _print_thesis_dry_run(
     review_path: Path | None,
     sync_hint_path: Path | None,
     model: str | None,
+    target_resolution: TargetResolution,
     related_context: list[Path],
     prompt: str,
 ) -> None:
@@ -881,6 +913,10 @@ def _print_thesis_dry_run(
     print(f"Target: {target_path}")
     print(f"Target (relative): {target_rel}")
     print(f"Target state: {target_state}")
+    print(f"Target resolution mode: {target_resolution.resolution_mode}")
+    print(f"Target work source: {target_resolution.work_source}")
+    if target_resolution.warning_message:
+        print(f"Legacy target warning: {target_resolution.warning_message}")
     print(f"Search enabled: {'yes' if use_search else 'no'}")
     if review_path:
         print(f"Expected review file: {review_path}")
@@ -905,6 +941,7 @@ def _print_academic_dry_run(
     target_rel: str | None,
     article_slug: str,
     model: str | None,
+    target_resolution: TargetResolution | None,
     bundle: dict[str, Path],
     bundle_state_path: Path,
     related_context: list[Path],
@@ -923,6 +960,11 @@ def _print_academic_dry_run(
         print(f"Target: {target_path}")
     if target_rel:
         print(f"Target (relative): {target_rel}")
+    if target_resolution:
+        print(f"Target resolution mode: {target_resolution.resolution_mode}")
+        print(f"Target work source: {target_resolution.work_source}")
+        if target_resolution.warning_message:
+            print(f"Legacy target warning: {target_resolution.warning_message}")
     print(f"Article slug: {article_slug}")
     print(f"Bundle state manifest: {bundle_state_path}")
     if model:
