@@ -514,6 +514,49 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         ),
         target_validation="Validated by workspace target normalization for article review actions.",
     ),
+    ("article", "finalize"): ActionSpec(
+        lane="article",
+        action="finalize",
+        title="Article finalization",
+        summary="Scoped article finalization for checklist, final markdown, DOCX, and honest readiness gating.",
+        target_kind="article draft or final markdown",
+        prompt_rules=(
+            "Treat this as a finalizer pass, not a broad repair loop.",
+            "Use the managed review, final markdown, checklist, standards profile, and raw standards state.",
+            "Update the checklist with explicit blockers, especially primary-source and standards blockers.",
+            "Export DOCX only when final markdown and checklist make export justified.",
+            "Do not claim submission-ready if primary support, dynamic-material, or standards gates are unresolved.",
+            "If unresolved blockers remain, keep or downgrade the status to strong-draft or strong-draft-with-blockers.",
+        ),
+        deliverables=(
+            "Update final markdown only when a narrow finalizer adjustment is necessary.",
+            "Update or create the managed checklist.",
+            "Export DOCX only when justified by the checklist.",
+            "End with explicit readiness status, exported outputs, and remaining blockers.",
+        ),
+        required_checkpoints=(
+            "context-loaded",
+            "finalizer-gates-checked",
+            "checklist-updated",
+            "docx-exported-or-skipped",
+            "terminal-status-issued",
+        ),
+        terminal_statuses=ARTICLE_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "finalizer-gates-checked", "Finalizer gates checked."),
+            ExecutionTransition("finalizer-gates-checked", "completed", "Checklist and final status issued."),
+        ),
+        quality_gates=ARTICLE_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=False,
+            max_iterations=0,
+            safe_only=True,
+            triggers=(),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for article finalization actions.",
+    ),
     ("article", "repair"): ActionSpec(
         lane="article",
         action="repair",
@@ -928,6 +971,12 @@ def _article_allowed_writes(
         return tuple(
             item for item in _dedupe_allowed_writes(items) if item.name in {"article-root", "review", "requested-target", "checklist"}
         )
+    if action == "finalize":
+        return tuple(
+            item
+            for item in _dedupe_allowed_writes(items)
+            if item.name in {"article-root", "final-markdown", "checklist", "docx", "requested-target"}
+        )
     return tuple(_dedupe_allowed_writes(items))
 
 
@@ -947,6 +996,12 @@ def _article_required_outputs(action: str, bundle: dict[str, Path]) -> tuple[Req
         return (
             RequiredArtifact("review-sheet", str(bundle["review"]), "required", "Findings-first review output."),
             RequiredArtifact("checklist", str(bundle["checklist"]), "conditional", "Checklist blockers if updated during review."),
+        )
+    if action == "finalize":
+        return (
+            RequiredArtifact("final-markdown", str(bundle["final_markdown"]), "conditional", "Final markdown if updated during finalization."),
+            RequiredArtifact("checklist", str(bundle["checklist"]), "required", "Final checklist and visible blockers."),
+            RequiredArtifact("docx", str(bundle["docx"]), "conditional", "DOCX export when justified."),
         )
     return (
         RequiredArtifact("draft", str(bundle["draft"]), "conditional", "Updated article draft."),

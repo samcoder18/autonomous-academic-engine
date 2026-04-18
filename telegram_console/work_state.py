@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -111,6 +110,8 @@ def resolve_next_actions(
     known_blockers: list[dict[str, Any]],
 ) -> tuple[WorkNextAction, ...]:
     actions: list[WorkNextAction] = []
+    export_gate_active = _has_export_gate_candidate(article, thesis)
+    standards_priority = 10 if export_gate_active else 95
 
     active_run = runtime.get("active_run")
     if isinstance(active_run, dict):
@@ -139,7 +140,7 @@ def resolve_next_actions(
                 label="Refresh standards raw bundle",
                 command=f"standards-refresh {profile_id or '<profile-id>'}",
                 reason=_optional_text(raw_blocker.get("message")) or "Raw standards bundle is missing or partial.",
-                priority=10,
+                priority=standards_priority,
                 lane=_optional_text(raw_blocker.get("lane")),
                 profile_id=profile_id,
                 blocks_export=True,
@@ -157,7 +158,7 @@ def resolve_next_actions(
                 label="Review standards conflict",
                 command=f"standards-status {profile_id or '<profile-id>'}",
                 reason=_optional_text(conflict_blocker.get("message")) or "Standards profile has a visible conflict flag.",
-                priority=20,
+                priority=standards_priority + 1,
                 lane=_optional_text(conflict_blocker.get("lane")),
                 profile_id=profile_id,
                 blocks_export=True,
@@ -244,21 +245,16 @@ def resolve_next_actions(
         checklist_bundle = _first_article_bundle_missing_checklist(article)
         if checklist_bundle is not None:
             target = _article_bundle_target(checklist_bundle, preferred=("final", "draft"))
-            notes = "Finalize checklist/export readiness only; do not perform broad article repair."
             actions.append(
                 WorkNextAction(
                     action_id="article-finalize",
                     label="Finalize article checklist",
-                    command=(
-                        f"launch-academic repair {target or '<article-final-or-draft>'} "
-                        f"--notes {shlex.quote(notes)}"
-                    ),
+                    command=f"launch-academic finalize {target or '<article-final-or-draft>'}",
                     reason=f"Article bundle `{checklist_bundle.get('slug')}` has final text but no checklist.",
                     priority=55,
                     lane="article",
                     target=target,
                     intent="finalize-checklist",
-                    fallback_for="article-finalize",
                 )
             )
 
@@ -275,6 +271,18 @@ def resolve_next_actions(
                     lane="thesis",
                     target=target,
                     intent="review",
+                )
+            )
+
+        if not any(_is_work_continuation_action(item) for item in actions) and (actions or not export_gate_active):
+            actions.append(
+                WorkNextAction(
+                    action_id="draft-next",
+                    label="Draft next artifact",
+                    command="launch-thesis write-section <section> or launch-academic article --topic <topic>",
+                    reason="No managed artifacts are ready for review or export yet.",
+                    priority=90,
+                    intent="draft",
                 )
             )
 
@@ -303,17 +311,6 @@ def resolve_next_actions(
                     priority=85,
                     lane="thesis",
                     intent="export",
-                )
-            )
-        else:
-            actions.append(
-                WorkNextAction(
-                    action_id="draft-next",
-                    label="Draft next artifact",
-                    command="launch-thesis write-section <section> or launch-academic article --topic <topic>",
-                    reason="No managed artifacts are ready for review or export yet.",
-                    priority=90,
-                    intent="draft",
                 )
             )
 
@@ -709,8 +706,20 @@ def _first_work_continuation_action(actions: list[dict[str, Any]]) -> dict[str, 
     return None
 
 
+def _is_work_continuation_action(action: WorkNextAction) -> bool:
+    if action.blocks_workflow:
+        return False
+    if action.action_id.startswith("standards-") or action.action_id.startswith("export-"):
+        return False
+    return action.lane in {"thesis", "article"} or action.action_id == "draft-next"
+
+
 def _has_workflow_blocking_action(actions: list[WorkNextAction]) -> bool:
     return any(action.blocks_workflow for action in actions)
+
+
+def _has_export_gate_candidate(article: dict[str, Any], thesis: dict[str, Any]) -> bool:
+    return _first_article_export_target(article) is not None or _thesis_ready_for_export(thesis)
 
 
 def _first_blocker(
@@ -786,7 +795,7 @@ def _first_article_export_target(article: dict[str, Any]) -> str | None:
             continue
         files = bundle.get("files") if isinstance(bundle.get("files"), dict) else {}
         final_file = files.get("final") if isinstance(files.get("final"), dict) else {}
-        if final_file.get("exists") and bundle.get("checklist_present"):
+        if final_file.get("exists") and bundle.get("checklist_present") and bundle.get("review_present"):
             return _optional_text(final_file.get("path"))
     return None
 

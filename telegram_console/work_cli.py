@@ -58,7 +58,7 @@ THESIS_PRESETS = (
     "review-section",
     "style-pass",
 )
-ARTICLE_COMMANDS = ("article", "review", "repair")
+ARTICLE_COMMANDS = ("article", "review", "repair", "finalize")
 
 
 def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -> int:
@@ -352,6 +352,20 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         )
     elif args.workflow == "review":
         prompt = _build_review_prompt(
+            workspace,
+            work,
+            profile,
+            contract,
+            use_search,
+            target_path,
+            target_rel,
+            bundle,
+            bundle_state_path,
+            related_context,
+            notes_content,
+        )
+    elif args.workflow == "finalize":
+        prompt = _build_finalize_prompt(
             workspace,
             work,
             profile,
@@ -804,6 +818,54 @@ Active work:
 
 Repair input: {target_path}
 Repair input (relative): {target_rel}
+Publication profile: {profile.resolved_profile_id}
+Profile file: {profile.normalized_path}
+Web search: {search_state}
+Profile trace:
+{_format_profile_trace(profile)}
+
+Managed article bundle paths:
+{_format_bundle_block(bundle, bundle_state_path)}
+
+Nearby context candidates:
+{_format_paths_block(related_context)}
+
+Execution contract:
+{_format_execution_contract_block(contract)}
+
+Execution rules:
+{_format_string_bullets(contract.prompt_rules)}
+
+Additional notes:
+{notes_content}
+
+Deliverable:
+{_format_string_bullets(contract.deliverables)}"""
+
+
+def _build_finalize_prompt(
+    workspace: WorkspaceConfig,
+    work: WorkConfig,
+    profile: StandardProfileResolution,
+    contract: ExecutionContract,
+    use_search: bool,
+    target_path: Path | None,
+    target_rel: str | None,
+    bundle: dict[str, Path],
+    bundle_state_path: Path,
+    related_context: list[Path],
+    notes_content: str,
+) -> str:
+    search_state = "enabled by launcher" if use_search else "disabled by launcher"
+    return f"""Use $academic-finalizer, $academic-submission-evaluator, and $academic-citation-checker to finalize this legal-academic article bundle in {workspace.root_dir}.
+
+Active work:
+- Work ID: {work.slug}
+- Work title: {work.title}
+- Work canon: {work.work_canon_path}
+
+Finalization input: {target_path}
+Finalization input (relative): {target_rel}
 Publication profile: {profile.resolved_profile_id}
 Profile file: {profile.normalized_path}
 Web search: {search_state}

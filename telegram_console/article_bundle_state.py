@@ -343,6 +343,7 @@ def _active_phase_for_action(action: str | None) -> str | None:
         "article": "drafted",
         "review": "reviewed",
         "repair": "repairing",
+        "finalize": "finalizing",
     }
     return mapping.get((action or "").strip().lower()) or None
 

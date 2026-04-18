@@ -1167,6 +1167,17 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(state["suggested_next_action"])
         self.assertNotEqual(state["suggested_next_action"]["action_id"], "export-docx")
 
+    def test_work_state_suggests_export_for_clean_reviewed_article_bundle(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["known_blocker_count"], 0)
+        self.assertEqual(state["suggested_next_action"]["action_id"], "export-article-docx")
+        self.assertIn("export-article-docx", state["suggested_next_action"]["command"])
+
     def test_work_state_routes_blockers_to_repair_before_export(self) -> None:
         write_raw_manifest(self.root, "thesis-v1")
         write_raw_manifest(self.root, "ru-law-article-v1")
@@ -1229,6 +1240,12 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("export", standards_action["blocking_scope"])
         self.assertEqual(state["work_continuation_action"]["action_id"], "article-review")
 
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["suggested_next_action"]["action_id"], "standards-refresh")
+        self.assertEqual(state["work_continuation_action"]["action_id"], "draft-next")
+
         write_raw_manifest(self.root, "thesis-v1")
         write_raw_manifest(self.root, "journal-jrp")
         state = self.orchestrator.get_artifact_status("work")
@@ -1238,9 +1255,23 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertNotIn("article-standards-raw-missing", blocker_codes)
         self.assertIn("article-standards-conflict", blocker_codes)
         self.assertEqual(state["suggested_next_action"]["action_id"], "standards-review")
+        self.assertEqual(state["work_continuation_action"]["action_id"], "draft-next")
+
+    def test_work_state_prioritizes_safe_work_step_when_standards_do_not_block_export_candidate(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        (self.root / TEST_THESIS_REVIEW).unlink()
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        self.assertEqual(state["suggested_next_action"]["action_id"], "article-review")
+        standards_action = next(item for item in state["next_actions"] if item["action_id"] == "standards-refresh")
+        self.assertTrue(standards_action["blocks_export"])
+        self.assertFalse(standards_action["blocks_workflow"])
         self.assertEqual(state["work_continuation_action"]["action_id"], "article-review")
 
-    def test_work_state_marks_checklist_finalization_as_fallback_intent(self) -> None:
+    def test_work_state_marks_checklist_finalization_as_public_action(self) -> None:
         write_raw_manifest(self.root, "thesis-v1")
         write_raw_manifest(self.root, "ru-law-article-v1")
         write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
@@ -1251,10 +1282,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         action = state["suggested_next_action"]
         self.assertEqual(action["action_id"], "article-finalize")
         self.assertEqual(action["intent"], "finalize-checklist")
-        self.assertEqual(action["fallback_for"], "article-finalize")
-        self.assertIn("launch-academic repair", action["command"])
-        self.assertIn("--notes", action["command"])
-        self.assertIn("checklist", action["command"])
+        self.assertIsNone(action["fallback_for"])
+        self.assertIn("launch-academic finalize", action["command"])
+        self.assertNotIn("launch-academic repair", action["command"])
 
     def test_single_active_run_and_manifest_resolution(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
@@ -3263,6 +3293,29 @@ class ActionSpecRegistryTests(unittest.TestCase):
         self.assertTrue(any(item.name == "review-sheet" for item in contract.required_outputs))
         self.assertTrue(any(gate.gate_id == "standards-consistency" for gate in contract.quality_gates))
 
+    def test_article_finalize_contract_is_public_and_scoped(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "demo")
+
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="finalize",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=self.root / TEST_ARTICLE_FINAL,
+            target_rel=TEST_ARTICLE_FINAL.as_posix(),
+        )
+
+        self.assertEqual(contract.action, "finalize")
+        self.assertIn("submission-ready", contract.terminal_statuses)
+        self.assertFalse(contract.repair_policy.eligible)
+        self.assertTrue(any(item.name == "checklist" for item in contract.required_outputs))
+        self.assertTrue(any(item.name == "docx" for item in contract.required_outputs))
+
 
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -3738,6 +3791,33 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertIn("Target resolution mode: legacy-root", stdout.getvalue())
             self.assertIn("Legacy target warning:", stdout.getvalue())
             self.assertIn(TEST_ARTICLE_DRAFT.as_posix(), stdout.getvalue())
+
+    def test_launch_academic_finalize_dry_run_uses_public_finalizer_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "finalize",
+                        "articles/final/demo.md",
+                        "--dry-run",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Command: finalize", stdout.getvalue())
+            self.assertIn("Article finalization", stdout.getvalue())
+            self.assertIn("$academic-finalizer", stdout.getvalue())
+            self.assertIn("Target validation:", stdout.getvalue())
 
     def test_launch_academic_review_manifest_includes_target_resolution_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

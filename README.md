@@ -66,6 +66,7 @@
 - `bash scripts/codex_thesis.sh source-pack sources/02-chapter-2-regulation.md --work biometrics-vkr`
 - `bash scripts/codex_academic.sh article --topic "Правовые пределы цифровой идентификации" --work biometrics-vkr`
 - `bash scripts/codex_academic.sh review works/biometrics-vkr/articles/drafts/example.md --work biometrics-vkr`
+- `bash scripts/codex_academic.sh finalize works/biometrics-vkr/articles/final/example.md --work biometrics-vkr`
 
 Совместимость:
 

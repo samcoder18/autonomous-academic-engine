@@ -22,6 +22,7 @@ ARTICLE_ACTION_PATTERNS = {
     "article-brief": ("briefs/*.md",),
     "review": ("drafts/*.md", "final/*.md"),
     "repair": ("drafts/*.md", "final/*.md", "reviews/*.md"),
+    "finalize": ("drafts/*.md", "final/*.md"),
 }
 
 

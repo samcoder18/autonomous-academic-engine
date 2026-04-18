@@ -50,7 +50,7 @@ THESIS_ACTIONS = (
     "review-section",
     "style-pass",
 )
-ARTICLE_ACTIONS = ("article", "review", "repair")
+ARTICLE_ACTIONS = ("article", "review", "repair", "finalize")
 
 LANE_TITLES = {
     "thesis": "диплом",
@@ -67,6 +67,7 @@ ACTION_TITLES = {
     "article": "новая статья",
     "review": "рецензирование",
     "repair": "исправление",
+    "finalize": "финализация",
 }
 
 
