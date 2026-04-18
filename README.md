@@ -87,6 +87,8 @@
 - `python3 -m telegram_console.work_cli standards-status [profile-id]`
 - `python3 -m telegram_console.work_cli work-status [--json]`
 
+`work-status` показывает индекс сигналов и следующий безопасный шаг; он не заменяет верификацию источников, citation pass или repair planner.
+
 ## Telegram console
 
 Telegram console теперь умеет:

@@ -1146,6 +1146,8 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(state["thesis"]["summary"]["section_count"], 1)
         self.assertEqual(state["article"]["summary"]["bundle_count"], 1)
         self.assertEqual(state["standards"]["profiles"]["article"]["raw_status"], "available")
+        self.assertEqual(state["assessment_scope"]["depth"], "signals-only")
+        self.assertIn("source-verification", state["assessment_scope"]["does_not_replace"])
         self.assertEqual(state["known_blocker_count"], 0)
         self.assertEqual(state["suggested_next_action"]["action_id"], "article-review")
         self.assertIn("launch-academic review", state["suggested_next_action"]["command"])
@@ -1221,6 +1223,11 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("article-standards-raw-missing", blocker_codes)
         self.assertIn("article-standards-conflict", blocker_codes)
         self.assertEqual(state["suggested_next_action"]["action_id"], "standards-refresh")
+        standards_action = state["suggested_next_action"]
+        self.assertTrue(standards_action["blocks_export"])
+        self.assertFalse(standards_action["blocks_workflow"])
+        self.assertIn("export", standards_action["blocking_scope"])
+        self.assertEqual(state["work_continuation_action"]["action_id"], "article-review")
 
         write_raw_manifest(self.root, "thesis-v1")
         write_raw_manifest(self.root, "journal-jrp")
@@ -1231,6 +1238,23 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertNotIn("article-standards-raw-missing", blocker_codes)
         self.assertIn("article-standards-conflict", blocker_codes)
         self.assertEqual(state["suggested_next_action"]["action_id"], "standards-review")
+        self.assertEqual(state["work_continuation_action"]["action_id"], "article-review")
+
+    def test_work_state_marks_checklist_finalization_as_fallback_intent(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        (self.root / TEST_ARTICLE_CHECKLIST).unlink()
+
+        state = self.orchestrator.get_artifact_status("work")
+
+        action = state["suggested_next_action"]
+        self.assertEqual(action["action_id"], "article-finalize")
+        self.assertEqual(action["intent"], "finalize-checklist")
+        self.assertEqual(action["fallback_for"], "article-finalize")
+        self.assertIn("launch-academic repair", action["command"])
+        self.assertIn("--notes", action["command"])
+        self.assertIn("checklist", action["command"])
 
     def test_single_active_run_and_manifest_resolution(self) -> None:
         previous_sleep = os.environ.get("TEST_SLEEP_SECONDS")
@@ -3827,6 +3851,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("Work status:", stdout.getvalue())
+            self.assertIn("Scope: signals-only", stdout.getvalue())
             self.assertIn("Next safe action:", stdout.getvalue())
             self.assertIn("launch-academic review", stdout.getvalue())
             self.assertNotIn("{", stdout.getvalue())

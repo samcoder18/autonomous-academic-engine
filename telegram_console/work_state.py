@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,10 @@ class WorkNextAction:
     profile_id: str | None = None
     safety: str = "conservative"
     blocks_export: bool = False
+    blocks_workflow: bool = False
+    blocking_scope: tuple[str, ...] = ()
+    intent: str | None = None
+    fallback_for: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +38,10 @@ class WorkNextAction:
             "profile_id": self.profile_id,
             "safety": self.safety,
             "blocks_export": self.blocks_export,
+            "blocks_workflow": self.blocks_workflow,
+            "blocking_scope": list(self.blocking_scope),
+            "intent": self.intent,
+            "fallback_for": self.fallback_for,
         }
 
 
@@ -72,12 +81,14 @@ def build_work_state(
     )
     next_action_payloads = [item.to_dict() for item in next_actions]
     suggested_next_action = next_action_payloads[0] if next_action_payloads else None
+    work_continuation_action = _first_work_continuation_action(next_action_payloads)
 
     return {
         "version": WORK_STATE_VERSION,
         "kind": "work-state",
         "work_id": work_id,
         "work_title": work_title,
+        "assessment_scope": _assessment_scope(),
         "active_lanes": lane_list,
         "thesis": _strip_internal(thesis),
         "article": _strip_internal(article),
@@ -87,6 +98,7 @@ def build_work_state(
         "known_blocker_count": len(known_blockers),
         "next_actions": next_action_payloads,
         "suggested_next_action": suggested_next_action,
+        "work_continuation_action": work_continuation_action,
     }
 
 
@@ -112,6 +124,9 @@ def resolve_next_actions(
                 lane=_optional_text(active_run.get("lane")),
                 safety="wait",
                 blocks_export=True,
+                blocks_workflow=True,
+                blocking_scope=("new-run",),
+                intent="wait",
             )
         )
 
@@ -128,6 +143,8 @@ def resolve_next_actions(
                 lane=_optional_text(raw_blocker.get("lane")),
                 profile_id=profile_id,
                 blocks_export=True,
+                blocking_scope=("export", "submission-ready", "formal-compliance"),
+                intent="standards-refresh",
             )
         )
 
@@ -144,6 +161,8 @@ def resolve_next_actions(
                 lane=_optional_text(conflict_blocker.get("lane")),
                 profile_id=profile_id,
                 blocks_export=True,
+                blocking_scope=("export", "submission-ready", "formal-compliance"),
+                intent="standards-review",
             )
         )
 
@@ -160,6 +179,9 @@ def resolve_next_actions(
                 lane="article",
                 target=target,
                 blocks_export=True,
+                blocks_workflow=True,
+                blocking_scope=("work-continuation", "export", "submission-ready"),
+                intent="repair",
             )
         )
 
@@ -179,6 +201,9 @@ def resolve_next_actions(
                 lane="thesis",
                 target=target,
                 blocks_export=True,
+                blocks_workflow=True,
+                blocking_scope=("work-continuation", "export"),
+                intent="verify",
             )
         )
 
@@ -193,10 +218,13 @@ def resolve_next_actions(
                 priority=40,
                 lane=_optional_text(runtime_blocker.get("lane")),
                 blocks_export=True,
+                blocks_workflow=True,
+                blocking_scope=("work-continuation", "export"),
+                intent="runtime-review",
             )
         )
 
-    if not _has_blocking_action(actions):
+    if not _has_workflow_blocking_action(actions):
         review_bundle = _first_article_bundle_needing_review(article)
         if review_bundle is not None:
             target = _article_bundle_target(review_bundle, preferred=("draft", "final", "brief"))
@@ -209,21 +237,28 @@ def resolve_next_actions(
                     priority=50,
                     lane="article",
                     target=target,
+                    intent="review",
                 )
             )
 
         checklist_bundle = _first_article_bundle_missing_checklist(article)
         if checklist_bundle is not None:
             target = _article_bundle_target(checklist_bundle, preferred=("final", "draft"))
+            notes = "Finalize checklist/export readiness only; do not perform broad article repair."
             actions.append(
                 WorkNextAction(
                     action_id="article-finalize",
                     label="Finalize article checklist",
-                    command=f"launch-academic repair {target or '<article-final-or-draft>'}",
+                    command=(
+                        f"launch-academic repair {target or '<article-final-or-draft>'} "
+                        f"--notes {shlex.quote(notes)}"
+                    ),
                     reason=f"Article bundle `{checklist_bundle.get('slug')}` has final text but no checklist.",
                     priority=55,
                     lane="article",
                     target=target,
+                    intent="finalize-checklist",
+                    fallback_for="article-finalize",
                 )
             )
 
@@ -239,6 +274,7 @@ def resolve_next_actions(
                     priority=60,
                     lane="thesis",
                     target=target,
+                    intent="review",
                 )
             )
 
@@ -254,6 +290,7 @@ def resolve_next_actions(
                     priority=80,
                     lane="article",
                     target=article_export,
+                    intent="export",
                 )
             )
         elif _thesis_ready_for_export(thesis):
@@ -265,6 +302,7 @@ def resolve_next_actions(
                     reason="Thesis sections are reviewed and no known blockers are visible.",
                     priority=85,
                     lane="thesis",
+                    intent="export",
                 )
             )
         else:
@@ -275,6 +313,7 @@ def resolve_next_actions(
                     command="launch-thesis write-section <section> or launch-academic article --topic <topic>",
                     reason="No managed artifacts are ready for review or export yet.",
                     priority=90,
+                    intent="draft",
                 )
             )
 
@@ -293,9 +332,11 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
     standards_profiles = state.get("standards", {}).get("profiles", {})
     runtime = state.get("runtime", {})
     next_action = state.get("suggested_next_action")
+    continuation_action = state.get("work_continuation_action")
 
     lines = [
         f"Work status: {state.get('work_title') or 'n/a'} (`{state.get('work_id') or 'n/a'}`)",
+        "Scope: signals-only; not source verification or repair planning",
         f"Lanes: {', '.join(state.get('active_lanes') or []) or 'none'}",
         (
             "Thesis: "
@@ -331,6 +372,11 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
             lines.append(f"Reason: {reason}")
     else:
         lines.append("Next safe action: none")
+    if isinstance(continuation_action, dict):
+        next_command = next_action.get("command") if isinstance(next_action, dict) else None
+        continuation_command = continuation_action.get("command")
+        if continuation_command and continuation_command != next_command:
+            lines.append(f"Unblocked work action: {continuation_command}")
     return "\n".join(lines)
 
 
@@ -338,6 +384,7 @@ def format_work_state_dashboard_lines(state: dict[str, Any]) -> list[str]:
     thesis_summary = state.get("thesis", {}).get("summary", {})
     article_summary = state.get("article", {}).get("summary", {})
     next_action = state.get("suggested_next_action")
+    continuation_action = state.get("work_continuation_action")
     lines = [
         (
             "Work status: "
@@ -350,6 +397,11 @@ def format_work_state_dashboard_lines(state: dict[str, Any]) -> list[str]:
         lines.append(f"Что дальше: {next_action.get('command') or next_action.get('label')}")
     else:
         lines.append("Что дальше: нет безопасного автоматического шага")
+    if isinstance(continuation_action, dict):
+        next_command = next_action.get("command") if isinstance(next_action, dict) else None
+        continuation_command = continuation_action.get("command")
+        if continuation_command and continuation_command != next_command:
+            lines.append(f"Можно параллельно: {continuation_command}")
     return lines
 
 
@@ -632,8 +684,33 @@ def _strip_internal(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key != "blockers"}
 
 
-def _has_blocking_action(actions: list[WorkNextAction]) -> bool:
-    return any(action.blocks_export for action in actions)
+def _assessment_scope() -> dict[str, Any]:
+    return {
+        "depth": "signals-only",
+        "readiness_claim": "none",
+        "does_not_replace": [
+            "source-verification",
+            "citation-checking",
+            "standards-review",
+            "repair-planning",
+        ],
+    }
+
+
+def _first_work_continuation_action(actions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for action in actions:
+        if action.get("blocks_workflow"):
+            continue
+        action_id = _optional_text(action.get("action_id")) or ""
+        if action_id.startswith("standards-") or action_id.startswith("export-"):
+            continue
+        if action.get("lane") in {"thesis", "article"} or action_id == "draft-next":
+            return action
+    return None
+
+
+def _has_workflow_blocking_action(actions: list[WorkNextAction]) -> bool:
+    return any(action.blocks_workflow for action in actions)
 
 
 def _first_blocker(
