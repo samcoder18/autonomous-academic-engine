@@ -18,6 +18,11 @@ from telegram_console.agent_chat import (
     AgentTurnNotification,
     ProjectChatState,
 )
+from telegram_console.action_specs import (
+    build_article_execution_contract,
+    build_thesis_execution_contract,
+    list_action_specs,
+)
 from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
 from telegram_console.config import TelegramConsoleConfig
 from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
@@ -2062,6 +2067,101 @@ class TelegramConsoleBotProjectSelectionTests(unittest.TestCase):
         self.assertEqual(self.chat.started[0]["prompt"], "/resetchat")
 
 
+class ActionSpecRegistryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def load_active_work(self):
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        return workspace, work
+
+    def test_registry_covers_public_launch_actions(self) -> None:
+        thesis_actions = {spec.action for spec in list_action_specs("thesis")}
+        article_actions = {spec.action for spec in list_action_specs("article")}
+
+        self.assertEqual(thesis_actions, set(work_cli_module.THESIS_PRESETS))
+        self.assertEqual(article_actions, set(work_cli_module.ARTICLE_COMMANDS))
+
+    def test_thesis_contract_resolution_exposes_allowed_writes_and_repair_policy(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="thesis", requested_profile_id=None)
+        target_path = self.root / TEST_THESIS_SECTION
+        contract = build_thesis_execution_contract(
+            work=work,
+            profile=profile,
+            action="verify",
+            target_path=target_path,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[
+                self.root / "AGENTS.md",
+                self.root / "workspace.toml",
+                work.work_canon_path,
+                target_path,
+            ],
+            review_path=self.root / TEST_THESIS_REVIEW,
+            sync_hint_path=work.thesis.sync_dir / "{date}-verify-01-introduction.md",
+        )
+
+        self.assertEqual(contract.lane, "thesis")
+        self.assertEqual(contract.action, "verify")
+        self.assertIn("blocked-primary-support", contract.terminal_statuses)
+        self.assertTrue(contract.repair_policy.eligible)
+        self.assertEqual(contract.repair_policy.max_iterations, 1)
+        self.assertTrue(contract.repair_policy.safe_only)
+        allowed_paths = {item.path for item in contract.allowed_write_scopes}
+        self.assertIn(str(target_path), allowed_paths)
+        self.assertIn(str(work.thesis.sync_dir), allowed_paths)
+        self.assertTrue(any(item.name == "target-file" for item in contract.required_outputs))
+        self.assertTrue(any(gate.gate_id == "dynamic-material-refresh" for gate in contract.quality_gates))
+
+    def test_article_contract_resolution_exposes_terminal_statuses_and_bundle_outputs(self) -> None:
+        workspace, work = self.load_active_work()
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = {
+            "brief": self.root / TEST_ARTICLE_BRIEF,
+            "evidence_pack": self.root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+            "claim_map": self.root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+            "draft": self.root / TEST_ARTICLE_DRAFT,
+            "review": self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md",
+            "final_markdown": self.root / TEST_ARTICLE_FINAL,
+            "checklist": self.root / TEST_ARTICLE_CHECKLIST,
+            "docx": self.root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx",
+        }
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="review",
+            related_context=[
+                self.root / "AGENTS.md",
+                self.root / "workspace.toml",
+                work.work_canon_path,
+                self.root / TEST_ARTICLE_DRAFT,
+            ],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=self.root / TEST_ARTICLE_DRAFT,
+            target_rel=TEST_ARTICLE_DRAFT.as_posix(),
+        )
+
+        self.assertEqual(contract.lane, "article")
+        self.assertEqual(contract.action, "review")
+        self.assertEqual(
+            contract.terminal_statuses,
+            ("submission-ready", "strong-draft", "strong-draft-with-blockers"),
+        )
+        self.assertTrue(contract.repair_policy.eligible)
+        self.assertEqual(contract.repair_policy.max_iterations, 2)
+        self.assertTrue(any(item.name == "review-sheet" for item in contract.required_outputs))
+        self.assertTrue(any(gate.gate_id == "standards-consistency" for gate in contract.quality_gates))
+
+
 class TelegramConsoleCliTests(unittest.TestCase):
     def test_standards_intake_creates_manifest_and_normalized_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2174,6 +2274,9 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertIn("Requested profile: sogu-vkr-2025", stdout.getvalue())
             self.assertIn("Resolved profile: sogu-vkr-2025", stdout.getvalue())
             self.assertIn("meta/standards/raw/sogu-vkr-2025", stdout.getvalue())
+            self.assertIn("Execution contract:", stdout.getvalue())
+            self.assertIn("Target validation:", stdout.getvalue())
+            self.assertIn("Repair policy:", stdout.getvalue())
 
     def test_launch_academic_dry_run_uses_requested_journal_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2202,6 +2305,8 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("Requested profile: journal-jrp", stdout.getvalue())
             self.assertIn("Resolved profile: journal-jrp", stdout.getvalue())
+            self.assertIn("Execution contract:", stdout.getvalue())
+            self.assertIn("Terminal statuses:", stdout.getvalue())
 
     def test_launch_academic_dry_run_falls_back_to_generic_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

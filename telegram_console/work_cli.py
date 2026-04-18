@@ -11,6 +11,11 @@ import shlex
 import subprocess
 import sys
 
+from .action_specs import (
+    ExecutionContract,
+    build_article_execution_contract,
+    build_thesis_execution_contract,
+)
 from .standards import (
     StandardProfileResolution,
     format_profile_resolution_lines,
@@ -136,11 +141,21 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
     sync_hint_path = _sync_path_for_target(work, args.preset, target_rel)
     related_context = _thesis_related_context(workspace, work, target_path, profile)
     notes_content = _read_notes(root_dir, args.notes)
+    contract = build_thesis_execution_contract(
+        work=work,
+        profile=profile,
+        action=args.preset,
+        target_path=target_path,
+        target_rel=target_rel,
+        related_context=related_context,
+        review_path=review_path,
+        sync_hint_path=sync_hint_path,
+    )
     prompt = _build_thesis_prompt(
         workspace,
         work,
         profile,
-        args.preset,
+        contract,
         target_path,
         target_rel,
         target_state,
@@ -155,7 +170,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
         _print_thesis_dry_run(
             work,
             profile,
-            args.preset,
+            contract,
             target_path,
             target_rel,
             target_state,
@@ -199,6 +214,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
             "expected_review_file": str(review_path) if review_path else None,
             "sync_hint_file": str(sync_hint_path) if sync_hint_path else None,
             "related_context": [str(path) for path in related_context],
+            "execution_contract": contract.to_dict(),
         },
     )
     print(f"Saved final message to {out_file}")
@@ -260,12 +276,24 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         target_path,
         bundle,
     )
+    contract = build_article_execution_contract(
+        work=work,
+        profile=profile,
+        action=args.workflow,
+        related_context=related_context,
+        bundle=bundle,
+        topic=topic,
+        input_brief_path=input_brief_path,
+        target_path=target_path,
+        target_rel=target_rel,
+    )
 
     if args.workflow == "article":
         prompt = _build_article_prompt(
             workspace,
             work,
             profile,
+            contract,
             use_search,
             topic,
             input_brief_path,
@@ -278,6 +306,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             workspace,
             work,
             profile,
+            contract,
             use_search,
             target_path,
             target_rel,
@@ -290,6 +319,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             workspace,
             work,
             profile,
+            contract,
             use_search,
             target_path,
             target_rel,
@@ -301,7 +331,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     if args.dry_run:
         _print_academic_dry_run(
             work,
-            args.workflow,
+            contract,
             profile,
             use_search,
             topic,
@@ -354,6 +384,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
                 "docx": str(bundle["docx"]),
             },
             "related_context": [str(path) for path in related_context],
+            "execution_contract": contract.to_dict(),
         },
     )
     print(f"Saved final message to {out_file}")
@@ -468,7 +499,7 @@ def _build_thesis_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
     profile: StandardProfileResolution,
-    preset: str,
+    contract: ExecutionContract,
     target_path: Path,
     target_rel: str,
     target_state: str,
@@ -483,9 +514,24 @@ def _build_thesis_prompt(
     review_trace = f"- Preferred review artifact path: {review_path}" if review_path else "- No dedicated review artifact path was precomputed for this run."
     sync_trace = f"- Preferred sync checkpoint path: {sync_hint_path}" if sync_hint_path else "- No sync checkpoint path was precomputed for this run."
     profile_trace = _format_profile_trace(profile)
-
-    prompts = {
-        "full-cycle": f"""Use $thesis-workflow-orchestrator to handle this thesis task end-to-end in {workspace.root_dir}.
+    action_intro = {
+        "full-cycle": f"Use $thesis-workflow-orchestrator to handle this thesis task end-to-end in {workspace.root_dir}.",
+        "source-pack": f"Use $thesis-research-synthesizer and $thesis-source-verifier for this thesis source-package task in the active work `{work.slug}`.",
+        "verify": f"Use $thesis-source-verifier and $thesis-citation-checker for this verification pass in the active work `{work.slug}`.",
+        "write-section": f"Use $thesis-draft-writer, $thesis-source-verifier, and $thesis-citation-checker to draft or expand this thesis section in the active work `{work.slug}`.",
+        "review-section": f"Use $thesis-argument-critic and $thesis-citation-checker to review this thesis section in the active work `{work.slug}`.",
+        "style-pass": f"Use $thesis-style-editor for a final style refinement pass on this checked thesis text in the active work `{work.slug}`.",
+    }
+    target_label = {
+        "full-cycle": "Target artifact",
+        "source-pack": "Target source package",
+        "verify": "Target file",
+        "write-section": "Target section",
+        "review-section": "Target section",
+        "style-pass": "Target file",
+    }[contract.action]
+    standards_block = f"Standards profile:\n{profile_trace}\n" if contract.action != "review-section" else ""
+    return f"""{action_intro[contract.action]}
 
 Active work:
 - Work ID: {work.slug}
@@ -494,25 +540,18 @@ Active work:
 - Work canon: {work.work_canon_path}
 - Work config: {work.work_dir / 'work.toml'}
 
-Target artifact: {target_path}
+{target_label}: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
-Standards profile:
-{profile_trace}
-
-Nearby context candidates:
+{standards_block}Nearby context candidates:
 {nearby_context}
 
+Execution contract:
+{_format_execution_contract_block(contract)}
+
 Execution rules:
-- Open AGENTS.md, workspace.toml, the active work's work.toml, work-canon.md, and meta/master-protocol.md before editing.
-- Use the appropriate internal chain across structure, research, verification, drafting, citations, criticism, and style.
-- Write canonical thesis text only inside the active work bundle under works/{work.slug}/thesis/.
-- For dynamic legal material, verify against up-to-date official or primary sources and use web search when needed.
-- If you safely skip a workflow step, record the reason in a sync artifact inside the active work.
-- If you update a manuscript section, rebuild with scripts/assemble_thesis.sh --work {work.slug}.
-- If the task explicitly asks for Word output or reaches a polished section checkpoint, export DOCX with scripts/export_docx.sh --work {work.slug}.
-- Do not optimize for detector bypass. Optimize for independent analysis, reliable sourcing, and natural academic prose.
+{_format_string_bullets(contract.prompt_rules)}
 
 Operational trace:
 {sync_trace}
@@ -522,163 +561,14 @@ Additional notes:
 {notes_content}
 
 Deliverable:
-- Make the changes directly in files.
-- Update the work-local sync/ if the run produces a meaningful checkpoint.
-- End with a concise summary of changed files, verification performed, and remaining risks.""",
-        "source-pack": f"""Use $thesis-research-synthesizer and $thesis-source-verifier for this thesis source-package task in the active work `{work.slug}`.
-
-Target source package: {target_path}
-Target path (relative): {target_rel}
-Target state: {target_state}
-Web search: {search_state}
-Standards profile:
-{profile_trace}
-
-Nearby context candidates:
-{nearby_context}
-
-Execution rules:
-- Build or update the package using templates/source-package-passport.md.
-- Prefer primary and official sources for law, case law, regulator guidance, and statistics.
-- Record verification dates for dynamic materials.
-- Mark what is verified, what still needs re-checking, and what remains analytical rather than factual.
-- Keep the package compact and thesis-oriented rather than encyclopedic.
-
-Operational trace:
-{sync_trace}
-
-Additional notes:
-{notes_content}
-
-Deliverable:
-- Update the target package directly.
-- Update the work-local sync/ if the package meaningfully changes the working baseline.
-- End with a concise summary of sources added, sources verified, and gaps that still remain.""",
-        "verify": f"""Use $thesis-source-verifier and $thesis-citation-checker for this verification pass in the active work `{work.slug}`.
-
-Target file: {target_path}
-Target path (relative): {target_rel}
-Target state: {target_state}
-Web search: {search_state}
-Standards profile:
-{profile_trace}
-
-Nearby context candidates:
-{nearby_context}
-
-Execution rules:
-- Check significant legal, factual, and statistical claims for source support.
-- For dynamic materials, verify against current official or primary sources and use web search when needed.
-- Narrow or mark unsafe claims instead of leaving them overstated.
-- Strengthen citations or footnote hygiene where appropriate.
-- Do not do a broad stylistic rewrite unless a wording change is necessary to restore accuracy.
-
-Operational trace:
-{sync_trace}
-{review_trace}
-
-Additional notes:
-{notes_content}
-
-Deliverable:
-- Update the target file if factual or citation fixes are needed.
-- If verification materially changes work assumptions, update the work-local sync/.
-- End with a concise summary of what was verified, what was corrected, and what still needs follow-up.""",
-        "write-section": f"""Use $thesis-draft-writer, $thesis-source-verifier, and $thesis-citation-checker to draft or expand this thesis section in the active work `{work.slug}`.
-
-Target section: {target_path}
-Target path (relative): {target_rel}
-Target state: {target_state}
-Web search: {search_state}
-Standards profile:
-{profile_trace}
-
-Nearby context candidates:
-{nearby_context}
-
-Execution rules:
-- Open the relevant brief, source packages, workspace docs, and work canon before writing.
-- Draft only from verified sources or clearly marked analytical conclusions.
-- Keep the voice academic, specific, and legally grounded.
-- Add or maintain Markdown footnotes where source support is already pinned.
-- If you safely skip a workflow step, record the reason in the work-local sync/.
-- If the target is inside the manuscript sections, rebuild the manuscript after changes.
-
-Operational trace:
-{sync_trace}
-{review_trace}
-
-Additional notes:
-{notes_content}
-
-Deliverable:
-- Update the section directly.
-- Update the work-local sync/ if the section reaches a meaningful checkpoint.
-- End with a concise summary of what was written, which sources were relied on, and what remains unverified or incomplete.""",
-        "review-section": f"""Use $thesis-argument-critic and $thesis-citation-checker to review this thesis section in the active work `{work.slug}`.
-
-Target section: {target_path}
-Target path (relative): {target_rel}
-Target state: {target_state}
-Web search: {search_state}
-
-Nearby context candidates:
-{nearby_context}
-
-Execution rules:
-- Review the section for logic gaps, overclaims, repetition, weak transitions, and citation issues.
-- Create or update the review artifact exactly here: {review_path}
-- Use templates/chapter-review-sheet.md as the review structure.
-- Keep the primary output findings-first.
-- Do not rewrite the manuscript broadly; only make trivial citation-hygiene fixes if they are obvious and safe.
-
-Operational trace:
-{sync_trace}
-
-Additional notes:
-{notes_content}
-
-Deliverable:
-- Update or create {review_path}
-- Update the work-local sync/ if the review changes priorities or safely skips any expected check.
-- End with the key findings first, then a brief note on any small fixes made.""",
-        "style-pass": f"""Use $thesis-style-editor for a final style refinement pass on this checked thesis text in the active work `{work.slug}`.
-
-Target file: {target_path}
-Target path (relative): {target_rel}
-Target state: {target_state}
-Web search: {search_state}
-Standards profile:
-{profile_trace}
-
-Nearby context candidates:
-{nearby_context}
-
-Execution rules:
-- Improve natural academic Russian, paragraph rhythm, specificity, and authorial voice.
-- Do not change the substantive meaning of claims unless a tiny narrowing is needed for credibility.
-- Do not optimize for detector bypass or mechanical uniqueness.
-- Remove stock transitions and machine-flat phrasing where possible.
-- If the target is inside manuscript sections, rebuild the manuscript after changes.
-
-Operational trace:
-{sync_trace}
-{review_trace}
-
-Additional notes:
-{notes_content}
-
-Deliverable:
-- Update the target file directly.
-- End with a concise summary of stylistic improvements and any residual sections that still sound too generic.""",
-    }
-    return prompts[preset]
+{_format_string_bullets(contract.deliverables)}"""
 
 
 def _build_article_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
     profile: StandardProfileResolution,
+    contract: ExecutionContract,
     use_search: bool,
     topic: str | None,
     input_brief_path: Path | None,
@@ -716,34 +606,24 @@ Managed article bundle paths:
 Nearby context candidates:
 {_format_paths_block(related_context)}
 
+Execution contract:
+{_format_execution_contract_block(contract)}
+
 Workflow requirements:
-- Open README.md, AGENTS.md, workspace.toml, the active work's work.toml, work-canon.md, meta/master-protocol.md, the active profile, and the article templates before editing.
-- Start with $academic-intake and normalize the request into the managed brief path.
-- Then use $academic-source-acquirer, $academic-source-verifier, and $academic-evidence-cartographer before serious drafting.
-- For law, case law, regulator guidance, and statistics, final authority must be official or primary.
-- Secondary literature is interpretive support, not a substitute for primary verification.
-- Proprietary legal databases and aggregators may be used only as navigational support.
-- Build or update the evidence pack and claim map so each significant claim has an evidence trace or an explicit analytical status.
-- Draft with $academic-draft-writer only from verified support or clearly marked analytical conclusions.
-- Run $academic-citation-checker, $academic-counterargument-critic, and $academic-submission-evaluator before finalization.
-- If blockers remain, use $academic-repair-orchestrator and do not overstate readiness.
-- Repair logic must stay finite. If strong primary gaps remain, downgrade to `strong-draft-with-blockers`.
-- Finish with $academic-finalizer: produce final Markdown, checklist, and DOCX via scripts/export_academic_docx.sh --work {work.slug}.
-- If relevant official raw formatting standards are missing or conflicting, reflect that as a blocker in the checklist and do not overstate formal submission readiness.
+{_format_string_bullets(contract.prompt_rules)}
 
 Additional notes:
 {notes_content}
 
 Deliverable:
-- Update the managed article bundle directly.
-- End with the explicit status `submission-ready`, `strong-draft`, or `strong-draft-with-blockers`.
-- Summarize changed files, verification performed, exported outputs, and remaining blockers."""
+{_format_string_bullets(contract.deliverables)}"""
 
 
 def _build_review_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
     profile: StandardProfileResolution,
+    contract: ExecutionContract,
     use_search: bool,
     target_path: Path | None,
     target_rel: str | None,
@@ -773,26 +653,24 @@ Managed article bundle paths:
 Nearby context candidates:
 {_format_paths_block(related_context)}
 
+Execution contract:
+{_format_execution_contract_block(contract)}
+
 Execution rules:
-- Treat this as an article-lane review scoped to the active work.
-- Review source integrity, primary support, dynamic materials, counterarguments, composition, citations, and checklist blockers.
-- Use templates/article-review-sheet.md and update the review file exactly here: {bundle['review']}
-- Verify dynamic legal material against current official or primary sources when needed.
-- Output a findings-first review with the verdict `submission-ready`, `strong-draft`, or `strong-draft-with-blockers`.
-- Do not broadly rewrite the target file; only make tiny safe citation or factual fixes if they are obvious and necessary.
+{_format_string_bullets(contract.prompt_rules)}
 
 Additional notes:
 {notes_content}
 
 Deliverable:
-- Update or create {bundle['review']}
-- End with the key findings first, then the explicit verdict and next repair priorities."""
+{_format_string_bullets(contract.deliverables)}"""
 
 
 def _build_repair_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
     profile: StandardProfileResolution,
+    contract: ExecutionContract,
     use_search: bool,
     target_path: Path | None,
     target_rel: str | None,
@@ -822,22 +700,17 @@ Managed article bundle paths:
 Nearby context candidates:
 {_format_paths_block(related_context)}
 
+Execution contract:
+{_format_execution_contract_block(contract)}
+
 Execution rules:
-- Prioritize primary-source blockers, unsupported claims, and missing caveats before style or polish.
-- Use the companion review file if it exists: {bundle['review']}
-- Keep the repair inside article-lane artifacts only.
-- Do not hide unresolved blockers behind nicer prose.
-- Re-run evaluator logic before finalization.
-- If relevant raw formatting standards are still missing or conflicting, preserve that blocker in the checklist.
-- Finish by updating the active draft or final markdown, the checklist, and DOCX export when justified.
-- If blockers remain after reasonable repair, keep or downgrade the status to `strong-draft-with-blockers`.
+{_format_string_bullets(contract.prompt_rules)}
 
 Additional notes:
 {notes_content}
 
 Deliverable:
-- Update the relevant article bundle files directly.
-- End with the explicit post-repair status, changed files, and remaining blockers."""
+{_format_string_bullets(contract.deliverables)}"""
 
 
 def _thesis_related_context(
@@ -920,7 +793,7 @@ def _article_related_context(
 def _print_thesis_dry_run(
     work: WorkConfig,
     profile: StandardProfileResolution,
-    preset: str,
+    contract: ExecutionContract,
     target_path: Path,
     target_rel: str,
     target_state: str,
@@ -934,7 +807,7 @@ def _print_thesis_dry_run(
     print(f"Work: {work.slug}")
     for line in format_profile_resolution_lines(profile):
         print(line)
-    print(f"Preset: {preset}")
+    print(f"Preset: {contract.action}")
     print(f"Target: {target_path}")
     print(f"Target (relative): {target_rel}")
     print(f"Target state: {target_state}")
@@ -945,6 +818,7 @@ def _print_thesis_dry_run(
         print(f"Sync hint file: {sync_hint_path}")
     if model:
         print(f"Model: {model}")
+    print(f"Execution contract:\n{_format_execution_contract_block(contract)}")
     print(f"Related context:\n{_format_paths_block(related_context)}")
     print()
     print(prompt)
@@ -952,7 +826,7 @@ def _print_thesis_dry_run(
 
 def _print_academic_dry_run(
     work: WorkConfig,
-    workflow: str,
+    contract: ExecutionContract,
     profile: StandardProfileResolution,
     use_search: bool,
     topic: str | None,
@@ -966,7 +840,7 @@ def _print_academic_dry_run(
     prompt: str,
 ) -> None:
     print(f"Work: {work.slug}")
-    print(f"Command: {workflow}")
+    print(f"Command: {contract.action}")
     for line in format_profile_resolution_lines(profile):
         print(line)
     print(f"Search enabled: {'yes' if use_search else 'no'}")
@@ -981,6 +855,7 @@ def _print_academic_dry_run(
     print(f"Article slug: {article_slug}")
     if model:
         print(f"Model: {model}")
+    print(f"Execution contract:\n{_format_execution_contract_block(contract)}")
     print(f"Managed bundle paths:\n{_format_bundle_block(bundle)}")
     print(f"Related context:\n{_format_paths_block(related_context)}")
     print()
@@ -1071,6 +946,61 @@ def _format_bundle_block(bundle: dict[str, Path]) -> str:
             f"- Expected DOCX: {bundle['docx']}",
         ]
     )
+
+
+def _format_execution_contract_block(contract: ExecutionContract) -> str:
+    lines = [
+        f"- Action: {contract.lane}/{contract.action}",
+        f"- Title: {contract.title}",
+        f"- Summary: {contract.summary}",
+        f"- Target kind: {contract.target_kind}",
+        f"- Target validation: {contract.target_validation}",
+        f"- Required checkpoints: {', '.join(contract.required_checkpoints)}",
+        f"- Terminal statuses: {', '.join(contract.terminal_statuses)}",
+        (
+            "- Repair policy: "
+            f"eligible={'yes' if contract.repair_policy.eligible else 'no'}, "
+            f"max_iterations={contract.repair_policy.max_iterations}, "
+            f"safe_only={'yes' if contract.repair_policy.safe_only else 'no'}"
+        ),
+    ]
+    if contract.required_context:
+        lines.append("- Required context:")
+        lines.extend(
+            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]"
+            for artifact in contract.required_context
+        )
+    if contract.allowed_write_scopes:
+        lines.append("- Allowed writes:")
+        lines.extend(
+            f"  - {item.name}: {item.path}"
+            for item in contract.allowed_write_scopes
+        )
+    if contract.required_outputs:
+        lines.append("- Required outputs:")
+        lines.extend(
+            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]"
+            for artifact in contract.required_outputs
+        )
+    if contract.quality_gates:
+        lines.append("- Quality gates:")
+        lines.extend(
+            f"  - {gate.gate_id}: {gate.description}"
+            for gate in contract.quality_gates
+        )
+    if contract.transitions:
+        lines.append("- Transitions:")
+        lines.extend(
+            f"  - {item.from_phase} -> {item.to_phase}: {item.completion_signal}"
+            for item in contract.transitions
+        )
+    return "\n".join(lines)
+
+
+def _format_string_bullets(items: tuple[str, ...]) -> str:
+    if not items:
+        return "- none"
+    return "\n".join(f"- {item}" for item in items)
 
 
 def _dedupe_existing(paths: list[Path]) -> list[Path]:
