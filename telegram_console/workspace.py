@@ -130,6 +130,12 @@ class TargetResolution:
         }
 
 
+@dataclass(frozen=True)
+class LegacyTargetMatch:
+    prefix: str
+    resolved_path: Path
+
+
 def load_workspace_config(root_dir: str | Path) -> WorkspaceConfig:
     root = Path(root_dir).expanduser().resolve()
     workspace_file = root / "workspace.toml"
@@ -364,13 +370,11 @@ def resolve_target_path(
     if raw_path.is_absolute():
         candidates.append(("absolute", raw_path, False))
     else:
-        mapped = _map_legacy_target(work, raw)
-        if mapped is not None and _looks_like_legacy_root_target(raw):
-            candidates.append(("legacy-root", mapped, True))
+        legacy_match = _match_legacy_target(work, raw)
+        if legacy_match is not None:
+            candidates.append(("legacy-root", legacy_match.resolved_path, True))
         candidates.append(("workspace-relative", workspace.root_dir / raw_path, False))
         candidates.append(("work-relative", work.work_dir / raw_path, False))
-        if mapped is not None and not _looks_like_legacy_root_target(raw):
-            candidates.append(("legacy-root", mapped, True))
 
     seen: set[tuple[str, str]] = set()
     for resolution_mode, candidate, used_legacy_root_mapping in candidates:
@@ -602,59 +606,44 @@ def _merge_targets(*groups: list[str]) -> list[str]:
     return merged
 
 
-def _map_legacy_target(work: WorkConfig, raw_target: str) -> Path | None:
+def _match_legacy_target(work: WorkConfig, raw_target: str) -> LegacyTargetMatch | None:
     normalized = raw_target.strip().lstrip("./")
-    if work.thesis:
-        thesis_map = {
-            "chapters/": work.thesis.chapters_dir,
-            "sources/": work.thesis.sources_dir,
-            "manuscript/sections/": work.thesis.manuscript_sections_dir,
-            "reviews/": work.thesis.reviews_dir,
-            "sync/": work.thesis.sync_dir,
-            "manuscript/full-draft.md": work.thesis.full_draft_path,
-        }
-        for prefix, destination in thesis_map.items():
-            if normalized == prefix and destination.is_file():
-                return destination
-            if normalized.startswith(prefix):
-                if destination.is_file():
-                    return destination
-                suffix = normalized[len(prefix) :]
-                return destination / suffix
-
-    if work.article:
-        article_map = {
-            "articles/briefs/": work.article.briefs_dir,
-            "articles/evidence/": work.article.evidence_dir,
-            "articles/claim-maps/": work.article.claim_maps_dir,
-            "articles/drafts/": work.article.drafts_dir,
-            "articles/reviews/": work.article.reviews_dir,
-            "articles/final/": work.article.final_dir,
-        }
-        for prefix, destination in article_map.items():
-            if normalized.startswith(prefix):
-                suffix = normalized[len(prefix) :]
-                return destination / suffix
+    for prefix, destination in _legacy_target_map(work).items():
+        if normalized == prefix and destination.is_file():
+            return LegacyTargetMatch(prefix=prefix, resolved_path=destination)
+        if normalized.startswith(prefix):
+            if destination.is_file():
+                return LegacyTargetMatch(prefix=prefix, resolved_path=destination)
+            suffix = normalized[len(prefix) :]
+            return LegacyTargetMatch(prefix=prefix, resolved_path=destination / suffix)
     return None
 
 
-def _looks_like_legacy_root_target(raw_target: str) -> bool:
-    normalized = raw_target.strip().lstrip("./")
-    return normalized.startswith(
-        (
-            "chapters/",
-            "sources/",
-            "manuscript/sections/",
-            "reviews/",
-            "sync/",
-            "articles/briefs/",
-            "articles/evidence/",
-            "articles/claim-maps/",
-            "articles/drafts/",
-            "articles/reviews/",
-            "articles/final/",
+def _legacy_target_map(work: WorkConfig) -> dict[str, Path]:
+    mapping: dict[str, Path] = {}
+    if work.thesis:
+        mapping.update(
+            {
+                "chapters/": work.thesis.chapters_dir,
+                "sources/": work.thesis.sources_dir,
+                "manuscript/sections/": work.thesis.manuscript_sections_dir,
+                "reviews/": work.thesis.reviews_dir,
+                "sync/": work.thesis.sync_dir,
+                "manuscript/full-draft.md": work.thesis.full_draft_path,
+            }
         )
-    ) or normalized == "manuscript/full-draft.md"
+    if work.article:
+        mapping.update(
+            {
+                "articles/briefs/": work.article.briefs_dir,
+                "articles/evidence/": work.article.evidence_dir,
+                "articles/claim-maps/": work.article.claim_maps_dir,
+                "articles/drafts/": work.article.drafts_dir,
+                "articles/reviews/": work.article.reviews_dir,
+                "articles/final/": work.article.final_dir,
+            }
+        )
+    return mapping
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

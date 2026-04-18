@@ -1853,6 +1853,22 @@ class ArticleRuntimeSignalsTests(unittest.TestCase):
         self.assertIsNone(signals.readiness_status)
         self.assertEqual(signals.blockers, ())
 
+    def test_extract_article_artifact_signals_reads_guarded_blocker_prose(self) -> None:
+        signals = extract_article_artifact_signals(
+            {
+                "review": (
+                    "Formal submission is blocked by missing primary-source support for the lead claim.\n"
+                    "Cannot claim submission-ready until the core citation is verified against the official text.\n"
+                ),
+            }
+        )
+
+        self.assertIsNone(signals.readiness_status)
+        self.assertEqual(len(signals.blockers), 1)
+        self.assertEqual(signals.blockers[0].category, "primary-support")
+        self.assertEqual(signals.blockers[0].details["source"], "review")
+        self.assertEqual(signals.blockers[0].details["field"], "guarded-prose")
+
 
 class ThesisRuntimeSignalsTests(unittest.TestCase):
     def test_extract_thesis_runtime_signals_parses_review_findings(self) -> None:
@@ -1887,6 +1903,20 @@ class ThesisRuntimeSignalsTests(unittest.TestCase):
 
         self.assertEqual(signals.status_hint, "updated")
         self.assertEqual(signals.blockers, ())
+
+    def test_extract_thesis_runtime_signals_reads_guarded_review_prose(self) -> None:
+        signals = extract_thesis_runtime_signals(
+            {
+                "review": (
+                    "Нужна первичная опора для ключевого тезиса.\n"
+                    "Нужно перепроверить динамичные нормы на дату написания.\n"
+                ),
+            }
+        )
+
+        self.assertIsNone(signals.status_hint)
+        self.assertEqual({item.category for item in signals.blockers}, {"primary-support", "dynamic-material"})
+        self.assertTrue(all(item.details["field"] == "guarded-prose" for item in signals.blockers))
 
 
 class WorkspaceTargetResolutionTests(unittest.TestCase):
@@ -1935,6 +1965,37 @@ class WorkspaceTargetResolutionTests(unittest.TestCase):
             self.assertTrue(resolution.used_legacy_root_mapping)
             self.assertEqual(resolution.warning_code, "legacy-root-target")
             self.assertIn(TEST_ARTICLE_DRAFT.as_posix(), resolution.warning_message or "")
+
+    def test_resolve_target_for_action_marks_other_legacy_aliases_without_duplicate_prefix_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            selection = resolve_work_selection(workspace, target="reviews/01-introduction-review.md")
+
+            thesis_resolution = resolve_target_for_action(
+                workspace,
+                selection.work,
+                "thesis",
+                "verify",
+                "reviews/01-introduction-review.md",
+                work_source=selection.source,
+            )
+            article_resolution = resolve_target_for_action(
+                workspace,
+                selection.work,
+                "article",
+                "review",
+                "articles/final/demo.md",
+                work_source=selection.source,
+            )
+
+            self.assertEqual(thesis_resolution.resolution_mode, "legacy-root")
+            self.assertTrue(thesis_resolution.used_legacy_root_mapping)
+            self.assertEqual(thesis_resolution.normalized_path, TEST_THESIS_REVIEW.as_posix())
+            self.assertEqual(article_resolution.resolution_mode, "legacy-root")
+            self.assertTrue(article_resolution.used_legacy_root_mapping)
+            self.assertEqual(article_resolution.normalized_path, TEST_ARTICLE_FINAL.as_posix())
 
 
 class RuntimeObservabilityWrapperTests(unittest.TestCase):
