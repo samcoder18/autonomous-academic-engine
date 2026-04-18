@@ -20,6 +20,7 @@ from telegram_console.agent_chat import (
 )
 from telegram_console.article_bundle_state import article_bundle_manifest_path
 from telegram_console.article_runtime_signals import extract_article_artifact_signals
+from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
 from telegram_console.action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
@@ -1632,6 +1633,172 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(bundle_state["terminal_reason"], "ready-with-caveats")
         self.assertEqual(bundle_state["blockers"], [])
 
+    def test_thesis_verify_finalization_enriches_runtime_status_with_repair_metadata(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="thesis", requested_profile_id=None)
+        target_path = self.root / TEST_THESIS_SECTION
+        review_path = self.root / TEST_THESIS_REVIEW
+        write_file(
+            review_path,
+            textwrap.dedent(
+                """\
+                # Лист проверки главы
+
+                - Есть ли утверждения без опоры: да
+                - Что нужно дополнить источниками: Добавить первичную опору к ключевому тезису.
+                """
+            ),
+        )
+        contract = build_thesis_execution_contract(
+            work=work,
+            profile=profile,
+            action="verify",
+            target_path=target_path,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path, target_path],
+            review_path=review_path,
+            sync_hint_path=work.thesis.sync_dir / "{date}-verify-01-introduction.md",
+        )
+        timestamp = "20260418-102500"
+        output_file = work.thesis.paths.output_runs_dir / f"{timestamp}-verify.md"
+        manifest_file = work.thesis.paths.output_runs_dir / f"{timestamp}-verify.meta.json"
+        write_file(output_file, "Terminal status: blocked-primary-support\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "preset": "verify",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": {
+                "absolute": str(target_path),
+                "relative": TEST_THESIS_SECTION.as_posix(),
+                "state": "existing",
+            },
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "expected_review_file": str(review_path),
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "thesis-verify-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-thesis-verify",
+            "lane": "thesis",
+            "action": "verify",
+            "started_at": "2026-04-18T10:25:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": TEST_THESIS_SECTION.as_posix(),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:26:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["repair_decision"]["action"], "repair")
+        self.assertEqual(status["terminal_reason"], "blocked-primary-support")
+        self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
+
+        resolution = json.loads((run_dir / "resolution.json").read_text(encoding="utf-8"))
+        self.assertEqual(resolution["thesis_runtime"]["summary_block"]["kind"], "thesis-section-summary")
+        self.assertEqual(resolution["thesis_runtime"]["summary_block"]["blocker_count"], 1)
+
+        section_status = self.orchestrator.get_artifact_status(f"thesis:{TEST_THESIS_SECTION.as_posix()}")
+        self.assertEqual(section_status["summary"]["blocker_count"], 1)
+        self.assertEqual(section_status["summary"]["terminal_reason"], "blocked-primary-support")
+
+    def test_thesis_write_section_finalization_skips_repair_metadata_for_noneligible_action(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="thesis", requested_profile_id=None)
+        target_path = self.root / TEST_THESIS_SECTION
+        review_path = self.root / TEST_THESIS_REVIEW
+        contract = build_thesis_execution_contract(
+            work=work,
+            profile=profile,
+            action="write-section",
+            target_path=target_path,
+            target_rel=TEST_THESIS_SECTION.as_posix(),
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path, target_path],
+            review_path=review_path,
+            sync_hint_path=work.thesis.sync_dir / "{date}-write-section-01-introduction.md",
+        )
+        timestamp = "20260418-102700"
+        output_file = work.thesis.paths.output_runs_dir / f"{timestamp}-write-section.md"
+        manifest_file = work.thesis.paths.output_runs_dir / f"{timestamp}-write-section.meta.json"
+        write_file(output_file, "Terminal status: blocked-primary-support\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "preset": "write-section",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": {
+                "absolute": str(target_path),
+                "relative": TEST_THESIS_SECTION.as_posix(),
+                "state": "existing",
+            },
+            "output_file": str(output_file),
+            "expected_review_file": str(review_path),
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "thesis-write-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-thesis-write",
+            "lane": "thesis",
+            "action": "write-section",
+            "started_at": "2026-04-18T10:27:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": TEST_THESIS_SECTION.as_posix(),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:28:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["blockers"], [])
+        self.assertIsNone(status["repair_decision"])
+        self.assertIsNone(status["terminal_reason"])
+
+        resolution = json.loads((run_dir / "resolution.json").read_text(encoding="utf-8"))
+        self.assertNotIn("thesis_runtime", resolution)
+
 
 class ArticleRuntimeSignalsTests(unittest.TestCase):
     def test_extract_article_artifact_signals_prefers_most_conservative_status(self) -> None:
@@ -1677,6 +1844,41 @@ class ArticleRuntimeSignalsTests(unittest.TestCase):
         )
 
         self.assertIsNone(signals.readiness_status)
+        self.assertEqual(signals.blockers, ())
+
+
+class ThesisRuntimeSignalsTests(unittest.TestCase):
+    def test_extract_thesis_runtime_signals_parses_review_findings(self) -> None:
+        signals = extract_thesis_runtime_signals(
+            {
+                "output": "Terminal status: ready-with-caveats\n",
+                "review": (
+                    "- Есть ли утверждения без опоры: да\n"
+                    "- Есть ли спорные выводы: да\n"
+                    "- Все ли динамичные нормы и решения перепроверены на дату написания: нет\n"
+                    "- Что нужно дополнить источниками: Добавить первичную опору к ключевому тезису.\n"
+                ),
+            }
+        )
+
+        self.assertEqual(signals.status_hint, "ready-with-caveats")
+        self.assertEqual({item.category for item in signals.blockers}, {"primary-support", "review", "dynamic-material"})
+        self.assertTrue(any(item.details["source"] == "review" for item in signals.blockers))
+
+    def test_extract_thesis_runtime_signals_ignores_neutral_review_answers(self) -> None:
+        signals = extract_thesis_runtime_signals(
+            {
+                "output": "Result: updated\n",
+                "review": (
+                    "- Есть ли утверждения без опоры: нет\n"
+                    "- Есть ли спорные выводы: нет\n"
+                    "- Все ли динамичные нормы и решения перепроверены на дату написания: да\n"
+                    "- Что нужно дополнить источниками: нет\n"
+                ),
+            }
+        )
+
+        self.assertEqual(signals.status_hint, "updated")
         self.assertEqual(signals.blockers, ())
 
 

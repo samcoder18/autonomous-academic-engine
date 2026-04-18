@@ -13,6 +13,7 @@ from .action_specs import execution_contract_from_payload
 from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
 from .article_runtime_signals import extract_article_artifact_signals
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
+from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .runtime_status import (
     RuntimeRecord,
     build_attachments,
@@ -649,11 +650,21 @@ class WorkflowOrchestrator:
             ),
         )
         article_runtime = self._sync_article_runtime_state(request, record)
+        thesis_runtime = self._sync_thesis_runtime_state(request, record)
         resolution_payload = record.to_dict()
         if article_runtime:
             resolution_payload["article_runtime"] = article_runtime
+        if thesis_runtime:
+            resolution_payload["thesis_runtime"] = thesis_runtime
         self.store.write_json(run_dir / "resolution.json", resolution_payload)
-        self._write_workflow_status(run_dir, request, result, record, article_runtime=article_runtime)
+        self._write_workflow_status(
+            run_dir,
+            request,
+            result,
+            record,
+            article_runtime=article_runtime,
+            thesis_runtime=thesis_runtime,
+        )
         return record
 
     def _resolve_manifest_outputs(
@@ -898,10 +909,29 @@ class WorkflowOrchestrator:
         last_run = recent_runs[0] if recent_runs else {}
         blocker_count = len(runtime_record.blockers) if runtime_record else 0
         terminal_reason = runtime_record.terminal_reason if runtime_record else None
-        if not recent_runs:
+        return self._compose_thesis_section_summary(
+            target=target,
+            review_present=review_present,
+            last_run_action=_optional_text(last_run.get("action")),
+            last_run_status=_optional_text(last_run.get("status")),
+            blocker_count=blocker_count,
+            terminal_reason=terminal_reason,
+        )
+
+    def _compose_thesis_section_summary(
+        self,
+        *,
+        target: str,
+        review_present: bool,
+        last_run_action: str | None,
+        last_run_status: str | None,
+        blocker_count: int,
+        terminal_reason: str | None,
+    ) -> dict[str, Any]:
+        if last_run_action is None and last_run_status is None:
             suggested_next_action = "write-section"
         elif blocker_count:
-            suggested_next_action = "review-section" if last_run.get("action") == "review-section" else "verify"
+            suggested_next_action = "review-section" if last_run_action == "review-section" else "verify"
         elif not review_present:
             suggested_next_action = "review-section"
         else:
@@ -910,8 +940,8 @@ class WorkflowOrchestrator:
             "kind": "thesis-section-summary",
             "target": target,
             "review_present": review_present,
-            "last_run_action": last_run.get("action"),
-            "last_run_status": last_run.get("status"),
+            "last_run_action": last_run_action,
+            "last_run_status": last_run_status,
             "blocker_count": blocker_count,
             "terminal_reason": terminal_reason,
             "suggested_next_action": suggested_next_action,
@@ -1043,7 +1073,11 @@ class WorkflowOrchestrator:
                 continue
             if target is not None:
                 request = self.store.read_json(run_dir / "request.json", default={}) or {}
-                if str(request.get("target") or "").strip() != target:
+                request_target = str(request.get("target") or "").strip()
+                if not request_target:
+                    resolution = self.store.read_json(run_dir / "resolution.json", default={}) or {}
+                    request_target = str(resolution.get("target") or "").strip()
+                if request_target != target:
                     continue
             records.append(record)
         if not records:
@@ -1115,6 +1149,7 @@ class WorkflowOrchestrator:
         record: RunRecord,
         *,
         article_runtime: dict[str, Any] | None = None,
+        thesis_runtime: dict[str, Any] | None = None,
     ) -> None:
         status_path = run_dir / "status.json"
         started_at = request.get("started_at", result.get("started_at", utc_now()))
@@ -1177,6 +1212,7 @@ class WorkflowOrchestrator:
                 failure=failure,
             ),
         ]
+        runtime_enrichment = article_runtime or thesis_runtime
         if article_runtime:
             article_phase = _optional_text(article_runtime.get("current_phase")) or final_stage
             checkpoints.append(
@@ -1197,6 +1233,30 @@ class WorkflowOrchestrator:
                         "repair-decision-issued",
                         status=final_status,
                         stage=article_phase,
+                        timestamp=finished_at or utc_now(),
+                        message=f"{decision_action}: {decision_reason}",
+                    )
+                )
+        elif thesis_runtime:
+            thesis_stage = _optional_text(thesis_runtime.get("stage")) or final_stage
+            checkpoints.append(
+                build_checkpoint(
+                    "thesis-runtime-synced",
+                    status=final_status,
+                    stage=thesis_stage,
+                    timestamp=finished_at or utc_now(),
+                    message=_optional_text(thesis_runtime.get("summary")) or record.summary,
+                )
+            )
+            repair_decision = thesis_runtime.get("repair_decision")
+            if isinstance(repair_decision, dict):
+                decision_action = _optional_text(repair_decision.get("action")) or "n/a"
+                decision_reason = _optional_text(repair_decision.get("reason")) or "n/a"
+                checkpoints.append(
+                    build_checkpoint(
+                        "repair-decision-issued",
+                        status=final_status,
+                        stage=thesis_stage,
                         timestamp=finished_at or utc_now(),
                         message=f"{decision_action}: {decision_reason}",
                     )
@@ -1229,12 +1289,12 @@ class WorkflowOrchestrator:
                 action=record.action,
                 started_at=started_at,
                 finished_at=finished_at,
-                summary=_optional_text(article_runtime.get("summary")) if article_runtime else record.summary,
+                summary=_optional_text(runtime_enrichment.get("summary")) if runtime_enrichment else record.summary,
                 failure=failure,
-                blockers=article_runtime.get("blockers") if article_runtime else None,
-                repair_decision=article_runtime.get("repair_decision") if article_runtime else None,
-                repair_iteration=article_runtime.get("repair_iteration") if article_runtime else None,
-                terminal_reason=_optional_text(article_runtime.get("terminal_reason")) if article_runtime else None,
+                blockers=runtime_enrichment.get("blockers") if runtime_enrichment else None,
+                repair_decision=runtime_enrichment.get("repair_decision") if runtime_enrichment else None,
+                repair_iteration=runtime_enrichment.get("repair_iteration") if runtime_enrichment else None,
+                terminal_reason=_optional_text(runtime_enrichment.get("terminal_reason")) if runtime_enrichment else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
             ),
@@ -1338,6 +1398,68 @@ class WorkflowOrchestrator:
             "summary": summary,
         }
 
+    def _sync_thesis_runtime_state(
+        self,
+        request: dict[str, Any],
+        record: RunRecord,
+    ) -> dict[str, Any] | None:
+        if record.lane != "thesis" or not record.work_id:
+            return None
+        manifest = self.store.read_json(Path(record.manifest_path)) if record.manifest_path else None
+        if not isinstance(manifest, dict):
+            return None
+        contract = execution_contract_from_payload(manifest.get("execution_contract"))
+        if contract is None or not contract.repair_policy.eligible:
+            return None
+
+        work = self._work(record.work_id)
+        target_payload = manifest.get("target")
+        target_rel = _optional_text((target_payload or {}).get("relative")) if isinstance(target_payload, dict) else None
+        target_rel = target_rel or _optional_text(request.get("target")) or record.target
+        if not target_rel:
+            return None
+
+        review_path_text = _optional_text(manifest.get("expected_review_file"))
+        review_path = Path(review_path_text) if review_path_text else derive_review_path(self._workspace_config(), work, target_rel)
+        review_present = review_path.exists() if review_path else False
+        signals = extract_thesis_runtime_signals(
+            {
+                "output": self._read_text(record.output_file),
+                "review": self._read_text(str(review_path)) if review_path else "",
+            }
+        )
+        blockers = signals.blockers
+        terminal_reason = self._thesis_terminal_reason(signals.status_hint, blockers)
+        repair_decision = self._thesis_repair_decision(
+            contract=contract,
+            blockers=blockers,
+            repair_iteration=0,
+            terminal_reason=terminal_reason,
+        )
+        summary_block = self._compose_thesis_section_summary(
+            target=target_rel,
+            review_present=review_present,
+            last_run_action=record.action,
+            last_run_status=record.status,
+            blocker_count=len(blockers),
+            terminal_reason=terminal_reason,
+        )
+        summary = record.summary
+        if blockers:
+            summary = f"{summary} · blockers={len(blockers)}"
+        if terminal_reason:
+            summary = f"{summary} · terminal_reason={terminal_reason}"
+        return {
+            "target": target_rel,
+            "stage": "reviewed" if review_present else "drafted",
+            "blockers": [item.to_dict() for item in blockers],
+            "repair_decision": repair_decision,
+            "repair_iteration": 0,
+            "terminal_reason": terminal_reason,
+            "summary_block": summary_block,
+            "summary": summary,
+        }
+
     def _classify_article_blockers(
         self,
         *,
@@ -1432,6 +1554,30 @@ class WorkflowOrchestrator:
         if action == "repair":
             return previous_iteration + 1
         return previous_iteration
+
+    def _thesis_terminal_reason(self, status_hint: str | None, blockers: tuple[Blocker, ...]) -> str | None:
+        if blockers:
+            return determine_terminal_reason(blockers)
+        if status_hint in {"ready-with-caveats", "blocked-runtime"}:
+            return status_hint
+        return None
+
+    def _thesis_repair_decision(
+        self,
+        *,
+        contract: Any,
+        blockers: tuple[Blocker, ...],
+        repair_iteration: int,
+        terminal_reason: str | None,
+    ) -> dict[str, Any]:
+        payload = build_repair_decision(
+            contract=contract,
+            blockers=blockers,
+            repair_iteration=repair_iteration,
+        ).to_dict()
+        if terminal_reason:
+            payload["terminal_reason"] = terminal_reason
+        return payload
 
     def _article_repair_decision(
         self,
