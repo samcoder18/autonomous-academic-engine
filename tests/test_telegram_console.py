@@ -46,6 +46,7 @@ from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
 from telegram_console.workspace import (
     article_bundle_paths,
+    legacy_target_prefixes,
     load_work_config,
     load_workspace_config,
     relative_to_workspace,
@@ -1996,6 +1997,18 @@ class WorkspaceTargetResolutionTests(unittest.TestCase):
             self.assertEqual(article_resolution.resolution_mode, "legacy-root")
             self.assertTrue(article_resolution.used_legacy_root_mapping)
             self.assertEqual(article_resolution.normalized_path, TEST_ARTICLE_FINAL.as_posix())
+
+    def test_legacy_target_prefixes_cover_current_legacy_world(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            work = resolve_work_selection(workspace).work
+
+            prefixes = set(legacy_target_prefixes(work))
+
+            self.assertTrue({"chapters/", "sources/", "manuscript/sections/", "reviews/"}.issubset(prefixes))
+            self.assertTrue({"articles/briefs/", "articles/drafts/", "articles/reviews/", "articles/final/"}.issubset(prefixes))
 
 
 class RuntimeObservabilityWrapperTests(unittest.TestCase):

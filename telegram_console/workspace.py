@@ -619,6 +619,10 @@ def _match_legacy_target(work: WorkConfig, raw_target: str) -> LegacyTargetMatch
     return None
 
 
+def legacy_target_prefixes(work: WorkConfig) -> tuple[str, ...]:
+    return tuple(_legacy_target_map(work))
+
+
 def _legacy_target_map(work: WorkConfig) -> dict[str, Path]:
     mapping: dict[str, Path] = {}
     if work.thesis:

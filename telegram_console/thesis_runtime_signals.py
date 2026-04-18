@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from .guarded_prose import GuardedProseRule, extract_guarded_prose_blockers
 from .repair_kernel import Blocker
 
 
@@ -46,37 +47,37 @@ FIELD_ALIAS_INDEX = {
 }
 
 GUARDED_PROSE_RULES = (
-    {
-        "category": "primary-support",
-        "code": "guarded-prose-primary-support",
-        "message": "Review prose says the section still needs stronger primary support.",
-        "patterns": (
+    GuardedProseRule(
+        category="primary-support",
+        code="guarded-prose-primary-support",
+        message="Review prose says the section still needs stronger primary support.",
+        regex_patterns=(
             r"\bнужн\w*\s+первич\w*\s+опор",
             r"\bнет\s+первич\w*\s+опор",
             r"\bнедостат\w*.*первич\w*\s+опор",
             r"\bmissing\s+primary\s+support\b",
         ),
-    },
-    {
-        "category": "dynamic-material",
-        "code": "guarded-prose-dynamic-material",
-        "message": "Review prose says dynamic legal material still needs a fresh re-check.",
-        "patterns": (
+    ),
+    GuardedProseRule(
+        category="dynamic-material",
+        code="guarded-prose-dynamic-material",
+        message="Review prose says dynamic legal material still needs a fresh re-check.",
+        regex_patterns=(
             r"\bнужн\w*.*перепровер\w*.*динамич",
             r"\bперепровер\w*.*на дату написания",
             r"\bneeds?\s+.*re-?check.*dynamic\b",
         ),
-    },
-    {
-        "category": "review",
-        "code": "guarded-prose-review",
-        "message": "Review prose says the section still contains contested or weak conclusions.",
-        "patterns": (
+    ),
+    GuardedProseRule(
+        category="review",
+        code="guarded-prose-review",
+        message="Review prose says the section still contains contested or weak conclusions.",
+        regex_patterns=(
             r"\bспорн\w*\s+вывод",
             r"\bслаб\w*\s+вывод",
             r"\bcontested\s+conclusion\b",
         ),
-    },
+    ),
 )
 
 
@@ -142,7 +143,15 @@ def _extract_source_blockers(source_name: str, text: str) -> list[Blocker]:
         blocker = _blocker_from_field(source_name, field_key, clean_value)
         if blocker is not None:
             blockers.append(blocker)
-    blockers.extend(_extract_guarded_prose_blockers(source_name, text))
+    blockers.extend(
+        extract_guarded_prose_blockers(
+            source_name,
+            text,
+            normalize_line=_normalize_value,
+            rules=GUARDED_PROSE_RULES,
+            build_blocker=_build_blocker,
+        )
+    )
     return blockers
 
 
@@ -216,36 +225,6 @@ def _build_blocker(
             "value": field_value,
         },
     )
-
-
-def _extract_guarded_prose_blockers(source_name: str, text: str) -> list[Blocker]:
-    blockers: list[Blocker] = []
-    for raw_line in text.splitlines():
-        line = _normalize_value(re.sub(r"^\s*(?:[-*]\s+)?", "", raw_line))
-        if not line or ":" in line:
-            continue
-        blocker = _guarded_prose_blocker(source_name, line)
-        if blocker is not None:
-            blockers.append(blocker)
-    return blockers
-
-
-def _guarded_prose_blocker(source_name: str, line: str) -> Blocker | None:
-    normalized = line.casefold().strip(" .")
-    if not normalized:
-        return None
-    for rule in GUARDED_PROSE_RULES:
-        if not any(re.search(pattern, normalized) for pattern in rule["patterns"]):
-            continue
-        return _build_blocker(
-            source_name,
-            "guarded-prose",
-            line,
-            category=str(rule["category"]),
-            code=str(rule["code"]),
-            message=str(rule["message"]),
-        )
-    return None
 
 
 def _iter_fields(text: str) -> list[tuple[str, str]]:

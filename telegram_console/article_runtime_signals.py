@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from .guarded_prose import GuardedProseRule, extract_guarded_prose_blockers
 from .repair_kernel import Blocker
 
 
@@ -76,17 +77,17 @@ FIELD_ALIAS_INDEX = {
 }
 
 GUARDED_PROSE_RULES = (
-    {
-        "category": "primary-support",
-        "code": "guarded-prose-primary-support",
-        "message": "Narrative artifact text says primary support still blocks formal submission.",
-        "triggers": (
+    GuardedProseRule(
+        category="primary-support",
+        code="guarded-prose-primary-support",
+        message="Narrative artifact text says primary support still blocks formal submission.",
+        required_markers=(
             "formal submission is blocked by",
             "still blocks formal submission",
             "cannot claim submission-ready until",
             "submission-ready cannot be claimed until",
         ),
-        "keywords": (
+        keyword_markers=(
             "primary-source",
             "primary source",
             "official text",
@@ -95,43 +96,43 @@ GUARDED_PROSE_RULES = (
             "support",
             "citation",
         ),
-    },
-    {
-        "category": "dynamic-material",
-        "code": "guarded-prose-dynamic-material",
-        "message": "Narrative artifact text says dynamic material still needs a fresh re-check.",
-        "triggers": (
+    ),
+    GuardedProseRule(
+        category="dynamic-material",
+        code="guarded-prose-dynamic-material",
+        message="Narrative artifact text says dynamic material still needs a fresh re-check.",
+        required_markers=(
             "formal submission is blocked by",
             "still blocks formal submission",
             "needs a fresh re-check",
             "needs re-check",
             "must be re-checked",
         ),
-        "keywords": (
+        keyword_markers=(
             "dynamic",
             "date of writing",
             "case law",
             "regulation",
             "legal material",
         ),
-    },
-    {
-        "category": "standards-consistency",
-        "code": "guarded-prose-standards",
-        "message": "Narrative artifact text says standards or formatting blockers still remain.",
-        "triggers": (
+    ),
+    GuardedProseRule(
+        category="standards-consistency",
+        code="guarded-prose-standards",
+        message="Narrative artifact text says standards or formatting blockers still remain.",
+        required_markers=(
             "formal submission is blocked by",
             "still blocks formal submission",
             "cannot claim submission-ready until",
         ),
-        "keywords": (
+        keyword_markers=(
             "formatting",
             "profile conflict",
             "raw standard",
             "requirements conflict",
             "bibliography format",
         ),
-    },
+    ),
 )
 
 
@@ -178,7 +179,16 @@ def _extract_source_blockers(source_name: str, text: str) -> list[Blocker]:
         blocker = _artifact_blocker_from_field(source_name, field_key, field_value)
         if blocker is not None:
             blockers.append(blocker)
-    blockers.extend(_extract_guarded_prose_blockers(source_name, text))
+    blockers.extend(
+        extract_guarded_prose_blockers(
+            source_name,
+            text,
+            normalize_line=_normalize_artifact_value,
+            rules=GUARDED_PROSE_RULES,
+            build_blocker=_build_artifact_blocker,
+            skip_line=_should_skip_guarded_prose_line,
+        )
+    )
     return blockers
 
 
@@ -283,36 +293,8 @@ def _build_artifact_blocker(
     )
 
 
-def _extract_guarded_prose_blockers(source_name: str, text: str) -> list[Blocker]:
-    blockers: list[Blocker] = []
-    for raw_line in text.splitlines():
-        line = _normalize_artifact_value(re.sub(r"^\s*(?:[-*]\s+)?", "", raw_line))
-        if not line or ":" in line:
-            continue
-        blocker = _guarded_prose_blocker(source_name, line)
-        if blocker is not None:
-            blockers.append(blocker)
-    return blockers
-
-
-def _guarded_prose_blocker(source_name: str, line: str) -> Blocker | None:
-    normalized = line.casefold().strip(" .")
-    if not normalized or any(token in normalized for token in ("may become", "could become", "might become")):
-        return None
-    for rule in GUARDED_PROSE_RULES:
-        if not any(trigger in normalized for trigger in rule["triggers"]):
-            continue
-        if not any(keyword in normalized for keyword in rule["keywords"]):
-            continue
-        return _build_artifact_blocker(
-            source_name,
-            "guarded-prose",
-            line,
-            category=str(rule["category"]),
-            code=str(rule["code"]),
-            message=str(rule["message"]),
-        )
-    return None
+def _should_skip_guarded_prose_line(normalized: str) -> bool:
+    return any(token in normalized for token in ("may become", "could become", "might become"))
 
 
 def _artifact_blocker_code(field_key: str) -> str:
