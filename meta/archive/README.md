@@ -6,4 +6,5 @@
 
 - [AGENTS.md](/Users/albina/дипломная/AGENTS.md)
 - [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md)
-- [meta/project-canon.md](/Users/albina/дипломная/meta/project-canon.md)
+- `works/<slug>/work-canon.md` как основной канон активной работы
+- [meta/project-canon.md](/Users/albina/дипломная/meta/project-canon.md) только как compatibility shim для legacy-ссылок

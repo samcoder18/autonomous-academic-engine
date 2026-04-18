@@ -5,7 +5,7 @@
 ## Активные файлы
 
 - [master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md) - общий рабочий регламент для всех works и lane.
-- [project-canon.md](/Users/albina/дипломная/meta/project-canon.md) - compatibility shim для legacy-ссылок; активный канон теперь хранится в `works/<slug>/work-canon.md`.
+- [project-canon.md](/Users/albina/дипломная/meta/project-canon.md) - compatibility shim для legacy-ссылок; не использовать как primary source of truth, пока активный канон хранится в `works/<slug>/work-canon.md`.
 - [standards/](/Users/albina/дипломная/meta/standards) - raw и normalized publication standards для academic engine.
 
 ## Архив

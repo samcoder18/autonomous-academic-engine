@@ -1,6 +1,6 @@
 {
   "profile_id": "rf-dissertation-general",
-  "synced_at": "2026-04-18T09:11:27.412238+00:00",
+  "synced_at": "2026-04-18T10:03:03.396527+00:00",
   "force_refresh": true,
   "sources": [
     {
@@ -9,7 +9,7 @@
       "url": "https://publication.pravo.gov.ru/document/0001201310010030",
       "final_url": null,
       "content_type": null,
-      "fetched_at": "2026-04-18T09:11:27.405705+00:00",
+      "fetched_at": "2026-04-18T10:03:00.998251+00:00",
       "checksum_sha256": null,
       "filename": null,
       "size_bytes": 0,
@@ -22,7 +22,7 @@
       "url": "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search=",
       "final_url": null,
       "content_type": null,
-      "fetched_at": "2026-04-18T09:11:27.412163+00:00",
+      "fetched_at": "2026-04-18T10:03:03.396487+00:00",
       "checksum_sha256": null,
       "filename": null,
       "size_bytes": 0,

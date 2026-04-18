@@ -14,6 +14,7 @@
 - Raw directory: `meta/standards/raw/rf-dissertation-general`
 - Applicability notes:
 - Reference-only federal dissertation regulation profile for cross-checking broader dissertation rules.
+- Repeated refresh attempts on 2026-04-18 left the raw bundle in `partial` state because the official endpoints were unavailable from the current environment.
 
 ## 3. Official Sources
 
@@ -37,16 +38,19 @@
 
 ## 5. Refresh State
 
-- Last refresh: `2026-04-18T09:11:27.412238+00:00`
+- Last refresh: `2026-04-18T10:03:03.396527+00:00`
 - Manifest: `meta/standards/raw/rf-dissertation-general/manifest.json`
 
 ## 6. Workflow Notes
 
 - Thesis/article workflows may bind this profile only when lane compatibility is explicit. Current lane: `reference-only`.
 - Stable mode default is preserved: the profile is not refreshed automatically during workflow runs.
+- The current `partial` raw state is treated as a documented network/availability blocker, not as a reason to fallback silently to another profile.
+- The profile is intentionally not used as the default thesis/article binding in V2-A.
 
 ## 7. Finalization Impact
 
 - Finalizer may rely on this normalized profile only together with the corresponding raw bundle state.
 - Missing or partial raw material remains a blocker for claiming full formal compliance.
 - If conflict metadata is flagged, the newest declared source stays operative but the checklist must preserve the conflict note.
+- Because this profile is `reference-only`, its partial raw state does not alter active thesis/article workflow bindings; it only limits formal reliance on dissertation-regulation cross-checks.
