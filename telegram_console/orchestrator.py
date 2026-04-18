@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 
+from .runtime_status import build_attachments, build_checkpoint, build_failure, build_runtime_status, write_status
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
 from .workspace import (
@@ -628,6 +629,7 @@ class WorkflowOrchestrator:
             ),
         )
         self.store.write_json(run_dir / "resolution.json", record.to_dict())
+        self._write_workflow_status(run_dir, request, result, record)
         return record
 
     def _resolve_manifest_outputs(
@@ -899,3 +901,105 @@ class WorkflowOrchestrator:
             return resolve_work_config(workspace, work_id=work_id, target=target)
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
+
+    def _write_workflow_status(
+        self,
+        run_dir: Path,
+        request: dict[str, Any],
+        result: dict[str, Any],
+        record: RunRecord,
+    ) -> None:
+        status_path = run_dir / "status.json"
+        started_at = request.get("started_at", result.get("started_at", utc_now()))
+        finished_at = result.get("finished_at")
+        final_status = "succeeded"
+        if record.status == "failed":
+            final_status = "failed"
+        elif record.status == "interrupted":
+            final_status = "interrupted"
+        elif record.status == "running":
+            final_status = "running"
+
+        final_stage = "completed"
+        if final_status == "failed":
+            final_stage = "failed"
+        elif final_status == "interrupted":
+            final_stage = "interrupted"
+        elif final_status == "running":
+            final_stage = "running"
+
+        failure = None
+        if final_status == "failed":
+            message = str(result.get("error") or f"Launcher command exited with code {result.get('returncode')}.")
+            failure = build_failure(
+                "process",
+                "command-exited-nonzero",
+                message,
+                retryable=True,
+                details={"returncode": result.get("returncode")},
+            )
+        elif final_status == "interrupted":
+            failure = build_failure(
+                "runtime",
+                "missing-result",
+                str(result.get("error") or "Process exited without result.json"),
+                retryable=True,
+            )
+
+        checkpoints = [
+            build_checkpoint(
+                "queued",
+                status="queued",
+                stage="queued",
+                timestamp=started_at,
+                message="Run wrapper started.",
+            ),
+            build_checkpoint(
+                "command-started",
+                status="running",
+                stage="launching",
+                timestamp=started_at,
+                message=record.summary,
+            ),
+            build_checkpoint(
+                "command-finished",
+                status=final_status,
+                stage=final_stage,
+                timestamp=finished_at or utc_now(),
+                message=record.summary,
+                failure=failure,
+            ),
+        ]
+        attachments = build_attachments(
+            {
+                "status": status_path,
+                "request": run_dir / "request.json",
+                "result": run_dir / "result.json",
+                "log": result.get("log_path") or run_dir / "launcher.log",
+                "manifest": record.manifest_path,
+                "trace": record.output_file,
+                "resolution": run_dir / "resolution.json",
+            }
+        )
+        write_status(
+            status_path,
+            build_runtime_status(
+                record_id=record.record_id,
+                entity_kind="workflow-run",
+                status=final_status,
+                stage=final_stage,
+                project_id=record.project_id,
+                project_title=record.project_title,
+                project_root=record.project_root,
+                work_id=record.work_id,
+                work_title=record.work_title,
+                lane=record.lane,
+                action=record.action,
+                started_at=started_at,
+                finished_at=finished_at,
+                summary=record.summary,
+                failure=failure,
+                checkpoints=checkpoints,
+                attachments=attachments,
+            ),
+        )

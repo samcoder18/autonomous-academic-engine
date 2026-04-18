@@ -25,6 +25,8 @@ from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServi
 from telegram_console.orchestrator import RunBusyError, WorkflowOrchestrator
 from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.projects import ProjectService
+from telegram_console import chat_wrapper as chat_wrapper_module
+from telegram_console import run_wrapper as run_wrapper_module
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
@@ -649,6 +651,76 @@ def write_thesis_manifest(root: Path, timestamp: str, output_label: str = "verif
     manifest.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_runtime_status_fixture(
+    runtime_dir: Path,
+    *,
+    record_id: str,
+    entity_kind: str,
+    project_id: str,
+    project_title: str,
+    project_root: Path,
+    work_id: str | None = None,
+    work_title: str | None = None,
+    lane: str | None = None,
+    profile: str | None = None,
+    action: str | None = None,
+    status: str = "succeeded",
+    stage: str = "completed",
+    summary: str = "Runtime finished successfully.",
+    attachments: dict[str, str] | None = None,
+    failure: dict[str, object] | None = None,
+    checkpoints: list[dict[str, object]] | None = None,
+) -> Path:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    attachment_payload: dict[str, dict[str, object]] = {}
+    for name, raw_path in (attachments or {}).items():
+        path = Path(raw_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(f"{name}\n", encoding="utf-8")
+        attachment_payload[name] = {
+            "path": str(path),
+            "exists": path.exists(),
+        }
+    status_path = runtime_dir / "status.json"
+    attachment_payload["status"] = {
+        "path": str(status_path),
+        "exists": True,
+    }
+    payload = {
+        "version": "v2",
+        "record_id": record_id,
+        "entity_kind": entity_kind,
+        "status": status,
+        "stage": stage,
+        "project_id": project_id,
+        "project_title": project_title,
+        "project_root": str(project_root),
+        "work_id": work_id,
+        "work_title": work_title,
+        "lane": lane,
+        "profile": profile,
+        "action": action,
+        "started_at": "2026-04-18T10:00:00+00:00",
+        "finished_at": "2026-04-18T10:01:00+00:00",
+        "summary": summary,
+        "failure": failure,
+        "checkpoints": checkpoints
+        or [
+            {
+                "name": "finished",
+                "status": status,
+                "stage": stage,
+                "timestamp": "2026-04-18T10:01:00+00:00",
+                "message": summary,
+            }
+        ],
+        "attachments": attachment_payload,
+    }
+    status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return status_path
+
+
 class FakeApi:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
@@ -1067,6 +1139,10 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0].status, "interrupted")
         self.assertIsNone(self.orchestrator.store.get_active_run())
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["status"], "interrupted")
+        self.assertEqual(status["failure"]["category"], "runtime")
+        self.assertEqual(status["failure"]["code"], "missing-result")
 
     def test_localized_errors_and_russian_article_aliases(self) -> None:
         self.assertEqual(self.orchestrator._resolve_article_input("тема: Биометрия"), ("topic", "Биометрия"))
@@ -1089,6 +1165,146 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("Сейчас уже идет другой запуск", busy_text)
         self.assertIn("Демо-проект", busy_text)
         self.assertIn("проверка", busy_text)
+
+
+class RuntimeObservabilityWrapperTests(unittest.TestCase):
+    def test_run_wrapper_writes_status_for_success_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            success_dir = root / "run-success"
+            success_dir.mkdir(parents=True, exist_ok=True)
+            (success_dir / "request.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "alpha:20260418-thesis-write-section",
+                        "project_id": "alpha",
+                        "project_title": "Alpha",
+                        "project_root": str(root),
+                        "work_id": "demo-work",
+                        "work_title": "Demo work",
+                        "lane": "thesis",
+                        "action": "write-section",
+                        "started_at": "2026-04-18T10:00:00+00:00",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code = run_wrapper_module.main(
+                [
+                    "--run-dir",
+                    str(success_dir),
+                    "--cwd",
+                    str(root),
+                    "--",
+                    "python3",
+                    "-c",
+                    "print('ok')",
+                ]
+            )
+            self.assertEqual(code, 0)
+            success_status = json.loads((success_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(success_status["version"], "v2")
+            self.assertEqual(success_status["entity_kind"], "workflow-run")
+            self.assertEqual(success_status["status"], "succeeded")
+            self.assertEqual(success_status["lane"], "thesis")
+            self.assertEqual(success_status["action"], "write-section")
+            self.assertEqual(success_status["project_id"], "alpha")
+            self.assertIn("queued", [item["name"] for item in success_status["checkpoints"]])
+            self.assertIn("command-started", [item["name"] for item in success_status["checkpoints"]])
+            self.assertIn("command-finished", [item["name"] for item in success_status["checkpoints"]])
+            self.assertIn("status", success_status["attachments"])
+            self.assertIn("request", success_status["attachments"])
+            self.assertIn("result", success_status["attachments"])
+            self.assertIn("log", success_status["attachments"])
+
+            failure_dir = root / "run-failure"
+            failure_dir.mkdir(parents=True, exist_ok=True)
+            (failure_dir / "request.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "alpha:20260418-thesis-verify",
+                        "project_id": "alpha",
+                        "project_title": "Alpha",
+                        "project_root": str(root),
+                        "work_id": "demo-work",
+                        "work_title": "Demo work",
+                        "lane": "thesis",
+                        "action": "verify",
+                        "started_at": "2026-04-18T10:10:00+00:00",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code = run_wrapper_module.main(
+                [
+                    "--run-dir",
+                    str(failure_dir),
+                    "--cwd",
+                    str(root),
+                    "--",
+                    "python3",
+                    "-c",
+                    "import sys; sys.exit(3)",
+                ]
+            )
+            self.assertEqual(code, 3)
+            failure_status = json.loads((failure_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure_status["status"], "failed")
+            self.assertEqual(failure_status["failure"]["category"], "process")
+            self.assertEqual(failure_status["failure"]["code"], "command-exited-nonzero")
+
+    def test_chat_wrapper_records_resume_recovery_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            fake_codex = root / "fake-codex"
+            build_fake_codex(fake_codex)
+            task_dir = root / "task"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            request = {
+                "task_id": "alpha:20260418-chat",
+                "project_id": "alpha",
+                "project_title": "Alpha",
+                "project_root": str(root),
+                "work_id": "demo-work",
+                "work_title": "Demo work",
+                "prompt": "Продолжай работу",
+                "user_text": "Продолжай работу",
+                "session_id": "broken-session",
+                "started_at": "2026-04-18T10:20:00+00:00",
+                "codex_bin": str(fake_codex),
+                "codex_model": "gpt-test",
+                "profile": "execute",
+            }
+            (task_dir / "request.json").write_text(
+                json.dumps(request, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            code = chat_wrapper_module.main(["--task-dir", str(task_dir)])
+            self.assertEqual(code, 0)
+            status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["version"], "v2")
+            self.assertEqual(status["entity_kind"], "chat-turn")
+            self.assertEqual(status["status"], "succeeded")
+            self.assertEqual(status["profile"], "execute")
+            self.assertIn("response", status["attachments"])
+            self.assertIn("stdout", status["attachments"])
+            self.assertIn("stderr", status["attachments"])
+            checkpoint_names = [item["name"] for item in status["checkpoints"]]
+            self.assertIn("resume-attempted", checkpoint_names)
+            self.assertIn("resume-failed", checkpoint_names)
+            self.assertIn("restart-after-resume-failure", checkpoint_names)
+            resume_failed = next(item for item in status["checkpoints"] if item["name"] == "resume-failed")
+            self.assertEqual(resume_failed["failure"]["category"], "codex")
+            self.assertEqual(resume_failed["failure"]["code"], "resume-session-failed")
 
 
 class StandardsResolverTests(unittest.TestCase):
@@ -2159,6 +2375,135 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("Загружен в launchd: да", stdout.getvalue())
             self.assertIn("Env готов: да", stdout.getvalue())
+
+    def test_runtime_commands_are_project_aware_and_show_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            workspace = Path(tempdir)
+            bot_home = workspace / "bot-home"
+            bot_home.mkdir(parents=True, exist_ok=True)
+            repo_a = workspace / "alpha"
+            repo_b = workspace / "beta"
+            build_fake_repo(repo_a)
+            build_fake_repo(repo_b)
+            write_projects_registry(
+                bot_home,
+                [
+                    {
+                        "id": "alpha",
+                        "title": "Диплом А",
+                        "root_dir": str(repo_a),
+                        "capabilities": ["thesis", "article"],
+                    },
+                    {
+                        "id": "beta",
+                        "title": "Диплом Б",
+                        "root_dir": str(repo_b),
+                        "capabilities": ["thesis"],
+                    },
+                ],
+            )
+
+            workflow_dir = bot_home / "output" / "telegram" / "runtime" / "runs" / "20260418-100000-alpha-thesis-verify"
+            workflow_request = workflow_dir / "request.json"
+            workflow_result = workflow_dir / "result.json"
+            workflow_log = workflow_dir / "launcher.log"
+            workflow_manifest = repo_a / "output" / "runs" / TEST_WORK_ID / "thesis" / "20260418-verify.meta.json"
+            workflow_trace = repo_a / "output" / "runs" / TEST_WORK_ID / "thesis" / "20260418-verify.md"
+            workflow_resolution = workflow_dir / "resolution.json"
+            write_runtime_status_fixture(
+                workflow_dir,
+                record_id="alpha:20260418-thesis-verify",
+                entity_kind="workflow-run",
+                project_id="alpha",
+                project_title="Диплом А",
+                project_root=repo_a,
+                work_id=TEST_WORK_ID,
+                work_title="Demo work",
+                lane="thesis",
+                action="verify",
+                attachments={
+                    "request": str(workflow_request),
+                    "result": str(workflow_result),
+                    "log": str(workflow_log),
+                    "manifest": str(workflow_manifest),
+                    "trace": str(workflow_trace),
+                    "resolution": str(workflow_resolution),
+                },
+                summary="Workflow verification completed.",
+            )
+
+            chat_dir = bot_home / "output" / "telegram" / "runtime" / "agent_tasks" / "20260418-101500-beta-chat"
+            chat_request = chat_dir / "request.json"
+            chat_result = chat_dir / "result.json"
+            chat_response = chat_dir / "assistant.txt"
+            chat_stdout = chat_dir / "codex.stdout.jsonl"
+            chat_stderr = chat_dir / "codex.stderr.log"
+            write_runtime_status_fixture(
+                chat_dir,
+                record_id="beta:20260418-chat",
+                entity_kind="chat-turn",
+                project_id="beta",
+                project_title="Диплом Б",
+                project_root=repo_b,
+                work_id=TEST_WORK_ID,
+                work_title="Demo work",
+                profile="execute",
+                action="chat",
+                attachments={
+                    "request": str(chat_request),
+                    "result": str(chat_result),
+                    "response": str(chat_response),
+                    "stdout": str(chat_stdout),
+                    "stderr": str(chat_stderr),
+                },
+                summary="Chat turn completed.",
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(["--root", str(bot_home), "runtime", "status", "--project", "alpha"])
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("alpha:20260418-thesis-verify", stdout.getvalue())
+            self.assertNotIn("beta:20260418-chat", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(["--root", str(bot_home), "runtime", "status", "--kind", "chat", "--json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(len(payload["records"]), 1)
+            self.assertEqual(payload["records"][0]["record_id"], "beta:20260418-chat")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(["--root", str(bot_home), "runtime", "show", "alpha:20260418-thesis-verify"])
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("workflow-run", stdout.getvalue())
+            self.assertIn(str(workflow_manifest), stdout.getvalue())
+            self.assertIn(str(workflow_trace), stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(
+                    [
+                        "--root",
+                        str(bot_home),
+                        "runtime",
+                        "path",
+                        "beta:20260418-chat",
+                        "response",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(stdout.getvalue().strip(), str(chat_response))
 
 
 class LaunchdServiceManagerTests(unittest.TestCase):

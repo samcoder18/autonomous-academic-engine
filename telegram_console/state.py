@@ -181,3 +181,6 @@ class RuntimeStore:
 
     def list_run_dirs(self) -> list[Path]:
         return sorted((path for path in self.runs_dir.iterdir() if path.is_dir()), reverse=True)
+
+    def list_agent_task_dirs(self) -> list[Path]:
+        return sorted((path for path in self.agent_tasks_dir.iterdir() if path.is_dir()), reverse=True)

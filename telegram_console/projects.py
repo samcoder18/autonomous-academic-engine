@@ -10,6 +10,7 @@ import tempfile
 import unicodedata
 
 from .orchestrator import RunRecord, WorkflowError, WorkflowOrchestrator
+from .runtime_status import RuntimeRecord, attachment_path, load_runtime_record
 from .state import RuntimeStore
 from .workspace import WorkConfig, WorkspaceConfig, WorkspaceConfigError, list_work_ids, load_work_config, load_workspace_config
 
@@ -631,6 +632,59 @@ class ProjectService:
             return None
         return orchestrator.get_run_attachment(record_id, attachment)
 
+    def list_runtime_records(
+        self,
+        *,
+        project_id: str | None = None,
+        kind: str = "all",
+        limit: int = 8,
+    ) -> list[RuntimeRecord]:
+        kind_text = kind.strip().lower()
+        if kind_text not in {"all", "workflow", "chat"}:
+            raise WorkflowError(f"Неизвестный runtime kind: {kind}")
+
+        projects = self._runtime_projects(project_id)
+        allowed_ids = {project.id for project in projects}
+        allowed_roots = {str(project.root_dir) for project in projects}
+        records: list[RuntimeRecord] = []
+
+        if kind_text in {"all", "workflow"}:
+            for run_dir in self.store.list_run_dirs():
+                record = load_runtime_record(run_dir, "workflow-run")
+                if record and self._runtime_record_matches(record, allowed_ids, allowed_roots):
+                    records.append(record)
+
+        if kind_text in {"all", "chat"}:
+            for task_dir in self.store.list_agent_task_dirs():
+                record = load_runtime_record(task_dir, "chat-turn")
+                if record and self._runtime_record_matches(record, allowed_ids, allowed_roots):
+                    records.append(record)
+
+        return sorted(records, key=lambda item: item.sort_key, reverse=True)[:limit]
+
+    def find_runtime_record(
+        self,
+        record_id: str,
+        *,
+        project_id: str | None = None,
+    ) -> RuntimeRecord | None:
+        for record in self.list_runtime_records(project_id=project_id, kind="all", limit=200):
+            if record.record_id == record_id:
+                return record
+        return None
+
+    def get_runtime_attachment(
+        self,
+        record_id: str,
+        attachment: str,
+        *,
+        project_id: str | None = None,
+    ) -> Path | None:
+        record = self.find_runtime_record(record_id, project_id=project_id)
+        if not record:
+            return None
+        return attachment_path(record, attachment)
+
     def require_project(self, project_id: str, capability: str | None = None) -> ProjectRecord:
         project = self.get_project(project_id)
         if not project:
@@ -727,3 +781,22 @@ class ProjectService:
             return None
         project_id, _ = record_id.split(":", 1)
         return project_id or None
+
+    def _runtime_projects(self, project_id: str | None) -> list[ProjectRecord]:
+        if project_id:
+            return [self.require_project(project_id)]
+        return [project for project in self.list_projects() if project.available]
+
+    def _runtime_record_matches(
+        self,
+        record: RuntimeRecord,
+        allowed_ids: set[str],
+        allowed_roots: set[str],
+    ) -> bool:
+        project_id = str(record.project_id or "").strip()
+        if project_id:
+            return project_id in allowed_ids
+        project_root = str(record.project_root or "").strip()
+        if project_root:
+            return project_root in allowed_roots
+        return False

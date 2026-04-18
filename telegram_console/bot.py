@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import argparse
+import json
 import sys
 import traceback
 
@@ -641,6 +642,108 @@ def handle_service_command(*, bot_home: str | Path | None, action: str) -> int:
     return 1
 
 
+def handle_runtime_command(
+    *,
+    bot_home: str | Path | None,
+    action: str,
+    project_id: str | None = None,
+    kind: str = "all",
+    limit: int = 8,
+    record_id: str | None = None,
+    attachment: str | None = None,
+    as_json: bool = False,
+) -> int:
+    service = ProjectService(Path(bot_home or default_bot_home()).resolve())
+    try:
+        if action == "status":
+            records = service.list_runtime_records(project_id=project_id, kind=kind, limit=limit)
+            if as_json:
+                print(json.dumps({"records": [record.to_dict() for record in records]}, ensure_ascii=False, indent=2))
+                return 0
+            print(_format_runtime_records(records))
+            return 0
+
+        if action == "show":
+            if not record_id:
+                print("Нужен record-id для runtime show.", file=sys.stderr)
+                return 1
+            record = service.find_runtime_record(record_id, project_id=project_id)
+            if not record:
+                print(f"Не найден runtime record: {record_id}", file=sys.stderr)
+                return 1
+            if as_json:
+                print(json.dumps(record.to_dict(), ensure_ascii=False, indent=2))
+                return 0
+            print(_format_runtime_record(record))
+            return 0
+
+        if action == "path":
+            if not record_id or not attachment:
+                print("Нужны record-id и attachment для runtime path.", file=sys.stderr)
+                return 1
+            path = service.get_runtime_attachment(record_id, attachment, project_id=project_id)
+            if not path:
+                print(f"Не найден attachment `{attachment}` для runtime record `{record_id}`.", file=sys.stderr)
+                return 1
+            print(str(path))
+            return 0
+    except WorkflowError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print(f"Неизвестная runtime-команда: {action}", file=sys.stderr)
+    return 1
+
+
+def _format_runtime_records(records: list[Any]) -> str:
+    if not records:
+        return "Runtime records не найдены."
+    lines: list[str] = []
+    for record in records:
+        lines.extend(
+            [
+                f"{record.record_id} [{record.entity_kind}]",
+                f"Статус: {record.status} · stage={record.stage}",
+                f"Проект: {record.project_title or record.project_id or 'не указан'}",
+                f"Работа: {record.work_title or record.work_id or 'не указана'}",
+                f"Summary: {record.summary or 'нет'}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
+
+
+def _format_runtime_record(record: Any) -> str:
+    lines = [
+        f"Record: {record.record_id}",
+        f"Kind: {record.entity_kind}",
+        f"Status: {record.status}",
+        f"Stage: {record.stage}",
+        f"Project: {record.project_title or 'не указан'} ({record.project_id or 'n/a'})",
+        f"Project root: {record.project_root or 'n/a'}",
+        f"Work: {record.work_title or 'не указана'} ({record.work_id or 'n/a'})",
+        f"Lane: {record.lane or 'n/a'}",
+        f"Profile: {record.profile or 'n/a'}",
+        f"Action: {record.action or 'n/a'}",
+        f"Started: {record.started_at or 'n/a'}",
+        f"Finished: {record.finished_at or 'n/a'}",
+        f"Summary: {record.summary or 'нет'}",
+    ]
+    if record.failure:
+        lines.append(f"Failure: {json.dumps(record.failure, ensure_ascii=False)}")
+    else:
+        lines.append("Failure: none")
+    lines.append("Attachments:")
+    if record.attachments:
+        for name, payload in sorted(record.attachments.items()):
+            path = payload.get("path") if isinstance(payload, dict) else None
+            exists = payload.get("exists") if isinstance(payload, dict) else None
+            lines.append(f"- {name}: {path} (exists={exists})")
+    else:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Telegram remote chat console for Codex.")
     parser.add_argument(
@@ -656,6 +759,21 @@ def main(argv: list[str] | None = None) -> int:
     project_add_parser = project_subparsers.add_parser("add", help="Register an existing project in the bot registry.")
     project_add_parser.add_argument("--title", required=True, help="Human-readable project title.")
     project_add_parser.add_argument("--root", dest="project_root", required=True, help="Absolute path to the project.")
+    runtime_parser = subparsers.add_parser("runtime", help="Inspect workflow/chat runtime artifacts.")
+    runtime_subparsers = runtime_parser.add_subparsers(dest="runtime_command")
+    runtime_status_parser = runtime_subparsers.add_parser("status", help="List recent runtime records.")
+    runtime_status_parser.add_argument("--project", dest="project_id")
+    runtime_status_parser.add_argument("--kind", choices=("workflow", "chat", "all"), default="all")
+    runtime_status_parser.add_argument("--limit", type=int, default=8)
+    runtime_status_parser.add_argument("--json", action="store_true", dest="as_json")
+    runtime_show_parser = runtime_subparsers.add_parser("show", help="Show one runtime record.")
+    runtime_show_parser.add_argument("record_id")
+    runtime_show_parser.add_argument("--project", dest="project_id")
+    runtime_show_parser.add_argument("--json", action="store_true", dest="as_json")
+    runtime_path_parser = runtime_subparsers.add_parser("path", help="Print an attachment path for a runtime record.")
+    runtime_path_parser.add_argument("record_id")
+    runtime_path_parser.add_argument("attachment")
+    runtime_path_parser.add_argument("--project", dest="project_id")
     service_parser = subparsers.add_parser("service", help="Manage the local macOS LaunchAgent.")
     service_subparsers = service_parser.add_subparsers(dest="service_command")
     for command, help_text in (
@@ -684,6 +802,20 @@ def main(argv: list[str] | None = None) -> int:
                 action=args.service_command,
             )
         service_parser.print_help()
+        return 1
+    if args.command == "runtime":
+        if args.runtime_command:
+            return handle_runtime_command(
+                bot_home=args.bot_home,
+                action=args.runtime_command,
+                project_id=getattr(args, "project_id", None),
+                kind=getattr(args, "kind", "all"),
+                limit=getattr(args, "limit", 8),
+                record_id=getattr(args, "record_id", None),
+                attachment=getattr(args, "attachment", None),
+                as_json=getattr(args, "as_json", False),
+            )
+        runtime_parser.print_help()
         return 1
 
     bot = build_bot(args.bot_home)
