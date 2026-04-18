@@ -16,6 +16,12 @@ from .action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
 )
+from .article_bundle_state import (
+    article_bundle_manifest_path,
+    build_article_bundle_state,
+    load_article_bundle_state,
+    write_article_bundle_state,
+)
 from .standards import (
     StandardProfileResolution,
     format_profile_resolution_lines,
@@ -268,6 +274,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         or "article-topic"
     )
     bundle = article_bundle_paths(work, article_slug)
+    bundle_state_path = article_bundle_manifest_path(work, article_slug)
     related_context = _article_related_context(
         workspace,
         work,
@@ -275,6 +282,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         input_brief_path,
         target_path,
         bundle,
+        bundle_state_path,
     )
     contract = build_article_execution_contract(
         work=work,
@@ -298,6 +306,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             topic,
             input_brief_path,
             bundle,
+            bundle_state_path,
             related_context,
             notes_content,
         )
@@ -311,6 +320,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             target_path,
             target_rel,
             bundle,
+            bundle_state_path,
             related_context,
             notes_content,
         )
@@ -324,6 +334,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             target_path,
             target_rel,
             bundle,
+            bundle_state_path,
             related_context,
             notes_content,
         )
@@ -341,6 +352,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             article_slug,
             args.model,
             bundle,
+            bundle_state_path,
             related_context,
             prompt,
         )
@@ -351,44 +363,97 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_file = output_dir / f"{timestamp}-{args.workflow}-{article_slug}.md"
     manifest_file = output_dir / f"{timestamp}-{args.workflow}-{article_slug}.meta.json"
-    _run_codex(root_dir, prompt, out_file, use_search, args.model)
-    _write_json(
-        manifest_file,
-        {
-            "timestamp": timestamp,
-            "command": args.workflow,
-            "work_id": work.slug,
-            "work_title": work.title,
-            "profile_id": profile.resolved_profile_id,
-            "requested_profile_id": profile.requested_profile_id,
-            "resolved_profile_id": profile.resolved_profile_id,
-            "fallback_profile_id": profile.fallback_profile_id,
-            "profile_raw_dir": str(profile.raw_dir),
-            "profile_conflict_flag": profile.conflict_flag,
-            "profile_status": profile.profile_status,
-            "search_enabled": use_search,
-            "topic": topic,
-            "input_brief": relative_to_workspace(workspace, input_brief_path) if input_brief_path else None,
-            "target_path": relative_to_workspace(workspace, target_path) if target_path else None,
-            "root_dir": str(root_dir),
-            "output_file": str(out_file),
-            "bundle": {
-                "slug": article_slug,
-                "brief": str(bundle["brief"]),
-                "evidence_pack": str(bundle["evidence_pack"]),
-                "claim_map": str(bundle["claim_map"]),
-                "draft": str(bundle["draft"]),
-                "review": str(bundle["review"]),
-                "final_markdown": str(bundle["final_markdown"]),
-                "checklist": str(bundle["checklist"]),
-                "docx": str(bundle["docx"]),
-            },
-            "related_context": [str(path) for path in related_context],
-            "execution_contract": contract.to_dict(),
+    input_brief_rel = relative_to_workspace(workspace, input_brief_path) if input_brief_path else None
+    target_rel_value = relative_to_workspace(workspace, target_path) if target_path else None
+    manifest_payload = {
+        "timestamp": timestamp,
+        "command": args.workflow,
+        "work_id": work.slug,
+        "work_title": work.title,
+        "profile_id": profile.resolved_profile_id,
+        "requested_profile_id": profile.requested_profile_id,
+        "resolved_profile_id": profile.resolved_profile_id,
+        "fallback_profile_id": profile.fallback_profile_id,
+        "profile_raw_dir": str(profile.raw_dir),
+        "profile_conflict_flag": profile.conflict_flag,
+        "profile_status": profile.profile_status,
+        "search_enabled": use_search,
+        "topic": topic,
+        "input_brief": input_brief_rel,
+        "target_path": target_rel_value,
+        "root_dir": str(root_dir),
+        "output_file": str(out_file),
+        "bundle": {
+            "slug": article_slug,
+            "brief": str(bundle["brief"]),
+            "evidence_pack": str(bundle["evidence_pack"]),
+            "claim_map": str(bundle["claim_map"]),
+            "draft": str(bundle["draft"]),
+            "review": str(bundle["review"]),
+            "final_markdown": str(bundle["final_markdown"]),
+            "checklist": str(bundle["checklist"]),
+            "docx": str(bundle["docx"]),
+            "state_manifest": str(bundle_state_path),
         },
+        "related_context": [str(path) for path in related_context],
+        "execution_contract": contract.to_dict(),
+    }
+    initial_bundle_state = build_article_bundle_state(
+        work_id=work.slug,
+        article_slug=article_slug,
+        bundle=bundle,
+        profile_id=profile.resolved_profile_id,
+        last_action=args.workflow,
+        last_run_status="started",
+        latest_run_manifest=str(manifest_file),
+        latest_output_file=str(out_file),
+        execution_contract=contract.to_dict(),
+        topic=topic,
+        input_brief=input_brief_rel,
+        target_path=target_rel_value,
+        previous_state=load_article_bundle_state(bundle_state_path),
     )
+    write_article_bundle_state(bundle_state_path, initial_bundle_state)
+    try:
+        _run_codex(root_dir, prompt, out_file, use_search, args.model)
+        _write_json(manifest_file, manifest_payload)
+        completed_bundle_state = build_article_bundle_state(
+            work_id=work.slug,
+            article_slug=article_slug,
+            bundle=bundle,
+            profile_id=profile.resolved_profile_id,
+            last_action=args.workflow,
+            last_run_status="succeeded",
+            latest_run_manifest=str(manifest_file),
+            latest_output_file=str(out_file),
+            execution_contract=contract.to_dict(),
+            topic=topic,
+            input_brief=input_brief_rel,
+            target_path=target_rel_value,
+            previous_state=load_article_bundle_state(bundle_state_path),
+        )
+        write_article_bundle_state(bundle_state_path, completed_bundle_state)
+    except Exception:
+        failed_bundle_state = build_article_bundle_state(
+            work_id=work.slug,
+            article_slug=article_slug,
+            bundle=bundle,
+            profile_id=profile.resolved_profile_id,
+            last_action=args.workflow,
+            last_run_status="failed",
+            latest_run_manifest=str(manifest_file),
+            latest_output_file=str(out_file),
+            execution_contract=contract.to_dict(),
+            topic=topic,
+            input_brief=input_brief_rel,
+            target_path=target_rel_value,
+            previous_state=load_article_bundle_state(bundle_state_path),
+        )
+        write_article_bundle_state(bundle_state_path, failed_bundle_state)
+        raise
     print(f"Saved final message to {out_file}")
     print(f"Saved run manifest to {manifest_file}")
+    print(f"Saved article bundle state to {bundle_state_path}")
     return 0
 
 
@@ -573,6 +638,7 @@ def _build_article_prompt(
     topic: str | None,
     input_brief_path: Path | None,
     bundle: dict[str, Path],
+    bundle_state_path: Path,
     related_context: list[Path],
     notes_content: str,
 ) -> str:
@@ -601,7 +667,7 @@ Profile trace:
 {_format_profile_trace(profile)}
 
 Managed article bundle paths:
-{_format_bundle_block(bundle)}
+{_format_bundle_block(bundle, bundle_state_path)}
 
 Nearby context candidates:
 {_format_paths_block(related_context)}
@@ -628,6 +694,7 @@ def _build_review_prompt(
     target_path: Path | None,
     target_rel: str | None,
     bundle: dict[str, Path],
+    bundle_state_path: Path,
     related_context: list[Path],
     notes_content: str,
 ) -> str:
@@ -648,7 +715,7 @@ Profile trace:
 {_format_profile_trace(profile)}
 
 Managed article bundle paths:
-{_format_bundle_block(bundle)}
+{_format_bundle_block(bundle, bundle_state_path)}
 
 Nearby context candidates:
 {_format_paths_block(related_context)}
@@ -675,6 +742,7 @@ def _build_repair_prompt(
     target_path: Path | None,
     target_rel: str | None,
     bundle: dict[str, Path],
+    bundle_state_path: Path,
     related_context: list[Path],
     notes_content: str,
 ) -> str:
@@ -695,7 +763,7 @@ Profile trace:
 {_format_profile_trace(profile)}
 
 Managed article bundle paths:
-{_format_bundle_block(bundle)}
+{_format_bundle_block(bundle, bundle_state_path)}
 
 Nearby context candidates:
 {_format_paths_block(related_context)}
@@ -762,6 +830,7 @@ def _article_related_context(
     input_brief_path: Path | None,
     target_path: Path | None,
     bundle: dict[str, Path],
+    bundle_state_path: Path,
 ) -> list[Path]:
     assert work.article is not None
     paths: list[Path] = [
@@ -786,6 +855,7 @@ def _article_related_context(
         paths.append(input_brief_path)
     if target_path:
         paths.append(target_path)
+    paths.append(bundle_state_path)
     paths.extend(bundle.values())
     return _dedupe_existing(paths)
 
@@ -836,6 +906,7 @@ def _print_academic_dry_run(
     article_slug: str,
     model: str | None,
     bundle: dict[str, Path],
+    bundle_state_path: Path,
     related_context: list[Path],
     prompt: str,
 ) -> None:
@@ -853,10 +924,11 @@ def _print_academic_dry_run(
     if target_rel:
         print(f"Target (relative): {target_rel}")
     print(f"Article slug: {article_slug}")
+    print(f"Bundle state manifest: {bundle_state_path}")
     if model:
         print(f"Model: {model}")
     print(f"Execution contract:\n{_format_execution_contract_block(contract)}")
-    print(f"Managed bundle paths:\n{_format_bundle_block(bundle)}")
+    print(f"Managed bundle paths:\n{_format_bundle_block(bundle, bundle_state_path)}")
     print(f"Related context:\n{_format_paths_block(related_context)}")
     print()
     print(prompt)
@@ -933,7 +1005,7 @@ def _format_paths_block(paths: list[Path]) -> str:
     return "\n".join(f"- {path}" for path in paths)
 
 
-def _format_bundle_block(bundle: dict[str, Path]) -> str:
+def _format_bundle_block(bundle: dict[str, Path], bundle_state_path: Path) -> str:
     return "\n".join(
         [
             f"- Brief: {bundle['brief']}",
@@ -944,6 +1016,7 @@ def _format_bundle_block(bundle: dict[str, Path]) -> str:
             f"- Final markdown: {bundle['final_markdown']}",
             f"- Final checklist: {bundle['checklist']}",
             f"- Expected DOCX: {bundle['docx']}",
+            f"- Bundle state manifest: {bundle_state_path}",
         ]
     )
 

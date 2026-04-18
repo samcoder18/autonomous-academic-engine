@@ -2350,6 +2350,96 @@ class RepairKernelTests(unittest.TestCase):
         self.assertEqual(record.repair_decision["action"], "stop")
 
 
+class ArticleBundleLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        self.fake_codex = self.root / "bin" / "fake-codex"
+        build_fake_codex(self.fake_codex)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_launch_academic_run_writes_article_bundle_manifest(self) -> None:
+        brief_path = self.root / TEST_WORK_ROOT / "articles" / "briefs" / "demo-brief.md"
+        write_file(brief_path, "# Fresh brief\n")
+        bundle_manifest = self.root / TEST_WORK_ROOT / "articles" / "runs" / "demo-brief.bundle.json"
+
+        stdout = StringIO()
+        stderr = StringIO()
+        with patch.dict(os.environ, {"CODEX_BIN": str(self.fake_codex)}, clear=False):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "article",
+                        "--brief",
+                        brief_path.relative_to(self.root).as_posix(),
+                        "--no-search",
+                    ],
+                    root_dir=self.root,
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertTrue(bundle_manifest.exists())
+        payload = json.loads(bundle_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(payload["work_id"], TEST_WORK_ID)
+        self.assertEqual(payload["article_slug"], "demo-brief")
+        self.assertEqual(payload["current_phase"], "briefed")
+        self.assertEqual(payload["active_phase"], "drafted")
+        self.assertEqual(payload["current_status"], "in-progress")
+        self.assertEqual(payload["last_run_status"], "succeeded")
+        self.assertEqual(payload["profile_id"], "ru-law-article-v1")
+        self.assertEqual(payload["evidence_state"], "missing")
+        self.assertTrue(payload["bundle_files"]["brief"]["exists"])
+        self.assertFalse(payload["bundle_files"]["draft"]["exists"])
+        self.assertIn("Saved article bundle state", stdout.getvalue())
+
+    def test_article_bundle_status_reads_manifest_and_lists_manifest_only_slug(self) -> None:
+        runs_dir = self.root / TEST_WORK_ROOT / "articles" / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": "v1",
+            "work_id": TEST_WORK_ID,
+            "article_slug": "pending-topic",
+            "current_phase": "not-started",
+            "current_status": "in-progress",
+            "readiness_status": None,
+            "active_phase": "drafted",
+            "profile_id": "ru-law-article-v1",
+            "evidence_state": "missing",
+            "checklist_state": "not-started",
+            "finalizer_gate_state": "not-ready",
+            "last_action": "article",
+            "last_run_status": "started",
+            "latest_run_manifest": None,
+            "latest_output_file": None,
+            "latest_runtime_record_ids": [],
+            "bundle_files": {},
+            "execution_contract": None,
+            "inputs": {"topic": "Pending topic", "input_brief": None, "target_path": None},
+            "updated_at": "2026-04-18T10:00:00+00:00",
+        }
+        (runs_dir / "pending-topic.bundle.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        orchestrator = WorkflowOrchestrator(self.root)
+        self.assertIn("pending-topic", orchestrator.list_article_slugs())
+        status = orchestrator.get_artifact_status("article:pending-topic")
+
+        self.assertEqual(status["kind"], "article-bundle")
+        self.assertTrue(status["bundle_state_manifest_exists"])
+        self.assertEqual(status["state"]["article_slug"], "pending-topic")
+        self.assertEqual(status["state"]["current_status"], "in-progress")
+        self.assertEqual(status["state"]["active_phase"], "drafted")
+
+
 class TelegramConsoleCliTests(unittest.TestCase):
     def test_standards_intake_creates_manifest_and_normalized_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 
+from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
 from .runtime_status import build_attachments, build_checkpoint, build_failure, build_runtime_status, write_status
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
@@ -152,12 +153,16 @@ class WorkflowOrchestrator:
             work.article.reviews_dir,
             work.article.final_dir,
             work.article.paths.output_docx_dir,
+            work.article.paths.root_dir / "runs",
         )
         for folder in folders:
             if not folder.exists():
                 continue
             for path in folder.glob("*"):
                 if path.name.startswith(".") or path.name == "README.md":
+                    continue
+                if path.suffix == ".json" and path.name.endswith(".bundle.json"):
+                    slugs.add(path.name[: -len(".bundle.json")])
                     continue
                 if path.suffix == ".docx":
                     slugs.add(path.stem)
@@ -826,6 +831,14 @@ class WorkflowOrchestrator:
             files = article_bundle_paths(work, clean_slug)
         except WorkspaceConfigError as exc:
             raise WorkflowError(str(exc)) from exc
+        state_path = article_bundle_manifest_path(work, clean_slug)
+        state = load_article_bundle_state(state_path)
+        if state is None:
+            state = build_article_bundle_state(
+                work_id=work.slug,
+                article_slug=clean_slug,
+                bundle=files,
+            )
         exposed_files = {
             "brief": files["brief"],
             "evidence": files["evidence_pack"],
@@ -848,6 +861,9 @@ class WorkflowOrchestrator:
             "kind": "article-bundle",
             "work_id": work.slug,
             "slug": clean_slug,
+            "bundle_state_manifest": str(state_path),
+            "bundle_state_manifest_exists": state_path.exists(),
+            "state": state.to_dict(),
             "files": present,
             "missing": missing,
             "complete": not missing,
