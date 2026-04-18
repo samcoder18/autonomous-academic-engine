@@ -19,6 +19,7 @@ from telegram_console.agent_chat import (
     ProjectChatState,
 )
 from telegram_console.article_bundle_state import article_bundle_manifest_path
+from telegram_console.article_runtime_signals import extract_article_artifact_signals
 from telegram_console.action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
@@ -1616,6 +1617,53 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(bundle_state["current_status"], "strong-draft")
         self.assertEqual(bundle_state["terminal_reason"], "ready-with-caveats")
         self.assertEqual(bundle_state["blockers"], [])
+
+
+class ArticleRuntimeSignalsTests(unittest.TestCase):
+    def test_extract_article_artifact_signals_prefers_most_conservative_status(self) -> None:
+        signals = extract_article_artifact_signals(
+            {
+                "output": "Post-repair verdict: `submission-ready`\n",
+                "review": "- Verdict: `strong-draft`\n- Remaining blockers: none\n",
+                "checklist": (
+                    "* Final status : `strong-draft-with-blockers`\n"
+                    "* What still blocks formal submission: Need primary-source support for the lead claim.\n"
+                ),
+            }
+        )
+
+        self.assertEqual(signals.readiness_status, "strong-draft-with-blockers")
+        self.assertEqual(len(signals.blockers), 1)
+        self.assertEqual(signals.blockers[0].category, "primary-support")
+        self.assertEqual(signals.blockers[0].details["source"], "checklist")
+        self.assertEqual(signals.blockers[0].details["field"], "what still blocks formal submission")
+
+    def test_extract_article_artifact_signals_handles_aliases_and_none_markers(self) -> None:
+        signals = extract_article_artifact_signals(
+            {
+                "review": (
+                    " - FINAL STATUS : `strong-draft`\n"
+                    " - Remaining blockers : none identified\n"
+                    " - Formatting issues : no blockers\n"
+                ),
+                "checklist": "- Submission blockers: none\n",
+            }
+        )
+
+        self.assertEqual(signals.readiness_status, "strong-draft")
+        self.assertEqual(signals.blockers, ())
+
+    def test_extract_article_artifact_signals_ignores_freeform_prose(self) -> None:
+        signals = extract_article_artifact_signals(
+            {
+                "output": "This draft may become submission-ready after another source pass.\n",
+                "review": "Narrative note without explicit verdict fields.\n",
+                "checklist": "- What still blocks formal submission: none\n",
+            }
+        )
+
+        self.assertIsNone(signals.readiness_status)
+        self.assertEqual(signals.blockers, ())
 
 
 class RuntimeObservabilityWrapperTests(unittest.TestCase):
