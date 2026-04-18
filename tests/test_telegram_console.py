@@ -18,6 +18,7 @@ from telegram_console.agent_chat import (
     AgentTurnNotification,
     ProjectChatState,
 )
+from telegram_console.article_bundle_state import article_bundle_manifest_path
 from telegram_console.action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
@@ -41,7 +42,7 @@ from telegram_console import run_wrapper as run_wrapper_module
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
-from telegram_console.workspace import load_work_config, load_workspace_config
+from telegram_console.workspace import article_bundle_paths, load_work_config, load_workspace_config, relative_to_workspace
 
 
 TEST_WORK_ID = "demo-work"
@@ -1176,6 +1177,204 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("Сейчас уже идет другой запуск", busy_text)
         self.assertIn("Демо-проект", busy_text)
         self.assertIn("проверка", busy_text)
+
+    def test_article_repair_finalization_enriches_runtime_status_and_bundle_state(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "repair-demo")
+        write_file(bundle["brief"], "# Repair brief\n")
+        write_file(bundle["draft"], "# Repair draft\n")
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="repair",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["draft"],
+            target_rel=relative_to_workspace(workspace, bundle["draft"]),
+        )
+        timestamp = "20260418-101500"
+        output_file = work.article.paths.output_runs_dir / f"{timestamp}-repair-repair-demo.md"
+        manifest_file = work.article.paths.output_runs_dir / f"{timestamp}-repair-repair-demo.meta.json"
+        write_file(output_file, "Post-repair verdict: strong-draft-with-blockers\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "command": "repair",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "topic": None,
+            "input_brief": None,
+            "target_path": relative_to_workspace(workspace, bundle["draft"]),
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "bundle": {
+                "slug": "repair-demo",
+                "brief": str(bundle["brief"]),
+                "evidence_pack": str(bundle["evidence_pack"]),
+                "claim_map": str(bundle["claim_map"]),
+                "draft": str(bundle["draft"]),
+                "review": str(bundle["review"]),
+                "final_markdown": str(bundle["final_markdown"]),
+                "checklist": str(bundle["checklist"]),
+                "docx": str(bundle["docx"]),
+                "state_manifest": str(article_bundle_manifest_path(work, "repair-demo")),
+            },
+            "related_context": [str(self.root / "AGENTS.md")],
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "article-repair-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-article-repair",
+            "lane": "article",
+            "action": "repair",
+            "started_at": "2026-04-18T10:15:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": relative_to_workspace(workspace, bundle["draft"]),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:16:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        record = self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["repair_iteration"], 1)
+        self.assertEqual(status["repair_decision"]["action"], "repair")
+        self.assertEqual(status["terminal_reason"], "blocked-standards")
+        self.assertTrue(any(item["category"] == "standards-consistency" for item in status["blockers"]))
+        self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
+
+        bundle_state = json.loads(article_bundle_manifest_path(work, "repair-demo").read_text(encoding="utf-8"))
+        self.assertEqual(bundle_state["current_status"], "strong-draft-with-blockers")
+        self.assertEqual(bundle_state["repair_iteration"], 1)
+        self.assertEqual(bundle_state["repair_decision"]["action"], "repair")
+        self.assertEqual(bundle_state["terminal_reason"], "blocked-standards")
+        self.assertIn(record.record_id, bundle_state["latest_runtime_record_ids"])
+
+    def test_article_review_finalization_marks_ready_with_caveats_for_strong_draft(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "review-demo")
+        write_file(bundle["brief"], "# Review brief\n")
+        write_file(bundle["evidence_pack"], "# Evidence\n")
+        write_file(bundle["claim_map"], "# Claim map\n")
+        write_file(bundle["draft"], "# Review draft\n")
+        write_file(bundle["review"], "# Review sheet\n")
+        write_file(bundle["final_markdown"], "# Final markdown\n")
+        write_file(bundle["checklist"], "# Checklist\n")
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="review",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["draft"],
+            target_rel=relative_to_workspace(workspace, bundle["draft"]),
+        )
+        timestamp = "20260418-102000"
+        output_file = work.article.paths.output_runs_dir / f"{timestamp}-review-review-demo.md"
+        manifest_file = work.article.paths.output_runs_dir / f"{timestamp}-review-review-demo.meta.json"
+        write_file(output_file, "Evaluator verdict: strong-draft\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "command": "review",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "topic": None,
+            "input_brief": None,
+            "target_path": relative_to_workspace(workspace, bundle["draft"]),
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "bundle": {
+                "slug": "review-demo",
+                "brief": str(bundle["brief"]),
+                "evidence_pack": str(bundle["evidence_pack"]),
+                "claim_map": str(bundle["claim_map"]),
+                "draft": str(bundle["draft"]),
+                "review": str(bundle["review"]),
+                "final_markdown": str(bundle["final_markdown"]),
+                "checklist": str(bundle["checklist"]),
+                "docx": str(bundle["docx"]),
+                "state_manifest": str(article_bundle_manifest_path(work, "review-demo")),
+            },
+            "related_context": [str(self.root / "AGENTS.md")],
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "article-review-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-article-review",
+            "lane": "article",
+            "action": "review",
+            "started_at": "2026-04-18T10:20:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": relative_to_workspace(workspace, bundle["draft"]),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:21:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["terminal_reason"], "ready-with-caveats")
+        self.assertEqual(status["blockers"], [])
+        self.assertEqual(status["repair_decision"]["action"], "stop")
+
+        bundle_state = json.loads(article_bundle_manifest_path(work, "review-demo").read_text(encoding="utf-8"))
+        self.assertEqual(bundle_state["current_status"], "strong-draft")
+        self.assertEqual(bundle_state["terminal_reason"], "ready-with-caveats")
+        self.assertEqual(bundle_state["blockers"], [])
 
 
 class RuntimeObservabilityWrapperTests(unittest.TestCase):

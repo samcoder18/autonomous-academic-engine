@@ -574,6 +574,39 @@ def resolve_action_spec(lane: str, action: str) -> ActionSpec:
     return spec
 
 
+def execution_contract_from_payload(payload: dict[str, Any] | None) -> ExecutionContract | None:
+    if not isinstance(payload, dict):
+        return None
+    lane = _optional_text(payload.get("lane"))
+    action = _optional_text(payload.get("action"))
+    title = _optional_text(payload.get("title"))
+    summary = _optional_text(payload.get("summary"))
+    target_kind = _optional_text(payload.get("target_kind"))
+    target_validation = _optional_text(payload.get("target_validation"))
+    repair_policy_payload = payload.get("repair_policy")
+    if not all((lane, action, title, summary, target_kind, target_validation)) or not isinstance(repair_policy_payload, dict):
+        return None
+    return ExecutionContract(
+        lane=lane,
+        action=action,
+        title=title,
+        summary=summary,
+        target_kind=target_kind,
+        target_validation=target_validation,
+        prompt_rules=_tuple_of_text(payload.get("prompt_rules")),
+        deliverables=_tuple_of_text(payload.get("deliverables")),
+        required_context=_required_artifacts_from_payload(payload.get("required_context")),
+        allowed_write_scopes=_allowed_writes_from_payload(payload.get("allowed_write_scopes")),
+        required_outputs=_required_artifacts_from_payload(payload.get("required_outputs")),
+        required_checkpoints=_tuple_of_text(payload.get("required_checkpoints")),
+        terminal_statuses=_tuple_of_text(payload.get("terminal_statuses")),
+        quality_gates=_quality_gates_from_payload(payload.get("quality_gates")),
+        repair_policy=_repair_policy_from_payload(repair_policy_payload),
+        transitions=_transitions_from_payload(payload.get("transitions")),
+        metadata=_metadata_from_payload(payload.get("metadata")),
+    )
+
+
 def build_thesis_execution_contract(
     *,
     work: WorkConfig,
@@ -665,6 +698,134 @@ def build_article_execution_contract(
         transitions=spec.transitions,
         metadata=tuple(metadata_items),
     )
+
+
+def _required_artifacts_from_payload(payload: object) -> tuple[RequiredArtifact, ...]:
+    if not isinstance(payload, list):
+        return ()
+    items: list[RequiredArtifact] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        name = _optional_text(item.get("name"))
+        path = _optional_text(item.get("path"))
+        requirement = _optional_text(item.get("requirement"))
+        description = _optional_text(item.get("description"))
+        if not all((name, path, requirement, description)):
+            continue
+        items.append(
+            RequiredArtifact(
+                name=name,
+                path=path,
+                requirement=requirement,
+                description=description,
+            )
+        )
+    return tuple(items)
+
+
+def _allowed_writes_from_payload(payload: object) -> tuple[AllowedWriteScope, ...]:
+    if not isinstance(payload, list):
+        return ()
+    items: list[AllowedWriteScope] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        name = _optional_text(item.get("name"))
+        path = _optional_text(item.get("path"))
+        description = _optional_text(item.get("description"))
+        if not all((name, path, description)):
+            continue
+        items.append(AllowedWriteScope(name=name, path=path, description=description))
+    return tuple(items)
+
+
+def _quality_gates_from_payload(payload: object) -> tuple[QualityGate, ...]:
+    if not isinstance(payload, list):
+        return ()
+    items: list[QualityGate] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        gate_id = _optional_text(item.get("gate_id"))
+        description = _optional_text(item.get("description"))
+        if not all((gate_id, description)):
+            continue
+        items.append(
+            QualityGate(
+                gate_id=gate_id,
+                description=description,
+                blocks_statuses=_tuple_of_text(item.get("blocks_statuses")),
+            )
+        )
+    return tuple(items)
+
+
+def _repair_policy_from_payload(payload: dict[str, Any]) -> RepairPolicy:
+    max_iterations = payload.get("max_iterations")
+    return RepairPolicy(
+        eligible=bool(payload.get("eligible")),
+        max_iterations=max_iterations if isinstance(max_iterations, int) else 0,
+        safe_only=bool(payload.get("safe_only")),
+        triggers=_tuple_of_text(payload.get("triggers")),
+        terminal_reasons=_tuple_of_text(payload.get("terminal_reasons")),
+    )
+
+
+def _transitions_from_payload(payload: object) -> tuple[ExecutionTransition, ...]:
+    if not isinstance(payload, list):
+        return ()
+    items: list[ExecutionTransition] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        from_phase = _optional_text(item.get("from_phase"))
+        to_phase = _optional_text(item.get("to_phase"))
+        completion_signal = _optional_text(item.get("completion_signal"))
+        if not all((from_phase, to_phase, completion_signal)):
+            continue
+        items.append(
+            ExecutionTransition(
+                from_phase=from_phase,
+                to_phase=to_phase,
+                completion_signal=completion_signal,
+            )
+        )
+    return tuple(items)
+
+
+def _metadata_from_payload(payload: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(payload, list):
+        return ()
+    items: list[tuple[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            key_text = _optional_text(key)
+            value_text = _optional_text(value)
+            if key_text and value_text:
+                items.append((key_text, value_text))
+    return tuple(items)
+
+
+def _tuple_of_text(payload: object) -> tuple[str, ...]:
+    if not isinstance(payload, list | tuple):
+        return ()
+    result: list[str] = []
+    for item in payload:
+        text = _optional_text(item)
+        if text:
+            result.append(text)
+    return tuple(result)
+
+
+def _optional_text(value: object) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return None
 
 
 def _contract_context(paths: list[Path], *, required_names: tuple[str, ...]) -> tuple[RequiredArtifact, ...]:

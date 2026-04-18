@@ -31,6 +31,13 @@ class ArticleBundleState:
     latest_run_manifest: str | None
     latest_output_file: str | None
     latest_runtime_record_ids: tuple[str, ...]
+    blockers: tuple[dict[str, Any], ...]
+    blocker_count: int
+    repair_iteration: int | None
+    repair_decision: dict[str, Any] | None
+    terminal_reason: str | None
+    standards_gate: str
+    export_readiness: str
     bundle_files: dict[str, dict[str, Any]]
     execution_contract: dict[str, Any] | None
     inputs: dict[str, Any]
@@ -55,6 +62,13 @@ class ArticleBundleState:
             "latest_run_manifest": self.latest_run_manifest,
             "latest_output_file": self.latest_output_file,
             "latest_runtime_record_ids": list(self.latest_runtime_record_ids),
+            "blockers": list(self.blockers),
+            "blocker_count": self.blocker_count,
+            "repair_iteration": self.repair_iteration,
+            "repair_decision": self.repair_decision,
+            "terminal_reason": self.terminal_reason,
+            "standards_gate": self.standards_gate,
+            "export_readiness": self.export_readiness,
             "bundle_files": self.bundle_files,
             "execution_contract": self.execution_contract,
             "inputs": self.inputs,
@@ -82,6 +96,11 @@ def build_article_bundle_state(
     latest_run_manifest: str | None = None,
     latest_output_file: str | None = None,
     latest_runtime_record_ids: Iterable[str] = (),
+    readiness_status: str | None = None,
+    blockers: Iterable[dict[str, Any]] | None = None,
+    repair_iteration: int | None = None,
+    repair_decision: dict[str, Any] | None = None,
+    terminal_reason: str | None = None,
     execution_contract: dict[str, Any] | None = None,
     topic: str | None = None,
     input_brief: str | None = None,
@@ -90,9 +109,15 @@ def build_article_bundle_state(
 ) -> ArticleBundleState:
     bundle_files = snapshot_bundle_files(bundle)
     current_phase = infer_article_phase(bundle_files)
-    readiness_status = infer_readiness_status(bundle_files, previous_state.readiness_status if previous_state else None)
+    resolved_readiness = readiness_status or infer_readiness_status(
+        bundle_files,
+        previous_state.readiness_status if previous_state else None,
+    )
     active_phase = _active_phase_for_action(last_action)
-    current_status = _current_status(current_phase, readiness_status, last_run_status)
+    blockers_payload = tuple(item for item in blockers if isinstance(item, dict)) if blockers is not None else ()
+    if blockers is None and previous_state is not None:
+        blockers_payload = previous_state.blockers
+    current_status = _current_status(current_phase, resolved_readiness, last_run_status)
     runtime_ids = tuple(str(item).strip() for item in latest_runtime_record_ids if str(item).strip())
     if not runtime_ids and previous_state is not None:
         runtime_ids = previous_state.latest_runtime_record_ids
@@ -104,12 +129,18 @@ def build_article_bundle_state(
         profile_id = previous_state.profile_id
     if execution_contract is None and previous_state is not None:
         execution_contract = previous_state.execution_contract
+    if repair_iteration is None and previous_state is not None:
+        repair_iteration = previous_state.repair_iteration
+    if repair_decision is None and previous_state is not None:
+        repair_decision = previous_state.repair_decision
+    if terminal_reason is None and previous_state is not None:
+        terminal_reason = previous_state.terminal_reason
     return ArticleBundleState(
         work_id=work_id,
         article_slug=article_slug,
         current_phase=current_phase,
         current_status=current_status,
-        readiness_status=readiness_status,
+        readiness_status=resolved_readiness,
         active_phase=active_phase,
         profile_id=profile_id,
         evidence_state=_evidence_state(bundle_files),
@@ -120,6 +151,13 @@ def build_article_bundle_state(
         latest_run_manifest=latest_run_manifest,
         latest_output_file=latest_output_file,
         latest_runtime_record_ids=runtime_ids,
+        blockers=blockers_payload,
+        blocker_count=len(blockers_payload),
+        repair_iteration=repair_iteration,
+        repair_decision=repair_decision,
+        terminal_reason=terminal_reason,
+        standards_gate=_standards_gate(blockers_payload),
+        export_readiness=_export_readiness(bundle_files, resolved_readiness),
         bundle_files=bundle_files,
         execution_contract=execution_contract,
         inputs={
@@ -193,12 +231,18 @@ def article_bundle_state_from_payload(payload: dict[str, Any]) -> ArticleBundleS
     runtime_ids = payload.get("latest_runtime_record_ids")
     if not isinstance(runtime_ids, list):
         runtime_ids = []
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list):
+        blockers = []
     inputs = payload.get("inputs")
     if not isinstance(inputs, dict):
         inputs = {}
     execution_contract = payload.get("execution_contract")
     if not isinstance(execution_contract, dict):
         execution_contract = None
+    repair_iteration = payload.get("repair_iteration")
+    if not isinstance(repair_iteration, int):
+        repair_iteration = None
     return ArticleBundleState(
         version=_optional_text(payload.get("version")) or ARTICLE_BUNDLE_STATE_VERSION,
         work_id=work_id,
@@ -216,6 +260,13 @@ def article_bundle_state_from_payload(payload: dict[str, Any]) -> ArticleBundleS
         latest_run_manifest=_optional_text(payload.get("latest_run_manifest")),
         latest_output_file=_optional_text(payload.get("latest_output_file")),
         latest_runtime_record_ids=tuple(str(item).strip() for item in runtime_ids if str(item).strip()),
+        blockers=tuple(item for item in blockers if isinstance(item, dict)),
+        blocker_count=_optional_int(payload.get("blocker_count")) or len(blockers),
+        repair_iteration=repair_iteration,
+        repair_decision=payload.get("repair_decision") if isinstance(payload.get("repair_decision"), dict) else None,
+        terminal_reason=_optional_text(payload.get("terminal_reason")),
+        standards_gate=_optional_text(payload.get("standards_gate")) or "clear",
+        export_readiness=_optional_text(payload.get("export_readiness")) or "not-ready",
         bundle_files={str(key): value for key, value in bundle_files.items() if isinstance(value, dict)},
         execution_contract=execution_contract,
         inputs=inputs,
@@ -271,6 +322,22 @@ def _current_status(current_phase: str, readiness_status: str | None, last_run_s
     return "in-progress"
 
 
+def _standards_gate(blockers: tuple[dict[str, Any], ...]) -> str:
+    for blocker in blockers:
+        category = _optional_text(blocker.get("category")) or ""
+        if category == "standards-consistency":
+            return "conflict-visible"
+    return "clear"
+
+
+def _export_readiness(bundle_files: dict[str, dict[str, Any]], readiness_status: str | None) -> str:
+    if readiness_status == "submission-ready" and _exists(bundle_files, "docx"):
+        return "exported"
+    if readiness_status in {"submission-ready", "strong-draft"} and _exists(bundle_files, "final_markdown") and _exists(bundle_files, "checklist"):
+        return "ready-for-export"
+    return "not-ready"
+
+
 def _active_phase_for_action(action: str | None) -> str | None:
     mapping = {
         "article": "drafted",
@@ -290,4 +357,10 @@ def _optional_text(value: object) -> str | None:
         cleaned = value.strip()
         if cleaned:
             return cleaned
+    return None
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
     return None

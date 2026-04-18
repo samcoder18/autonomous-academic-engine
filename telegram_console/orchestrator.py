@@ -9,7 +9,9 @@ import re
 import subprocess
 import sys
 
+from .action_specs import execution_contract_from_payload
 from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
+from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .runtime_status import build_attachments, build_checkpoint, build_failure, build_runtime_status, write_status
 from .state import RuntimeStore
 from .utils import parse_datetime, utc_now
@@ -633,8 +635,12 @@ class WorkflowOrchestrator:
                 request.get("topic"),
             ),
         )
-        self.store.write_json(run_dir / "resolution.json", record.to_dict())
-        self._write_workflow_status(run_dir, request, result, record)
+        article_runtime = self._sync_article_runtime_state(request, record)
+        resolution_payload = record.to_dict()
+        if article_runtime:
+            resolution_payload["article_runtime"] = article_runtime
+        self.store.write_json(run_dir / "resolution.json", resolution_payload)
+        self._write_workflow_status(run_dir, request, result, record, article_runtime=article_runtime)
         return record
 
     def _resolve_manifest_outputs(
@@ -740,7 +746,13 @@ class WorkflowOrchestrator:
             resolution = self.store.read_json(run_dir / "resolution.json")
             result = self.store.read_json(run_dir / "result.json")
             if isinstance(resolution, dict):
-                record = RunRecord(**resolution)
+                record = RunRecord(
+                    **{
+                        key: value
+                        for key, value in resolution.items()
+                        if key in RunRecord.__dataclass_fields__
+                    }
+                )
                 if record.status == "success" and record.manifest_path:
                     continue
                 records.append(record)
@@ -924,6 +936,8 @@ class WorkflowOrchestrator:
         request: dict[str, Any],
         result: dict[str, Any],
         record: RunRecord,
+        *,
+        article_runtime: dict[str, Any] | None = None,
     ) -> None:
         status_path = run_dir / "status.json"
         started_at = request.get("started_at", result.get("started_at", utc_now()))
@@ -986,6 +1000,30 @@ class WorkflowOrchestrator:
                 failure=failure,
             ),
         ]
+        if article_runtime:
+            article_phase = _optional_text(article_runtime.get("current_phase")) or final_stage
+            checkpoints.append(
+                build_checkpoint(
+                    "article-bundle-synced",
+                    status=final_status,
+                    stage=article_phase,
+                    timestamp=finished_at or utc_now(),
+                    message=_optional_text(article_runtime.get("summary")) or record.summary,
+                )
+            )
+            repair_decision = article_runtime.get("repair_decision")
+            if isinstance(repair_decision, dict):
+                decision_action = _optional_text(repair_decision.get("action")) or "n/a"
+                decision_reason = _optional_text(repair_decision.get("reason")) or "n/a"
+                checkpoints.append(
+                    build_checkpoint(
+                        "repair-decision-issued",
+                        status=final_status,
+                        stage=article_phase,
+                        timestamp=finished_at or utc_now(),
+                        message=f"{decision_action}: {decision_reason}",
+                    )
+                )
         attachments = build_attachments(
             {
                 "status": status_path,
@@ -995,6 +1033,7 @@ class WorkflowOrchestrator:
                 "manifest": record.manifest_path,
                 "trace": record.output_file,
                 "resolution": run_dir / "resolution.json",
+                "bundle_state": article_runtime.get("bundle_state_manifest") if article_runtime else None,
             }
         )
         write_status(
@@ -1013,9 +1052,256 @@ class WorkflowOrchestrator:
                 action=record.action,
                 started_at=started_at,
                 finished_at=finished_at,
-                summary=record.summary,
+                summary=_optional_text(article_runtime.get("summary")) if article_runtime else record.summary,
                 failure=failure,
+                blockers=article_runtime.get("blockers") if article_runtime else None,
+                repair_decision=article_runtime.get("repair_decision") if article_runtime else None,
+                repair_iteration=article_runtime.get("repair_iteration") if article_runtime else None,
+                terminal_reason=_optional_text(article_runtime.get("terminal_reason")) if article_runtime else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
             ),
         )
+
+    def _sync_article_runtime_state(
+        self,
+        request: dict[str, Any],
+        record: RunRecord,
+    ) -> dict[str, Any] | None:
+        if record.lane != "article" or not record.work_id:
+            return None
+        work = self._work(record.work_id)
+        manifest = self.store.read_json(Path(record.manifest_path)) if record.manifest_path else None
+        if not isinstance(manifest, dict):
+            return None
+        bundle_payload = manifest.get("bundle")
+        if not isinstance(bundle_payload, dict):
+            return None
+        article_slug = _optional_text(bundle_payload.get("slug"))
+        if not article_slug:
+            return None
+        try:
+            bundle = article_bundle_paths(work, article_slug)
+        except WorkspaceConfigError:
+            return None
+        state_path = article_bundle_manifest_path(work, article_slug)
+        previous_state = load_article_bundle_state(state_path)
+        output_text = self._read_text(record.output_file)
+        readiness_status = self._parse_article_readiness_status(output_text)
+        blockers = self._classify_article_blockers(
+            bundle=bundle,
+            manifest=manifest,
+            readiness_status=readiness_status,
+        )
+        effective_status = self._effective_article_status(readiness_status, blockers)
+        terminal_reason = self._article_terminal_reason(effective_status, blockers)
+        current_iteration = self._article_repair_iteration(record.action, previous_state)
+        contract = execution_contract_from_payload(manifest.get("execution_contract"))
+        repair_decision = self._article_repair_decision(
+            contract=contract,
+            blockers=blockers,
+            repair_iteration=current_iteration,
+            terminal_reason=terminal_reason,
+        )
+        runtime_ids = self._merge_runtime_record_ids(
+            previous_state.latest_runtime_record_ids if previous_state else (),
+            record.record_id,
+        )
+        updated_state = build_article_bundle_state(
+            work_id=work.slug,
+            article_slug=article_slug,
+            bundle=bundle,
+            profile_id=_optional_text(manifest.get("resolved_profile_id")) or _optional_text(manifest.get("profile_id")),
+            last_action=record.action,
+            last_run_status=record.status,
+            latest_run_manifest=record.manifest_path,
+            latest_output_file=record.output_file,
+            latest_runtime_record_ids=runtime_ids,
+            readiness_status=effective_status,
+            blockers=[item.to_dict() for item in blockers],
+            repair_iteration=current_iteration,
+            repair_decision=repair_decision,
+            terminal_reason=terminal_reason,
+            execution_contract=manifest.get("execution_contract") if isinstance(manifest.get("execution_contract"), dict) else None,
+            topic=_optional_text(manifest.get("topic")),
+            input_brief=_optional_text(manifest.get("input_brief")),
+            target_path=_optional_text(manifest.get("target_path")),
+            previous_state=previous_state,
+        )
+        from .article_bundle_state import write_article_bundle_state
+
+        write_article_bundle_state(state_path, updated_state)
+        blocker_count = len(blockers)
+        summary = record.summary
+        if effective_status:
+            summary = f"{summary} · article_status={effective_status}"
+        if blocker_count:
+            summary = f"{summary} · blockers={blocker_count}"
+        if terminal_reason:
+            summary = f"{summary} · terminal_reason={terminal_reason}"
+        return {
+            "article_slug": article_slug,
+            "current_phase": updated_state.current_phase,
+            "current_status": updated_state.current_status,
+            "blockers": [item.to_dict() for item in blockers],
+            "repair_decision": repair_decision,
+            "repair_iteration": current_iteration,
+            "terminal_reason": terminal_reason,
+            "bundle_state_manifest": str(state_path),
+            "summary": summary,
+        }
+
+    def _parse_article_readiness_status(self, output_text: str) -> str | None:
+        if not output_text:
+            return None
+        text = output_text.casefold()
+        if "strong-draft-with-blockers" in text:
+            return "strong-draft-with-blockers"
+        if "submission-ready" in text:
+            return "submission-ready"
+        if "strong-draft" in text:
+            return "strong-draft"
+        return None
+
+    def _classify_article_blockers(
+        self,
+        *,
+        bundle: dict[str, Path],
+        manifest: dict[str, Any],
+        readiness_status: str | None,
+    ) -> tuple[Blocker, ...]:
+        blockers: list[Blocker] = []
+        missing_support = [name for name in ("evidence_pack", "claim_map") if not bundle[name].exists()]
+        if readiness_status == "strong-draft-with-blockers":
+            if missing_support:
+                blockers.append(
+                    Blocker(
+                        category="primary-support",
+                        code="evidence-coverage-gap",
+                        message="Article bundle still lacks verified evidence coverage artifacts.",
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                        details={"missing": missing_support},
+                    )
+                )
+            else:
+                blockers.append(
+                    Blocker(
+                        category="review",
+                        code="review-blockers-remain",
+                        message="Article verdict still reports unresolved blockers.",
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                    )
+                )
+        if readiness_status == "submission-ready":
+            if missing_support:
+                blockers.append(
+                    Blocker(
+                        category="primary-support",
+                        code="submission-missing-evidence",
+                        message="Submission-ready cannot be claimed while evidence coverage artifacts are missing.",
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                        details={"missing": missing_support},
+                    )
+                )
+            if not bundle["checklist"].exists():
+                blockers.append(
+                    Blocker(
+                        category="artifact",
+                        code="submission-checklist-missing",
+                        message="Submission-ready cannot be claimed without a checklist artifact.",
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                    )
+                )
+        if bool(manifest.get("profile_conflict_flag")) and readiness_status in {"submission-ready", "strong-draft-with-blockers"}:
+            blockers.append(
+                Blocker(
+                    category="standards-consistency",
+                    code="profile-conflict-flag",
+                    message="The selected standards profile still has a visible conflict flag.",
+                    repairable=True,
+                    blocks_statuses=("submission-ready",),
+                    details={"profile_id": _optional_text(manifest.get("resolved_profile_id")) or _optional_text(manifest.get("profile_id"))},
+                )
+            )
+        deduped: list[Blocker] = []
+        seen: set[tuple[str, str]] = set()
+        for blocker in blockers:
+            key = (blocker.category, blocker.code)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(blocker)
+        return tuple(deduped)
+
+    def _effective_article_status(self, readiness_status: str | None, blockers: tuple[Blocker, ...]) -> str | None:
+        if readiness_status == "submission-ready" and blockers:
+            return "strong-draft-with-blockers"
+        return readiness_status
+
+    def _article_terminal_reason(self, readiness_status: str | None, blockers: tuple[Blocker, ...]) -> str | None:
+        if blockers:
+            return determine_terminal_reason(blockers)
+        if readiness_status == "submission-ready":
+            return "ready"
+        if readiness_status == "strong-draft":
+            return "ready-with-caveats"
+        return None
+
+    def _article_repair_iteration(self, action: str, previous_state: Any) -> int:
+        previous_iteration = previous_state.repair_iteration if previous_state and previous_state.repair_iteration is not None else 0
+        if action == "repair":
+            return previous_iteration + 1
+        return previous_iteration
+
+    def _article_repair_decision(
+        self,
+        *,
+        contract: Any,
+        blockers: tuple[Blocker, ...],
+        repair_iteration: int,
+        terminal_reason: str | None,
+    ) -> dict[str, Any]:
+        if contract is not None:
+            payload = build_repair_decision(
+                contract=contract,
+                blockers=blockers,
+                repair_iteration=repair_iteration,
+            ).to_dict()
+        else:
+            payload = {
+                "action": "repair" if blockers else "stop",
+                "reason": "repairable-blockers-available" if blockers else "blockers-cleared",
+                "repair_iteration": repair_iteration,
+                "blocker_count": len(blockers),
+            }
+        if terminal_reason:
+            payload["terminal_reason"] = terminal_reason
+        return payload
+
+    def _merge_runtime_record_ids(self, existing: tuple[str, ...], record_id: str) -> tuple[str, ...]:
+        merged: list[str] = []
+        for item in (*existing, record_id):
+            candidate = str(item).strip()
+            if candidate and candidate not in merged:
+                merged.append(candidate)
+        return tuple(merged[-5:])
+
+    def _read_text(self, path: str | None) -> str:
+        if not path:
+            return ""
+        candidate = Path(path)
+        if not candidate.exists():
+            return ""
+        return candidate.read_text(encoding="utf-8")
+
+
+def _optional_text(value: object) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            return cleaned
+    return None
