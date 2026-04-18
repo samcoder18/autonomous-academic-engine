@@ -1,0 +1,31 @@
+{
+  "profile_id": "journal-jrp",
+  "synced_at": "2026-04-18T09:07:14.473031+00:00",
+  "force_refresh": false,
+  "sources": [
+    {
+      "source_id": "journal-jrp-home",
+      "label": "Journal of Russian Law platform home",
+      "url": "https://jrp.jes.su/",
+      "final_url": "https://jrp.jes.su/",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:13.391951+00:00",
+      "checksum_sha256": "bdeb4cf78482be09ac17b0883d73a301438b32cc6b03ec28b61e82d35067d208",
+      "filename": "journal-jrp-home.html",
+      "size_bytes": 34123,
+      "source_date": null
+    },
+    {
+      "source_id": "journal-jrp-rules",
+      "label": "Journal of Russian Law rules for authors",
+      "url": "https://jrp.jes.su/rules-jrp.html",
+      "final_url": "https://jrp.jes.su/rules-jrp.html",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:14.472884+00:00",
+      "checksum_sha256": "692f887ba603201b1b8a1bf6492017b6632a5d029f005be4732ed35cdd0d586c",
+      "filename": "journal-jrp-rules.html",
+      "size_bytes": 42672,
+      "source_date": null
+    }
+  ]
+}

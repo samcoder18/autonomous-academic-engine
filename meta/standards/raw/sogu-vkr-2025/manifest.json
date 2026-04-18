@@ -1,0 +1,31 @@
+{
+  "profile_id": "sogu-vkr-2025",
+  "synced_at": "2026-04-18T09:07:04.016271+00:00",
+  "force_refresh": false,
+  "sources": [
+    {
+      "source_id": "sogu-method-2025",
+      "label": "СОГУ методические рекомендации по подготовке и защите ВКР (2025)",
+      "url": "https://www.nosu.ru/wp-content/uploads/2025/01/metodicheskie-rekomendacii.pdf",
+      "final_url": "https://www.nosu.ru/wp-content/uploads/2025/01/metodicheskie-rekomendacii.pdf",
+      "content_type": "application/pdf",
+      "fetched_at": "2026-04-18T09:06:56.784645+00:00",
+      "checksum_sha256": "a12ca84ec62e823da6822ebe9a0fe7c6f9f383ee4119d85eb01f212a21a477f3",
+      "filename": "sogu-method-2025.pdf",
+      "size_bytes": 349107,
+      "source_date": "2025-01-01"
+    },
+    {
+      "source_id": "sogu-regulation-2021",
+      "label": "СОГУ положение об организации выполнения и защиты ВКР (2021)",
+      "url": "https://media.nosu.ru/2021/01/polozhenie-ob-organizacii-vypolnenija-i-zashhity-vkr....pdf",
+      "final_url": "https://media.nosu.ru/2021/01/polozhenie-ob-organizacii-vypolnenija-i-zashhity-vkr....pdf",
+      "content_type": "application/pdf",
+      "fetched_at": "2026-04-18T09:07:04.013831+00:00",
+      "checksum_sha256": "cb6ed379fda85723a456282d3d3594c486600d8fbd3e7527b87a5867f471ddcc",
+      "filename": "sogu-regulation-2021.pdf",
+      "size_bytes": 2919374,
+      "source_date": "2021-01-01"
+    }
+  ]
+}

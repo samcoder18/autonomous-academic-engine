@@ -1,0 +1,31 @@
+{
+  "profile_id": "journal-gip",
+  "synced_at": "2026-04-18T09:07:14.496185+00:00",
+  "force_refresh": false,
+  "sources": [
+    {
+      "source_id": "journal-gip-submissions",
+      "label": "Государство и право submissions page on RCSI",
+      "url": "https://journals.rcsi.science/1026-9452/about/submissions",
+      "final_url": "https://journals.rcsi.science/1026-9452/about/submissions",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:13.086659+00:00",
+      "checksum_sha256": "6f90b568268e59506d1d867e3813396e84105e7601104c207ce431a487bbebca",
+      "filename": "journal-gip-submissions.html",
+      "size_bytes": 49753,
+      "source_date": null
+    },
+    {
+      "source_id": "journal-gip-author-rules",
+      "label": "Государство и право author rules on gipras.ru",
+      "url": "https://gipras.ru/pravila-dlya-avtorov.html",
+      "final_url": "https://gipras.ru/pravila-dlya-avtorov.html",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:14.495690+00:00",
+      "checksum_sha256": "a1617a40a2b7ff33a05fbb37fe26d83221a14c3c14c221f0e21884c53bf692dc",
+      "filename": "journal-gip-author-rules.html",
+      "size_bytes": 39527,
+      "source_date": null
+    }
+  ]
+}

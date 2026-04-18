@@ -5,6 +5,7 @@ from io import StringIO
 from pathlib import Path
 import json
 import os
+import re
 import tempfile
 import textwrap
 import time
@@ -24,7 +25,10 @@ from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServi
 from telegram_console.orchestrator import RunBusyError, WorkflowOrchestrator
 from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.projects import ProjectService
+from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
+from telegram_console import work_cli as work_cli_module
+from telegram_console.workspace import load_work_config, load_workspace_config
 
 
 TEST_WORK_ID = "demo-work"
@@ -276,6 +280,175 @@ def build_fake_repo(root: Path) -> None:
         ),
         executable=True,
     )
+
+
+def write_sample_standards_registry(root: Path) -> None:
+    write_file(
+        root / "meta/standards/registry.toml",
+        textwrap.dedent(
+            """\
+            version = 1
+
+            [fallback_profiles]
+            thesis = "thesis-v1"
+            article = "ru-law-article-v1"
+
+            [profiles.thesis-v1]
+            workflow_lane = "thesis"
+            unit_kind = "generic"
+            status = "provisional"
+            normalized_path = "meta/standards/normalized/thesis-v1.md"
+            raw_dir = "meta/standards/raw/thesis-v1"
+            official_only = true
+            notes = [
+              "Legacy generic fallback profile.",
+            ]
+
+            [profiles.ru-law-article-v1]
+            workflow_lane = "article"
+            unit_kind = "generic"
+            status = "provisional"
+            normalized_path = "meta/standards/normalized/ru-law-article-v1.md"
+            raw_dir = "meta/standards/raw/ru-law-article-v1"
+            official_only = true
+            notes = [
+              "Legacy generic fallback profile.",
+            ]
+
+            [profiles.sogu-vkr-2025]
+            workflow_lane = "thesis"
+            unit_kind = "university"
+            status = "official"
+            normalized_path = "meta/standards/normalized/sogu-vkr-2025.md"
+            raw_dir = "meta/standards/raw/sogu-vkr-2025"
+            official_only = true
+            conflict_flag = true
+            notes = [
+              "The 2025 methodology is official, but program-specific and may have applicability uncertainty outside the relevant program.",
+            ]
+
+            [[profiles.sogu-vkr-2025.sources]]
+            id = "sogu-method-2025"
+            label = "SOGU methodological recommendations 2025"
+            url = "https://example.test/sogu-method-2025.pdf"
+            date = "2025-01-01"
+
+            [[profiles.sogu-vkr-2025.sources]]
+            id = "sogu-regulation-2021"
+            label = "SOGU VQR regulation 2021"
+            url = "https://example.test/sogu-regulation-2021.pdf"
+            date = "2021-01-01"
+
+            [profiles.rf-dissertation-general]
+            unit_kind = "dissertation-regulation"
+            status = "official"
+            normalized_path = "meta/standards/normalized/rf-dissertation-general.md"
+            raw_dir = "meta/standards/raw/rf-dissertation-general"
+            official_only = true
+
+            [[profiles.rf-dissertation-general.sources]]
+            id = "pravo-gov-2013"
+            label = "Official legal publication"
+            url = "https://example.test/pravo-gov-2013.html"
+            date = "2013-10-01"
+
+            [[profiles.rf-dissertation-general.sources]]
+            id = "gost-rules"
+            label = "GOST rules page"
+            url = "https://example.test/gost-rules.html"
+
+            [profiles.journal-jrp]
+            workflow_lane = "article"
+            unit_kind = "journal"
+            status = "official"
+            normalized_path = "meta/standards/normalized/journal-jrp.md"
+            raw_dir = "meta/standards/raw/journal-jrp"
+            official_only = true
+            conflict_flag = true
+
+            [[profiles.journal-jrp.sources]]
+            id = "jrp-home"
+            label = "JRP home"
+            url = "https://example.test/jrp-home.html"
+            date = "2024-04-01"
+
+            [[profiles.journal-jrp.sources]]
+            id = "jrp-rules"
+            label = "JRP rules"
+            url = "https://example.test/jrp-rules.html"
+            date = "2025-02-01"
+
+            [profiles.journal-gip]
+            workflow_lane = "article"
+            unit_kind = "journal"
+            status = "official"
+            normalized_path = "meta/standards/normalized/journal-gip.md"
+            raw_dir = "meta/standards/raw/journal-gip"
+            official_only = true
+
+            [[profiles.journal-gip.sources]]
+            id = "gip-submissions"
+            label = "GIP submissions"
+            url = "https://example.test/gip-submissions.html"
+
+            [[profiles.journal-gip.sources]]
+            id = "gip-author-rules"
+            label = "GIP author rules"
+            url = "https://example.test/gip-author-rules.html"
+
+            [profiles.journal-kmp-yurist]
+            workflow_lane = "article"
+            unit_kind = "journal"
+            status = "official"
+            normalized_path = "meta/standards/normalized/journal-kmp-yurist.md"
+            raw_dir = "meta/standards/raw/journal-kmp-yurist"
+            official_only = true
+
+            [[profiles.journal-kmp-yurist.sources]]
+            id = "lawinfo-fresh"
+            label = "Fresh issue"
+            url = "https://example.test/lawinfo-fresh.html"
+
+            [[profiles.journal-kmp-yurist.sources]]
+            id = "lawinfo-authors"
+            label = "For authors"
+            url = "https://example.test/lawinfo-authors.html"
+
+            [[profiles.journal-kmp-yurist.sources]]
+            id = "lawinfo-formatting"
+            label = "Formatting rules"
+            url = "https://example.test/lawinfo-formatting.html"
+            """
+        ),
+    )
+
+
+def write_sample_normalized_profiles(root: Path) -> None:
+    write_file(root / "meta/standards/normalized/sogu-vkr-2025.md", "# sogu-vkr-2025\n")
+    write_file(root / "meta/standards/normalized/rf-dissertation-general.md", "# rf-dissertation-general\n")
+    write_file(root / "meta/standards/normalized/journal-jrp.md", "# journal-jrp\n")
+    write_file(root / "meta/standards/normalized/journal-gip.md", "# journal-gip\n")
+    write_file(root / "meta/standards/normalized/journal-kmp-yurist.md", "# journal-kmp-yurist\n")
+
+
+def rewrite_work_profiles(root: Path, *, thesis_profile: str | None = None, article_profile: str | None = None) -> None:
+    work_path = root / TEST_WORK_ROOT / "work.toml"
+    content = work_path.read_text(encoding="utf-8")
+    if thesis_profile is not None:
+        content = re.sub(
+            r'thesis_profile = "[^"]+"',
+            f'thesis_profile = "{thesis_profile}"',
+            content,
+            count=1,
+        )
+    if article_profile is not None:
+        content = re.sub(
+            r'article_profile = "[^"]+"',
+            f'article_profile = "{article_profile}"',
+            content,
+            count=1,
+        )
+    work_path.write_text(content, encoding="utf-8")
 
 
 def add_empty_work_scaffold(root: Path, slug: str = "empty-work") -> None:
@@ -916,6 +1089,89 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertIn("Сейчас уже идет другой запуск", busy_text)
         self.assertIn("Демо-проект", busy_text)
         self.assertIn("проверка", busy_text)
+
+
+class StandardsResolverTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def load_active_work(self):
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        return workspace, work
+
+    def test_registry_missing_uses_legacy_profiles(self) -> None:
+        workspace, work = self.load_active_work()
+
+        registry = load_standards_registry(self.root)
+        resolution = resolve_standard_profile(
+            self.root,
+            workspace,
+            work,
+            lane="article",
+            requested_profile_id=None,
+        )
+
+        self.assertTrue(registry.synthetic)
+        self.assertEqual(resolution.resolved_profile_id, "ru-law-article-v1")
+        self.assertIsNone(resolution.fallback_profile_id)
+        self.assertTrue(resolution.normalized_path.exists())
+
+    def test_missing_requested_profile_falls_back_to_generic(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace, work = self.load_active_work()
+
+        resolution = resolve_standard_profile(
+            self.root,
+            workspace,
+            work,
+            lane="article",
+            requested_profile_id="missing-profile",
+        )
+
+        self.assertEqual(resolution.requested_profile_id, "missing-profile")
+        self.assertEqual(resolution.resolved_profile_id, "ru-law-article-v1")
+        self.assertEqual(resolution.fallback_profile_id, "ru-law-article-v1")
+
+    def test_missing_normalized_profile_falls_back_to_generic(self) -> None:
+        write_sample_standards_registry(self.root)
+        rewrite_work_profiles(self.root, thesis_profile="sogu-vkr-2025")
+        workspace, work = self.load_active_work()
+
+        resolution = resolve_standard_profile(
+            self.root,
+            workspace,
+            work,
+            lane="thesis",
+            requested_profile_id=None,
+        )
+
+        self.assertEqual(resolution.requested_profile_id, "sogu-vkr-2025")
+        self.assertEqual(resolution.resolved_profile_id, "thesis-v1")
+        self.assertEqual(resolution.fallback_profile_id, "thesis-v1")
+
+    def test_missing_raw_does_not_force_fallback(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        workspace, work = self.load_active_work()
+
+        resolution = resolve_standard_profile(
+            self.root,
+            workspace,
+            work,
+            lane="article",
+            requested_profile_id="journal-jrp",
+        )
+
+        self.assertEqual(resolution.resolved_profile_id, "journal-jrp")
+        self.assertIsNone(resolution.fallback_profile_id)
+        self.assertEqual(resolution.raw_status, "missing")
 
 
 class ProjectServiceTests(unittest.TestCase):
@@ -1591,6 +1847,175 @@ class TelegramConsoleBotProjectSelectionTests(unittest.TestCase):
 
 
 class TelegramConsoleCliTests(unittest.TestCase):
+    def test_standards_intake_creates_manifest_and_normalized_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+
+            fetch_payloads = {
+                "https://example.test/jrp-home.html": (b"<html>home</html>", "https://example.test/jrp-home.html", "text/html"),
+                "https://example.test/jrp-rules.html": (b"<html>rules</html>", "https://example.test/jrp-rules.html", "text/html"),
+            }
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with patch(
+                "telegram_console.standards.fetch_url_bytes",
+                side_effect=lambda url: fetch_payloads[url],
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(["standards-intake", "journal-jrp"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            manifest_path = root / "meta/standards/raw/journal-jrp/manifest.json"
+            normalized_path = root / "meta/standards/normalized/journal-jrp.md"
+            self.assertTrue(manifest_path.exists())
+            self.assertTrue(normalized_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(manifest["sources"]), 2)
+            self.assertIn("Resolved profile: journal-jrp", stdout.getvalue())
+
+    def test_standards_refresh_rewrites_checksums(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with patch(
+                "telegram_console.standards.fetch_url_bytes",
+                side_effect=[
+                    (b"first-home", "https://example.test/jrp-home.html", "text/html"),
+                    (b"first-rules", "https://example.test/jrp-rules.html", "text/html"),
+                    (b"second-home", "https://example.test/jrp-home.html", "text/html"),
+                    (b"second-rules", "https://example.test/jrp-rules.html", "text/html"),
+                ],
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(["standards-intake", "journal-jrp"], root_dir=root)
+                    self.assertEqual(code, 0)
+                    manifest_before = json.loads(
+                        (root / "meta/standards/raw/journal-jrp/manifest.json").read_text(encoding="utf-8")
+                    )
+                    code = work_cli_module.main(["standards-refresh", "journal-jrp"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            manifest_after = json.loads((root / "meta/standards/raw/journal-jrp/manifest.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(
+                manifest_before["sources"][0]["checksum_sha256"],
+                manifest_after["sources"][0]["checksum_sha256"],
+            )
+
+    def test_standards_status_reports_conflict_and_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["standards-status", "missing-profile"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Requested profile: missing-profile", stdout.getvalue())
+            self.assertIn("Resolved profile: ru-law-article-v1", stdout.getvalue())
+            self.assertIn("Fallback profile: ru-law-article-v1", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["standards-status", "sogu-vkr-2025"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Conflict flag: yes", stdout.getvalue())
+
+    def test_launch_thesis_dry_run_uses_bound_profile_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+            rewrite_work_profiles(root, thesis_profile="sogu-vkr-2025")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["launch-thesis", "write-section", "manuscript/sections/01-introduction.md", "--dry-run"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Requested profile: sogu-vkr-2025", stdout.getvalue())
+            self.assertIn("Resolved profile: sogu-vkr-2025", stdout.getvalue())
+            self.assertIn("meta/standards/raw/sogu-vkr-2025", stdout.getvalue())
+
+    def test_launch_academic_dry_run_uses_requested_journal_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "article",
+                        "--topic",
+                        "Demo topic",
+                        "--profile",
+                        "journal-jrp",
+                        "--dry-run",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Requested profile: journal-jrp", stdout.getvalue())
+            self.assertIn("Resolved profile: journal-jrp", stdout.getvalue())
+
+    def test_launch_academic_dry_run_falls_back_to_generic_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "article",
+                        "--topic",
+                        "Demo topic",
+                        "--profile",
+                        "missing-profile",
+                        "--dry-run",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Requested profile: missing-profile", stdout.getvalue())
+            self.assertIn("Resolved profile: ru-law-article-v1", stdout.getvalue())
+            self.assertIn("Fallback profile: ru-law-article-v1", stdout.getvalue())
+
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workspace = Path(tempdir)

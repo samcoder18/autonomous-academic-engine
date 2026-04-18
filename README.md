@@ -11,7 +11,7 @@
 - `agents/` - reusable роли для structure, research, verification, drafting, critique и style.
 - `templates/` - reusable шаблоны для source packs, briefs, reviews, claim maps и checklists.
 - `meta/master-protocol.md` - общий рабочий регламент.
-- `meta/standards/` - raw и normalized publication profiles.
+- `meta/standards/` - raw и normalized publication profiles, включая `registry.toml` для V2-A standards intake track.
 - `scripts/` - launcher, сборка и экспорт.
 - `telegram_console/` - Telegram runtime, мультипроектный реестр и work-aware orchestration.
 
@@ -77,6 +77,14 @@
 - Run trace: `output/runs/<work>/<lane>/`
 - DOCX: `output/docx/<work>/`
 - Telegram runtime: `output/telegram/runtime/`
+
+## Standards intake
+
+Доступные V2-A команды:
+
+- `python3 -m telegram_console.work_cli standards-intake <profile-id>`
+- `python3 -m telegram_console.work_cli standards-refresh <profile-id>`
+- `python3 -m telegram_console.work_cli standards-status [profile-id]`
 
 ## Telegram console
 

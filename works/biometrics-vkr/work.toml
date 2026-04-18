@@ -8,7 +8,7 @@ active_lanes = ["thesis", "article"]
 work_canon = "work-canon.md"
 
 [standards]
-thesis_profile = "thesis-v1"
+thesis_profile = "sogu-vkr-2025"
 article_profile = "ru-law-article-v1"
 
 [thesis]

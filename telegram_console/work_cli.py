@@ -11,6 +11,14 @@ import shlex
 import subprocess
 import sys
 
+from .standards import (
+    StandardProfileResolution,
+    format_profile_resolution_lines,
+    format_registry_overview_lines,
+    resolve_standard_profile,
+    resolve_status_profile,
+    sync_standard_profile,
+)
 from .workspace import (
     WorkspaceConfig,
     WorkspaceConfigError,
@@ -37,7 +45,7 @@ THESIS_PRESETS = (
 ARTICLE_COMMANDS = ("article", "review", "repair")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -> int:
     parser = ArgumentParser(description="Work-aware launchers and exporters.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -75,20 +83,35 @@ def main(argv: list[str] | None = None) -> int:
     export_article.add_argument("output_docx", nargs="?")
     export_article.add_argument("--work", dest="work_id")
 
+    standards_intake_parser = subparsers.add_parser("standards-intake")
+    standards_intake_parser.add_argument("profile_id")
+
+    standards_refresh_parser = subparsers.add_parser("standards-refresh")
+    standards_refresh_parser.add_argument("profile_id")
+
+    standards_status_parser = subparsers.add_parser("standards-status")
+    standards_status_parser.add_argument("profile_id", nargs="?")
+
     args = parser.parse_args(argv)
-    root_dir = Path(__file__).resolve().parents[1]
+    root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(__file__).resolve().parents[1]
 
     try:
         if args.command == "launch-thesis":
-            return launch_thesis(root_dir, args)
+            return launch_thesis(root_path, args)
         if args.command == "launch-academic":
-            return launch_academic(root_dir, args)
+            return launch_academic(root_path, args)
         if args.command == "assemble-thesis":
-            return assemble_thesis(root_dir, args.work_id)
+            return assemble_thesis(root_path, args.work_id)
         if args.command == "export-thesis-docx":
-            return export_thesis_docx(root_dir, args.work_id)
+            return export_thesis_docx(root_path, args.work_id)
         if args.command == "export-article-docx":
-            return export_article_docx(root_dir, args.input_md, args.output_docx, args.work_id)
+            return export_article_docx(root_path, args.input_md, args.output_docx, args.work_id)
+        if args.command == "standards-intake":
+            return standards_intake(root_path, args.profile_id)
+        if args.command == "standards-refresh":
+            return standards_refresh(root_path, args.profile_id)
+        if args.command == "standards-status":
+            return standards_status(root_path, args.profile_id)
     except WorkspaceConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -100,6 +123,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
     work = resolve_work_config(workspace, work_id=args.work_id, target=args.target)
     if not work.thesis:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+    profile = resolve_standard_profile(root_dir, workspace, work, lane="thesis", requested_profile_id=None)
 
     target_rel = normalize_target_for_action(workspace, work, "thesis", args.preset, args.target)
     if target_rel == relative_to_workspace(workspace, work.thesis.full_draft_path):
@@ -110,11 +134,12 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
     use_search = _resolve_search(args.search_override, args.preset in {"full-cycle", "source-pack", "verify", "write-section"})
     review_path = derive_review_path(workspace, work, target_rel)
     sync_hint_path = _sync_path_for_target(work, args.preset, target_rel)
-    related_context = _thesis_related_context(workspace, work, target_path)
+    related_context = _thesis_related_context(workspace, work, target_path, profile)
     notes_content = _read_notes(root_dir, args.notes)
     prompt = _build_thesis_prompt(
         workspace,
         work,
+        profile,
         args.preset,
         target_path,
         target_rel,
@@ -129,6 +154,7 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
     if args.dry_run:
         _print_thesis_dry_run(
             work,
+            profile,
             args.preset,
             target_path,
             target_rel,
@@ -160,6 +186,12 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
                 "relative": target_rel,
                 "state": target_state,
             },
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
             "search_enabled": use_search,
             "model": args.model or None,
             "root_dir": str(root_dir),
@@ -182,8 +214,13 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     if not work.article:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает article lane.")
 
-    profile_id = _resolve_profile_id(workspace, work, args.profile)
-    profile_path = _resolve_profile_path(root_dir, profile_id)
+    profile = resolve_standard_profile(
+        root_dir,
+        workspace,
+        work,
+        lane="article",
+        requested_profile_id=args.profile,
+    )
     use_search = _resolve_search(args.search_override, True)
     notes_content = _read_notes(root_dir, args.notes)
 
@@ -218,7 +255,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     related_context = _article_related_context(
         workspace,
         work,
-        profile_path,
+        profile,
         input_brief_path,
         target_path,
         bundle,
@@ -228,8 +265,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         prompt = _build_article_prompt(
             workspace,
             work,
-            profile_id,
-            profile_path,
+            profile,
             use_search,
             topic,
             input_brief_path,
@@ -241,8 +277,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         prompt = _build_review_prompt(
             workspace,
             work,
-            profile_id,
-            profile_path,
+            profile,
             use_search,
             target_path,
             target_rel,
@@ -254,8 +289,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         prompt = _build_repair_prompt(
             workspace,
             work,
-            profile_id,
-            profile_path,
+            profile,
             use_search,
             target_path,
             target_rel,
@@ -268,7 +302,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         _print_academic_dry_run(
             work,
             args.workflow,
-            profile_id,
+            profile,
             use_search,
             topic,
             input_brief_path,
@@ -295,7 +329,13 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             "command": args.workflow,
             "work_id": work.slug,
             "work_title": work.title,
-            "profile_id": profile_id,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
             "search_enabled": use_search,
             "topic": topic,
             "input_brief": relative_to_workspace(workspace, input_brief_path) if input_brief_path else None,
@@ -318,6 +358,45 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     )
     print(f"Saved final message to {out_file}")
     print(f"Saved run manifest to {manifest_file}")
+    return 0
+
+
+def standards_intake(root_dir: Path, profile_id: str) -> int:
+    result = sync_standard_profile(root_dir, profile_id, force_refresh=False)
+    lines = [
+        f"Operation: {result.operation}",
+        f"Downloaded sources: {result.downloaded_count}",
+        f"Reused sources: {result.reused_count}",
+        f"Failed sources: {result.failed_count}",
+        f"Manifest path: {result.manifest_path}",
+    ]
+    lines.extend(format_profile_resolution_lines(result.resolution))
+    print("\n".join(lines))
+    return 0
+
+
+def standards_refresh(root_dir: Path, profile_id: str) -> int:
+    result = sync_standard_profile(root_dir, profile_id, force_refresh=True)
+    lines = [
+        f"Operation: {result.operation}",
+        f"Downloaded sources: {result.downloaded_count}",
+        f"Reused sources: {result.reused_count}",
+        f"Failed sources: {result.failed_count}",
+        f"Manifest path: {result.manifest_path}",
+    ]
+    lines.extend(format_profile_resolution_lines(result.resolution))
+    print("\n".join(lines))
+    return 0
+
+
+def standards_status(root_dir: Path, profile_id: str | None) -> int:
+    if not profile_id:
+        print("\n".join(format_registry_overview_lines(root_dir)))
+        return 0
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace)
+    resolution = resolve_status_profile(root_dir, profile_id, workspace=workspace, work=work)
+    print("\n".join(format_profile_resolution_lines(resolution)))
     return 0
 
 
@@ -388,6 +467,7 @@ def normalize_target_path_for_export(workspace: WorkspaceConfig, work: WorkConfi
 def _build_thesis_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
+    profile: StandardProfileResolution,
     preset: str,
     target_path: Path,
     target_rel: str,
@@ -402,6 +482,7 @@ def _build_thesis_prompt(
     nearby_context = _format_paths_block(related_context)
     review_trace = f"- Preferred review artifact path: {review_path}" if review_path else "- No dedicated review artifact path was precomputed for this run."
     sync_trace = f"- Preferred sync checkpoint path: {sync_hint_path}" if sync_hint_path else "- No sync checkpoint path was precomputed for this run."
+    profile_trace = _format_profile_trace(profile)
 
     prompts = {
         "full-cycle": f"""Use $thesis-workflow-orchestrator to handle this thesis task end-to-end in {workspace.root_dir}.
@@ -417,6 +498,8 @@ Target artifact: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
+Standards profile:
+{profile_trace}
 
 Nearby context candidates:
 {nearby_context}
@@ -448,6 +531,8 @@ Target source package: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
+Standards profile:
+{profile_trace}
 
 Nearby context candidates:
 {nearby_context}
@@ -475,6 +560,8 @@ Target file: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
+Standards profile:
+{profile_trace}
 
 Nearby context candidates:
 {nearby_context}
@@ -503,6 +590,8 @@ Target section: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
+Standards profile:
+{profile_trace}
 
 Nearby context candidates:
 {nearby_context}
@@ -559,6 +648,8 @@ Target file: {target_path}
 Target path (relative): {target_rel}
 Target state: {target_state}
 Web search: {search_state}
+Standards profile:
+{profile_trace}
 
 Nearby context candidates:
 {nearby_context}
@@ -587,8 +678,7 @@ Deliverable:
 def _build_article_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
-    profile_id: str,
-    profile_path: Path,
+    profile: StandardProfileResolution,
     use_search: bool,
     topic: str | None,
     input_brief_path: Path | None,
@@ -613,10 +703,12 @@ Article lane:
 
 Execution context:
 {input_block}
-Publication profile: {profile_id}
-Profile file: {profile_path}
+Publication profile: {profile.resolved_profile_id}
+Profile file: {profile.normalized_path}
 Web search: {search_state}
-Relevant raw standards directory: {workspace.root_dir / 'meta' / 'standards' / 'raw'}
+Relevant raw standards directory: {profile.raw_dir}
+Profile trace:
+{_format_profile_trace(profile)}
 
 Managed article bundle paths:
 {_format_bundle_block(bundle)}
@@ -651,8 +743,7 @@ Deliverable:
 def _build_review_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
-    profile_id: str,
-    profile_path: Path,
+    profile: StandardProfileResolution,
     use_search: bool,
     target_path: Path | None,
     target_rel: str | None,
@@ -670,9 +761,11 @@ Active work:
 
 Target file: {target_path}
 Target path (relative): {target_rel}
-Publication profile: {profile_id}
-Profile file: {profile_path}
+Publication profile: {profile.resolved_profile_id}
+Profile file: {profile.normalized_path}
 Web search: {search_state}
+Profile trace:
+{_format_profile_trace(profile)}
 
 Managed article bundle paths:
 {_format_bundle_block(bundle)}
@@ -699,8 +792,7 @@ Deliverable:
 def _build_repair_prompt(
     workspace: WorkspaceConfig,
     work: WorkConfig,
-    profile_id: str,
-    profile_path: Path,
+    profile: StandardProfileResolution,
     use_search: bool,
     target_path: Path | None,
     target_rel: str | None,
@@ -718,9 +810,11 @@ Active work:
 
 Repair input: {target_path}
 Repair input (relative): {target_rel}
-Publication profile: {profile_id}
-Profile file: {profile_path}
+Publication profile: {profile.resolved_profile_id}
+Profile file: {profile.normalized_path}
 Web search: {search_state}
+Profile trace:
+{_format_profile_trace(profile)}
 
 Managed article bundle paths:
 {_format_bundle_block(bundle)}
@@ -746,13 +840,20 @@ Deliverable:
 - End with the explicit post-repair status, changed files, and remaining blockers."""
 
 
-def _thesis_related_context(workspace: WorkspaceConfig, work: WorkConfig, target_path: Path) -> list[Path]:
+def _thesis_related_context(
+    workspace: WorkspaceConfig,
+    work: WorkConfig,
+    target_path: Path,
+    profile: StandardProfileResolution,
+) -> list[Path]:
     assert work.thesis is not None
     paths: list[Path] = [
         workspace.root_dir / "AGENTS.md",
         workspace.root_dir / "README.md",
         workspace.root_dir / "workspace.toml",
         workspace.root_dir / "meta" / "master-protocol.md",
+        profile.normalized_path,
+        profile.raw_manifest_path,
         work.work_dir / "work.toml",
         work.work_canon_path,
         work.thesis.paths.root_dir / "README.md",
@@ -784,7 +885,7 @@ def _thesis_related_context(workspace: WorkspaceConfig, work: WorkConfig, target
 def _article_related_context(
     workspace: WorkspaceConfig,
     work: WorkConfig,
-    profile_path: Path,
+    profile: StandardProfileResolution,
     input_brief_path: Path | None,
     target_path: Path | None,
     bundle: dict[str, Path],
@@ -797,7 +898,8 @@ def _article_related_context(
         workspace.root_dir / "meta" / "master-protocol.md",
         workspace.root_dir / "meta" / "standards" / "README.md",
         workspace.root_dir / "meta" / "standards" / "raw" / "README.md",
-        profile_path,
+        profile.normalized_path,
+        profile.raw_manifest_path,
         work.work_dir / "work.toml",
         work.work_canon_path,
         work.article.paths.root_dir / "README.md",
@@ -817,6 +919,7 @@ def _article_related_context(
 
 def _print_thesis_dry_run(
     work: WorkConfig,
+    profile: StandardProfileResolution,
     preset: str,
     target_path: Path,
     target_rel: str,
@@ -829,6 +932,8 @@ def _print_thesis_dry_run(
     prompt: str,
 ) -> None:
     print(f"Work: {work.slug}")
+    for line in format_profile_resolution_lines(profile):
+        print(line)
     print(f"Preset: {preset}")
     print(f"Target: {target_path}")
     print(f"Target (relative): {target_rel}")
@@ -848,7 +953,7 @@ def _print_thesis_dry_run(
 def _print_academic_dry_run(
     work: WorkConfig,
     workflow: str,
-    profile_id: str,
+    profile: StandardProfileResolution,
     use_search: bool,
     topic: str | None,
     input_brief_path: Path | None,
@@ -862,7 +967,8 @@ def _print_academic_dry_run(
 ) -> None:
     print(f"Work: {work.slug}")
     print(f"Command: {workflow}")
-    print(f"Profile: {profile_id}")
+    for line in format_profile_resolution_lines(profile):
+        print(line)
     print(f"Search enabled: {'yes' if use_search else 'no'}")
     if topic:
         print(f"Topic: {topic}")
@@ -879,21 +985,6 @@ def _print_academic_dry_run(
     print(f"Related context:\n{_format_paths_block(related_context)}")
     print()
     print(prompt)
-
-
-def _resolve_profile_id(workspace: WorkspaceConfig, work: WorkConfig, raw_profile: str | None) -> str:
-    if raw_profile:
-        return raw_profile
-    if work.article_profile:
-        return work.article_profile
-    return workspace.default_profiles.get("article", "ru-law-article-v1")
-
-
-def _resolve_profile_path(root_dir: Path, profile_id: str) -> Path:
-    profile_path = root_dir / "meta" / "standards" / "normalized" / f"{profile_id}.md"
-    if not profile_path.exists():
-        raise WorkspaceConfigError(f"Unknown academic profile: {profile_id}\nExpected file: {profile_path}")
-    return profile_path
 
 
 def _default_article_docx_path(work: WorkConfig, input_path: Path) -> Path:
@@ -1026,6 +1117,21 @@ def _resolve_path(root_dir: Path, raw: str) -> Path:
     if path.is_absolute():
         return path.resolve()
     return (root_dir / path).resolve()
+
+
+def _format_profile_trace(profile: StandardProfileResolution) -> str:
+    lines = [
+        f"- Requested profile: {profile.requested_profile_id}",
+        f"- Resolved profile: {profile.resolved_profile_id}",
+        f"- Profile file: {profile.normalized_path}",
+        f"- Raw directory: {profile.raw_dir}",
+        f"- Raw status: {profile.raw_status}",
+        f"- Official-only: {'yes' if profile.official_only else 'no'}",
+        f"- Conflict flag: {'yes' if profile.conflict_flag else 'no'}",
+    ]
+    if profile.fallback_profile_id:
+        lines.insert(2, f"- Fallback profile: {profile.fallback_profile_id}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

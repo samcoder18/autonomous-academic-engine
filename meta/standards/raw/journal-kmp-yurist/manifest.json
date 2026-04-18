@@ -1,0 +1,43 @@
+{
+  "profile_id": "journal-kmp-yurist",
+  "synced_at": "2026-04-18T09:07:17.683569+00:00",
+  "force_refresh": false,
+  "sources": [
+    {
+      "source_id": "journal-kmp-yurist-fresh-number",
+      "label": "Fresh issue page",
+      "url": "https://lawinfo.ru/journals/19/fresh-number",
+      "final_url": "https://lawinfo.ru/journals/19/fresh-number",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:14.100617+00:00",
+      "checksum_sha256": "df6fc942a61154b44e0301313548bbdfd0bcc1c59fe27f42903f119b03e61ddb",
+      "filename": "journal-kmp-yurist-fresh-number.html",
+      "size_bytes": 400861,
+      "source_date": null
+    },
+    {
+      "source_id": "journal-kmp-yurist-for-authors",
+      "label": "For authors page",
+      "url": "https://lawinfo.ru/for-authors",
+      "final_url": "https://lawinfo.ru/for-authors",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:15.893425+00:00",
+      "checksum_sha256": "d6f5d80d3056a9a3c547f4c101dec9a6ab8d705990a92741e6de80ed35217b76",
+      "filename": "journal-kmp-yurist-for-authors.html",
+      "size_bytes": 387161,
+      "source_date": null
+    },
+    {
+      "source_id": "journal-kmp-yurist-formatting",
+      "label": "Formatting rules page",
+      "url": "https://lawinfo.ru/for-authors/pravila-oformleniya-materialov",
+      "final_url": "https://lawinfo.ru/for-authors/pravila-oformleniya-materialov",
+      "content_type": "text/html",
+      "fetched_at": "2026-04-18T09:07:17.682819+00:00",
+      "checksum_sha256": "29aab04de599002de90be4cf89029c7d662f4faea0f255be5631aeaf047aaedb",
+      "filename": "journal-kmp-yurist-formatting.html",
+      "size_bytes": 418123,
+      "source_date": null
+    }
+  ]
+}

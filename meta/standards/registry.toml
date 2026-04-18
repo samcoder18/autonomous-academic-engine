@@ -1,0 +1,153 @@
+version = 1
+
+[fallback_profiles]
+thesis = "thesis-v1"
+article = "ru-law-article-v1"
+
+[profiles."thesis-v1"]
+workflow_lane = "thesis"
+unit_kind = "generic"
+status = "provisional"
+normalized_path = "meta/standards/normalized/thesis-v1.md"
+raw_dir = "meta/standards/raw/thesis-v1"
+official_only = true
+notes = [
+  "Generic provisional thesis fallback profile for stable mode.",
+]
+
+[profiles."ru-law-article-v1"]
+workflow_lane = "article"
+unit_kind = "generic"
+status = "provisional"
+normalized_path = "meta/standards/normalized/ru-law-article-v1.md"
+raw_dir = "meta/standards/raw/ru-law-article-v1"
+official_only = true
+notes = [
+  "Generic provisional article fallback profile for stable mode.",
+]
+
+[profiles."sogu-vkr-2025"]
+workflow_lane = "thesis"
+unit_kind = "university"
+status = "official"
+normalized_path = "meta/standards/normalized/sogu-vkr-2025.md"
+raw_dir = "meta/standards/raw/sogu-vkr-2025"
+official_only = true
+conflict_flag = true
+operative_source_id = "sogu-method-2025"
+notes = [
+  "The 2025 methodology is official, but it is program-specific and may have applicability uncertainty outside the relevant SOGU program.",
+  "When the 2025 methodology and the 2021 regulation diverge, keep the newer methodology operative and preserve a conflict flag in finalization notes.",
+]
+
+[[profiles."sogu-vkr-2025".sources]]
+id = "sogu-method-2025"
+label = "СОГУ методические рекомендации по подготовке и защите ВКР (2025)"
+url = "https://www.nosu.ru/wp-content/uploads/2025/01/metodicheskie-rekomendacii.pdf"
+date = "2025-01-01"
+filename = "sogu-method-2025.pdf"
+
+[[profiles."sogu-vkr-2025".sources]]
+id = "sogu-regulation-2021"
+label = "СОГУ положение об организации выполнения и защиты ВКР (2021)"
+url = "https://media.nosu.ru/2021/01/polozhenie-ob-organizacii-vypolnenija-i-zashhity-vkr....pdf"
+date = "2021-01-01"
+filename = "sogu-regulation-2021.pdf"
+
+[profiles."rf-dissertation-general"]
+unit_kind = "dissertation-regulation"
+status = "official"
+normalized_path = "meta/standards/normalized/rf-dissertation-general.md"
+raw_dir = "meta/standards/raw/rf-dissertation-general"
+official_only = true
+notes = [
+  "Reference-only federal dissertation regulation profile for cross-checking broader dissertation rules.",
+]
+
+[[profiles."rf-dissertation-general".sources]]
+id = "rf-dissertation-pravo-gov-2013"
+label = "Официальное опубликование правового акта на publication.pravo.gov.ru"
+url = "https://publication.pravo.gov.ru/document/0001201310010030"
+date = "2013-10-01"
+filename = "rf-dissertation-pravo-gov-2013.html"
+
+[[profiles."rf-dissertation-general".sources]]
+id = "rf-dissertation-gost-page"
+label = "Страница protect.gost.ru с релевантным нормативным контекстом"
+url = "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search="
+filename = "rf-dissertation-gost-page.html"
+
+[profiles."journal-jrp"]
+workflow_lane = "article"
+unit_kind = "journal"
+status = "official"
+normalized_path = "meta/standards/normalized/journal-jrp.md"
+raw_dir = "meta/standards/raw/journal-jrp"
+official_only = true
+notes = [
+  "Per-journal article profile. Refresh on demand because the site may change author requirements without versioned releases.",
+]
+
+[[profiles."journal-jrp".sources]]
+id = "journal-jrp-home"
+label = "Journal of Russian Law platform home"
+url = "https://jrp.jes.su/"
+filename = "journal-jrp-home.html"
+
+[[profiles."journal-jrp".sources]]
+id = "journal-jrp-rules"
+label = "Journal of Russian Law rules for authors"
+url = "https://jrp.jes.su/rules-jrp.html"
+filename = "journal-jrp-rules.html"
+
+[profiles."journal-gip"]
+workflow_lane = "article"
+unit_kind = "journal"
+status = "official"
+normalized_path = "meta/standards/normalized/journal-gip.md"
+raw_dir = "meta/standards/raw/journal-gip"
+official_only = true
+notes = [
+  "Per-journal article profile. The RCSI and institute pages should be checked together on demand.",
+]
+
+[[profiles."journal-gip".sources]]
+id = "journal-gip-submissions"
+label = "Государство и право submissions page on RCSI"
+url = "https://journals.rcsi.science/1026-9452/about/submissions"
+filename = "journal-gip-submissions.html"
+
+[[profiles."journal-gip".sources]]
+id = "journal-gip-author-rules"
+label = "Государство и право author rules on gipras.ru"
+url = "https://gipras.ru/pravila-dlya-avtorov.html"
+filename = "journal-gip-author-rules.html"
+
+[profiles."journal-kmp-yurist"]
+workflow_lane = "article"
+unit_kind = "journal"
+status = "official"
+normalized_path = "meta/standards/normalized/journal-kmp-yurist.md"
+raw_dir = "meta/standards/raw/journal-kmp-yurist"
+official_only = true
+notes = [
+  "Per-journal article profile. The publisher pages should be refreshed on demand before claiming final formatting compliance.",
+]
+
+[[profiles."journal-kmp-yurist".sources]]
+id = "journal-kmp-yurist-fresh-number"
+label = "Fresh issue page"
+url = "https://lawinfo.ru/journals/19/fresh-number"
+filename = "journal-kmp-yurist-fresh-number.html"
+
+[[profiles."journal-kmp-yurist".sources]]
+id = "journal-kmp-yurist-for-authors"
+label = "For authors page"
+url = "https://lawinfo.ru/for-authors"
+filename = "journal-kmp-yurist-for-authors.html"
+
+[[profiles."journal-kmp-yurist".sources]]
+id = "journal-kmp-yurist-formatting"
+label = "Formatting rules page"
+url = "https://lawinfo.ru/for-authors/pravila-oformleniya-materialov"
+filename = "journal-kmp-yurist-formatting.html"
