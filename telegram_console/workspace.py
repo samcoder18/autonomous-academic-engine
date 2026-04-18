@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 import tomllib
@@ -134,6 +134,24 @@ class TargetResolution:
 class LegacyTargetMatch:
     prefix: str
     resolved_path: Path
+
+
+@dataclass(frozen=True)
+class LegacyTargetEntry:
+    prefix: str
+    resolved_path: Path
+    lane: str
+    field_name: str
+    path_kind: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "prefix": self.prefix,
+            "resolved_path": str(self.resolved_path),
+            "lane": self.lane,
+            "field_name": self.field_name,
+            "path_kind": self.path_kind,
+        }
 
 
 def load_workspace_config(root_dir: str | Path) -> WorkspaceConfig:
@@ -608,7 +626,9 @@ def _merge_targets(*groups: list[str]) -> list[str]:
 
 def _match_legacy_target(work: WorkConfig, raw_target: str) -> LegacyTargetMatch | None:
     normalized = raw_target.strip().lstrip("./")
-    for prefix, destination in _legacy_target_map(work).items():
+    for entry in legacy_target_entries(work):
+        prefix = entry.prefix
+        destination = entry.resolved_path
         if normalized == prefix and destination.is_file():
             return LegacyTargetMatch(prefix=prefix, resolved_path=destination)
         if normalized.startswith(prefix):
@@ -619,35 +639,76 @@ def _match_legacy_target(work: WorkConfig, raw_target: str) -> LegacyTargetMatch
     return None
 
 
+def legacy_target_entries(work: WorkConfig) -> tuple[LegacyTargetEntry, ...]:
+    entries: list[LegacyTargetEntry] = []
+    if work.thesis:
+        entries.extend(_derive_legacy_entries(work.thesis, lane="thesis", root_alias=None))
+    if work.article:
+        entries.extend(_derive_legacy_entries(work.article, lane="article", root_alias="articles"))
+    deduped: list[LegacyTargetEntry] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.prefix in seen:
+            continue
+        seen.add(entry.prefix)
+        deduped.append(entry)
+    return tuple(deduped)
+
+
 def legacy_target_prefixes(work: WorkConfig) -> tuple[str, ...]:
-    return tuple(_legacy_target_map(work))
+    return tuple(entry.prefix for entry in legacy_target_entries(work))
 
 
 def _legacy_target_map(work: WorkConfig) -> dict[str, Path]:
-    mapping: dict[str, Path] = {}
-    if work.thesis:
-        mapping.update(
-            {
-                "chapters/": work.thesis.chapters_dir,
-                "sources/": work.thesis.sources_dir,
-                "manuscript/sections/": work.thesis.manuscript_sections_dir,
-                "reviews/": work.thesis.reviews_dir,
-                "sync/": work.thesis.sync_dir,
-                "manuscript/full-draft.md": work.thesis.full_draft_path,
-            }
+    return {entry.prefix: entry.resolved_path for entry in legacy_target_entries(work)}
+
+
+def _derive_legacy_entries(bundle: object, *, lane: str, root_alias: str | None) -> list[LegacyTargetEntry]:
+    root_dir = getattr(getattr(bundle, "paths", None), "root_dir", None)
+    if not isinstance(root_dir, Path):
+        return []
+    entries: list[LegacyTargetEntry] = []
+    for field_info in fields(bundle):
+        field_name = field_info.name
+        if field_name in {"paths", "section_order", "export_docx_path"}:
+            continue
+        value = getattr(bundle, field_name)
+        if not isinstance(value, Path):
+            continue
+        try:
+            relative = value.resolve().relative_to(root_dir.resolve())
+        except ValueError:
+            continue
+        path_kind = "dir" if field_name.endswith("_dir") else "file"
+        prefix = _legacy_prefix_for_path(relative, root_alias=root_alias, is_dir=(path_kind == "dir"))
+        if not prefix:
+            continue
+        entries.append(
+            LegacyTargetEntry(
+                prefix=prefix,
+                resolved_path=value,
+                lane=lane,
+                field_name=field_name,
+                path_kind=path_kind,
+            )
         )
-    if work.article:
-        mapping.update(
-            {
-                "articles/briefs/": work.article.briefs_dir,
-                "articles/evidence/": work.article.evidence_dir,
-                "articles/claim-maps/": work.article.claim_maps_dir,
-                "articles/drafts/": work.article.drafts_dir,
-                "articles/reviews/": work.article.reviews_dir,
-                "articles/final/": work.article.final_dir,
-            }
-        )
-    return mapping
+    return entries
+
+
+def _legacy_prefix_for_path(relative: Path, *, root_alias: str | None, is_dir: bool) -> str | None:
+    relative_text = relative.as_posix().strip(".")
+    if not relative_text:
+        prefix = root_alias or ""
+    elif root_alias:
+        prefix = f"{root_alias}/{relative_text}"
+    else:
+        prefix = relative_text
+    prefix = prefix.strip("/")
+    if not prefix:
+        return None
+    if is_dir:
+        return prefix + "/"
+    return prefix
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

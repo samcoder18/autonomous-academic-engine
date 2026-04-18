@@ -21,6 +21,7 @@ from telegram_console.agent_chat import (
 from telegram_console.article_bundle_state import article_bundle_manifest_path
 from telegram_console.article_runtime_signals import extract_article_artifact_signals
 from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
+from telegram_console.guarded_prose import load_guarded_prose_rules
 from telegram_console.action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
@@ -46,6 +47,7 @@ from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
 from telegram_console.workspace import (
     article_bundle_paths,
+    legacy_target_entries,
     legacy_target_prefixes,
     load_work_config,
     load_workspace_config,
@@ -1920,6 +1922,17 @@ class ThesisRuntimeSignalsTests(unittest.TestCase):
         self.assertTrue(all(item.details["field"] == "guarded-prose" for item in signals.blockers))
 
 
+class GuardedProseRegistryTests(unittest.TestCase):
+    def test_machine_readable_registry_loads_article_and_thesis_rules(self) -> None:
+        article_rules = load_guarded_prose_rules("article")
+        thesis_rules = load_guarded_prose_rules("thesis")
+
+        self.assertTrue(any(rule.code == "guarded-prose-primary-support" for rule in article_rules))
+        self.assertTrue(any(rule.code == "guarded-prose-dynamic-material" for rule in thesis_rules))
+        self.assertTrue(any(rule.forbidden_markers for rule in article_rules))
+        self.assertTrue(any(rule.regex_patterns for rule in thesis_rules))
+
+
 class WorkspaceTargetResolutionTests(unittest.TestCase):
     def test_resolve_target_for_action_marks_thesis_legacy_root_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2009,6 +2022,26 @@ class WorkspaceTargetResolutionTests(unittest.TestCase):
 
             self.assertTrue({"chapters/", "sources/", "manuscript/sections/", "reviews/"}.issubset(prefixes))
             self.assertTrue({"articles/briefs/", "articles/drafts/", "articles/reviews/", "articles/final/"}.issubset(prefixes))
+
+    def test_legacy_target_entries_are_derived_from_work_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            work = resolve_work_selection(workspace).work
+
+            entries = {entry.prefix: entry for entry in legacy_target_entries(work)}
+
+            self.assertIn("manuscript/sections/", entries)
+            self.assertIn("articles/final/", entries)
+            self.assertEqual(
+                entries["manuscript/sections/"].resolved_path.resolve(),
+                (root / TEST_WORK_ROOT / "thesis" / "manuscript" / "sections").resolve(),
+            )
+            self.assertEqual(
+                entries["articles/final/"].resolved_path.resolve(),
+                (root / TEST_WORK_ROOT / "articles" / "final").resolve(),
+            )
 
 
 class RuntimeObservabilityWrapperTests(unittest.TestCase):

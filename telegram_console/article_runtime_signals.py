@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from .guarded_prose import GuardedProseRule, extract_guarded_prose_blockers
+from .guarded_prose import extract_guarded_prose_blockers, load_guarded_prose_rules
 from .repair_kernel import Blocker
 
 
@@ -76,64 +76,7 @@ FIELD_ALIAS_INDEX = {
     for alias in aliases
 }
 
-GUARDED_PROSE_RULES = (
-    GuardedProseRule(
-        category="primary-support",
-        code="guarded-prose-primary-support",
-        message="Narrative artifact text says primary support still blocks formal submission.",
-        required_markers=(
-            "formal submission is blocked by",
-            "still blocks formal submission",
-            "cannot claim submission-ready until",
-            "submission-ready cannot be claimed until",
-        ),
-        keyword_markers=(
-            "primary-source",
-            "primary source",
-            "official text",
-            "verified source",
-            "evidence",
-            "support",
-            "citation",
-        ),
-    ),
-    GuardedProseRule(
-        category="dynamic-material",
-        code="guarded-prose-dynamic-material",
-        message="Narrative artifact text says dynamic material still needs a fresh re-check.",
-        required_markers=(
-            "formal submission is blocked by",
-            "still blocks formal submission",
-            "needs a fresh re-check",
-            "needs re-check",
-            "must be re-checked",
-        ),
-        keyword_markers=(
-            "dynamic",
-            "date of writing",
-            "case law",
-            "regulation",
-            "legal material",
-        ),
-    ),
-    GuardedProseRule(
-        category="standards-consistency",
-        code="guarded-prose-standards",
-        message="Narrative artifact text says standards or formatting blockers still remain.",
-        required_markers=(
-            "formal submission is blocked by",
-            "still blocks formal submission",
-            "cannot claim submission-ready until",
-        ),
-        keyword_markers=(
-            "formatting",
-            "profile conflict",
-            "raw standard",
-            "requirements conflict",
-            "bibliography format",
-        ),
-    ),
-)
+GUARDED_PROSE_RULES = load_guarded_prose_rules("article")
 
 
 @dataclass(frozen=True)
@@ -186,7 +129,6 @@ def _extract_source_blockers(source_name: str, text: str) -> list[Blocker]:
             normalize_line=_normalize_artifact_value,
             rules=GUARDED_PROSE_RULES,
             build_blocker=_build_artifact_blocker,
-            skip_line=_should_skip_guarded_prose_line,
         )
     )
     return blockers
@@ -291,10 +233,6 @@ def _build_artifact_blocker(
             "value": field_value,
         },
     )
-
-
-def _should_skip_guarded_prose_line(normalized: str) -> bool:
-    return any(token in normalized for token in ("may become", "could become", "might become"))
 
 
 def _artifact_blocker_code(field_key: str) -> str:

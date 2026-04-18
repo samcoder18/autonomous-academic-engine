@@ -1,0 +1,109 @@
+version = 1
+
+[[rules]]
+lane = "article"
+category = "primary-support"
+code = "guarded-prose-primary-support"
+message = "Narrative artifact text says primary support still blocks formal submission."
+required_markers = [
+  "formal submission is blocked by",
+  "still blocks formal submission",
+  "cannot claim submission-ready until",
+  "submission-ready cannot be claimed until",
+]
+keyword_markers = [
+  "primary-source",
+  "primary source",
+  "official text",
+  "verified source",
+  "evidence",
+  "support",
+  "citation",
+]
+forbidden_markers = [
+  "may become",
+  "could become",
+  "might become",
+]
+
+[[rules]]
+lane = "article"
+category = "dynamic-material"
+code = "guarded-prose-dynamic-material"
+message = "Narrative artifact text says dynamic material still needs a fresh re-check."
+required_markers = [
+  "formal submission is blocked by",
+  "still blocks formal submission",
+  "needs a fresh re-check",
+  "needs re-check",
+  "must be re-checked",
+]
+keyword_markers = [
+  "dynamic",
+  "date of writing",
+  "case law",
+  "regulation",
+  "legal material",
+]
+forbidden_markers = [
+  "may become",
+  "could become",
+  "might become",
+]
+
+[[rules]]
+lane = "article"
+category = "standards-consistency"
+code = "guarded-prose-standards"
+message = "Narrative artifact text says standards or formatting blockers still remain."
+required_markers = [
+  "formal submission is blocked by",
+  "still blocks formal submission",
+  "cannot claim submission-ready until",
+]
+keyword_markers = [
+  "formatting",
+  "profile conflict",
+  "raw standard",
+  "requirements conflict",
+  "bibliography format",
+]
+forbidden_markers = [
+  "may become",
+  "could become",
+  "might become",
+]
+
+[[rules]]
+lane = "thesis"
+category = "primary-support"
+code = "guarded-prose-primary-support"
+message = "Review prose says the section still needs stronger primary support."
+regex_patterns = [
+  "\\bнужн\\w*\\s+первич\\w*\\s+опор",
+  "\\bнет\\s+первич\\w*\\s+опор",
+  "\\bнедостат\\w*.*первич\\w*\\s+опор",
+  "\\bmissing\\s+primary\\s+support\\b",
+]
+
+[[rules]]
+lane = "thesis"
+category = "dynamic-material"
+code = "guarded-prose-dynamic-material"
+message = "Review prose says dynamic legal material still needs a fresh re-check."
+regex_patterns = [
+  "\\bнужн\\w*.*перепровер\\w*.*динамич",
+  "\\bперепровер\\w*.*на дату написания",
+  "\\bneeds?\\s+.*re-?check.*dynamic\\b",
+]
+
+[[rules]]
+lane = "thesis"
+category = "review"
+code = "guarded-prose-review"
+message = "Review prose says the section still contains contested or weak conclusions."
+regex_patterns = [
+  "\\bспорн\\w*\\s+вывод",
+  "\\bслаб\\w*\\s+вывод",
+  "\\bcontested\\s+conclusion\\b",
+]

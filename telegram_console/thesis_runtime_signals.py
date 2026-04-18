@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from .guarded_prose import GuardedProseRule, extract_guarded_prose_blockers
+from .guarded_prose import extract_guarded_prose_blockers, load_guarded_prose_rules
 from .repair_kernel import Blocker
 
 
@@ -46,39 +46,7 @@ FIELD_ALIAS_INDEX = {
     for alias in aliases
 }
 
-GUARDED_PROSE_RULES = (
-    GuardedProseRule(
-        category="primary-support",
-        code="guarded-prose-primary-support",
-        message="Review prose says the section still needs stronger primary support.",
-        regex_patterns=(
-            r"\bнужн\w*\s+первич\w*\s+опор",
-            r"\bнет\s+первич\w*\s+опор",
-            r"\bнедостат\w*.*первич\w*\s+опор",
-            r"\bmissing\s+primary\s+support\b",
-        ),
-    ),
-    GuardedProseRule(
-        category="dynamic-material",
-        code="guarded-prose-dynamic-material",
-        message="Review prose says dynamic legal material still needs a fresh re-check.",
-        regex_patterns=(
-            r"\bнужн\w*.*перепровер\w*.*динамич",
-            r"\bперепровер\w*.*на дату написания",
-            r"\bneeds?\s+.*re-?check.*dynamic\b",
-        ),
-    ),
-    GuardedProseRule(
-        category="review",
-        code="guarded-prose-review",
-        message="Review prose says the section still contains contested or weak conclusions.",
-        regex_patterns=(
-            r"\bспорн\w*\s+вывод",
-            r"\bслаб\w*\s+вывод",
-            r"\bcontested\s+conclusion\b",
-        ),
-    ),
-)
+GUARDED_PROSE_RULES = load_guarded_prose_rules("thesis")
 
 
 @dataclass(frozen=True)
