@@ -66,7 +66,9 @@ from telegram_console.skill_source_map import (
     audit_skill_source_map,
     load_skill_source_map,
     skills_declared_in_agents,
+    sync_external_skill_sources,
 )
+from telegram_console.thesis_evidence_ledger import audit_thesis_ledgers
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -2553,6 +2555,166 @@ class SkillSourceMapAuditTests(unittest.TestCase):
             ("academic-intake", "external-source-of-truth-missing"),
             issue_codes,
         )
+
+
+class SkillSourceMapSyncTests(unittest.TestCase):
+    def test_sync_external_skill_sources_reports_updates_and_missing_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tempdir:
+            external_root = Path(tempdir)
+            write_file(
+                external_root / "thesis-research-synthesizer" / "SKILL.md",
+                "# Thesis Research Synthesizer\n",
+            )
+
+            report = sync_external_skill_sources(repo_root, external_root, write=False)
+
+        items = {item.skill_name: item for item in report.items}
+        self.assertEqual(items["thesis-research-synthesizer"].status, "would-update")
+        self.assertEqual(items["academic-intake"].status, "missing-external-skill")
+        self.assertGreaterEqual(report.missing_external_count, 1)
+        self.assertGreaterEqual(report.update_candidate_count, 1)
+        self.assertEqual(report.updated_count, 0)
+
+    def test_sync_external_skill_sources_write_inserts_source_mapping(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tempdir:
+            external_root = Path(tempdir)
+            skill_file = external_root / "thesis-research-synthesizer" / "SKILL.md"
+            write_file(skill_file, "# Thesis Research Synthesizer\n")
+
+            report = sync_external_skill_sources(repo_root, external_root, write=True)
+            updated_text = skill_file.read_text(encoding="utf-8")
+            second_report = sync_external_skill_sources(repo_root, external_root, write=False)
+
+        items = {item.skill_name: item for item in report.items}
+        second_items = {item.skill_name: item for item in second_report.items}
+        self.assertEqual(items["thesis-research-synthesizer"].status, "updated")
+        self.assertIn("## Source of truth", updated_text)
+        self.assertIn("agents/research-synthesizer.md", updated_text)
+        self.assertEqual(second_items["thesis-research-synthesizer"].status, "already-synced")
+
+
+class SkillSourceMapCliTests(unittest.TestCase):
+    def test_skill_source_map_audit_cli_returns_json(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = work_cli_module.main(["skill-source-map", "audit", "--json"], root_dir=repo_root)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["kind"], "skill-source-audit")
+        self.assertTrue(payload["ok"])
+
+    def test_skill_source_map_sync_external_cli_can_write_updates(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tempdir:
+            external_root = Path(tempdir)
+            skill_file = external_root / "thesis-research-synthesizer" / "SKILL.md"
+            write_file(skill_file, "# Thesis Research Synthesizer\n")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "skill-source-map",
+                        "sync-external",
+                        "--skills-root",
+                        str(external_root),
+                        "--write",
+                        "--json",
+                    ],
+                    root_dir=repo_root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "skill-source-sync")
+            self.assertTrue(payload["write_applied"])
+            self.assertGreaterEqual(payload["updated_count"], 1)
+            self.assertIn("## Source of truth", skill_file.read_text(encoding="utf-8"))
+
+
+class ThesisLedgerAdvisoryTests(unittest.TestCase):
+    def test_audit_thesis_ledgers_summarizes_claim_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            ledger_path = root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md"
+            write_file(
+                ledger_path,
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | claim_type | verification_status | source_package_item_ids | primary_source_reference | primary_verification_date | support_scope | draft_use | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified norm claim | norm | verified | S1 | Official source | 2026-04-19 | direct | safe | ok |
+                    | CL-002 | thesis/manuscript/sections/01-introduction.md | Needs recheck claim | case-law | needs-recheck | S2 | Court source |  | partial | narrow | recheck |
+                    | CL-003 | thesis/manuscript/sections/01-introduction.md | Unsafe claim | statistics | unsafe-for-draft | S3 | Stats source | 2026-04-19 | context-only | hold | unsafe |
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisory = audit_thesis_ledgers(work)
+
+        self.assertTrue(advisory["available"])
+        self.assertEqual(advisory["ledger_count"], 1)
+        self.assertEqual(advisory["claim_count"], 3)
+        self.assertEqual(advisory["verified_count"], 1)
+        self.assertEqual(advisory["needs_recheck_count"], 1)
+        self.assertEqual(advisory["unsafe_for_draft_count"], 1)
+        self.assertEqual(advisory["advisory_status"], "blocked-for-draft")
+        self.assertTrue(any(issue["code"] == "needs-recheck-claims" for issue in advisory["issues"]))
+        self.assertTrue(any(issue["code"] == "unsafe-for-draft-claims" for issue in advisory["issues"]))
+
+    def test_work_status_exposes_ledger_advisory_without_turning_it_into_known_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | claim_type | verification_status | source_package_item_ids | primary_source_reference | primary_verification_date | support_scope | draft_use | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Recheck | norm | needs-recheck | S1 | Official source |  | partial | narrow | recheck |
+                    """
+                ),
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Ledger advisory:", stdout.getvalue())
+            self.assertIn("needs-attention", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status", "--json"], root_dir=root)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["thesis"]["ledger_advisory"]["advisory_status"], "needs-attention")
+        self.assertEqual(payload["known_blocker_count"], 0)
 
 
 class WorkspaceTargetResolutionTests(unittest.TestCase):

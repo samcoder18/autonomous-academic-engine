@@ -53,6 +53,7 @@ def build_work_state(
     work_title: str,
     active_lanes: Iterable[str],
     thesis_overview: dict[str, Any] | None,
+    thesis_ledger_advisory: dict[str, Any] | None,
     article_overview: dict[str, Any] | None,
     standards_profiles: dict[str, Any],
     runtime_records: Iterable[Any],
@@ -60,7 +61,7 @@ def build_work_state(
 ) -> dict[str, Any]:
     root_path = Path(root_dir).resolve()
     lane_list = [lane for lane in (_optional_text(item) for item in active_lanes) if lane]
-    thesis = _compact_thesis_state(root_path, thesis_overview)
+    thesis = _compact_thesis_state(root_path, thesis_overview, thesis_ledger_advisory)
     article = _compact_article_state(root_path, article_overview)
     standards = _compact_standards_state(standards_profiles)
     runtime = _compact_runtime_state(runtime_records, active_run)
@@ -327,6 +328,7 @@ def resolve_next_actions(
 
 def format_work_state_summary(state: dict[str, Any]) -> str:
     thesis_summary = state.get("thesis", {}).get("summary", {})
+    thesis_ledger = state.get("thesis", {}).get("ledger_advisory", {})
     article_summary = state.get("article", {}).get("summary", {})
     standards_profiles = state.get("standards", {}).get("profiles", {})
     runtime = state.get("runtime", {})
@@ -335,7 +337,7 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
 
     lines = [
         f"Work status: {state.get('work_title') or 'n/a'} (`{state.get('work_id') or 'n/a'}`)",
-        "Scope: signals-only; not source verification or repair planning",
+        "Scope: signals-only workflow control; ledger advisory is informational only",
         f"Lanes: {', '.join(state.get('active_lanes') or []) or 'none'}",
         (
             "Thesis: "
@@ -351,6 +353,16 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
         ),
         f"Known blockers: {state.get('known_blocker_count') or 0}",
     ]
+    if isinstance(thesis_ledger, dict):
+        status = _optional_text(thesis_ledger.get("advisory_status"))
+        if status:
+            lines.append(
+                "Ledger advisory: "
+                f"{status}, "
+                f"claims={thesis_ledger.get('claim_count') or 0}, "
+                f"recheck={thesis_ledger.get('needs_recheck_count') or 0}, "
+                f"unsafe={thesis_ledger.get('unsafe_for_draft_count') or 0}"
+            )
     if isinstance(standards_profiles, dict) and standards_profiles:
         standards_parts = []
         for lane, payload in sorted(standards_profiles.items()):
@@ -425,12 +437,18 @@ def format_work_state_dashboard_lines(state: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _compact_thesis_state(root_dir: Path, overview: dict[str, Any] | None) -> dict[str, Any]:
+def _compact_thesis_state(
+    root_dir: Path,
+    overview: dict[str, Any] | None,
+    ledger_advisory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    compact_ledger_advisory = _compact_thesis_ledger_advisory(root_dir, ledger_advisory)
     if not isinstance(overview, dict):
         return {
             "available": False,
             "sections": [],
             "summary": {"kind": "thesis-overview-summary", "section_count": 0, "reviewed_count": 0, "blocked_count": 0},
+            "ledger_advisory": compact_ledger_advisory,
             "blockers": [],
         }
     sections: list[dict[str, Any]] = []
@@ -471,6 +489,7 @@ def _compact_thesis_state(root_dir: Path, overview: dict[str, Any] | None) -> di
     return {
         "available": True,
         "sections": sections,
+        "ledger_advisory": compact_ledger_advisory,
         "summary": {
             "kind": "thesis-overview-summary",
             "section_count": _optional_int(summary.get("section_count")) or len(sections),
@@ -480,6 +499,29 @@ def _compact_thesis_state(root_dir: Path, overview: dict[str, Any] | None) -> di
         },
         "blockers": blockers,
     }
+
+
+def _compact_thesis_ledger_advisory(root_dir: Path, advisory: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(advisory, dict):
+        return {
+            "kind": "thesis-ledger-advisory",
+            "available": False,
+            "advisory_status": "missing",
+            "claim_count": 0,
+            "needs_recheck_count": 0,
+            "unsafe_for_draft_count": 0,
+            "issues": [],
+        }
+    result = dict(advisory)
+    issues: list[dict[str, Any]] = []
+    for raw_issue in advisory.get("issues") or []:
+        if not isinstance(raw_issue, dict):
+            continue
+        issue = dict(raw_issue)
+        issue["section_target"] = _compact_path(root_dir, _optional_text(raw_issue.get("section_target")))
+        issues.append(issue)
+    result["issues"] = issues
+    return result
 
 
 def _compact_article_state(root_dir: Path, overview: dict[str, Any] | None) -> dict[str, Any]:

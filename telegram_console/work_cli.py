@@ -56,6 +56,7 @@ from .standards import (
     resolve_status_profile,
     sync_standard_profile,
 )
+from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .work_state import format_work_state_summary
 from .workspace import (
     TargetResolution,
@@ -136,6 +137,18 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser = subparsers.add_parser("work-status")
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    skill_source_parser = subparsers.add_parser("skill-source-map")
+    skill_source_subparsers = skill_source_parser.add_subparsers(dest="skill_source_command", required=True)
+
+    skill_audit_parser = skill_source_subparsers.add_parser("audit")
+    skill_audit_parser.add_argument("--skills-root")
+    skill_audit_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    skill_sync_parser = skill_source_subparsers.add_parser("sync-external")
+    skill_sync_parser.add_argument("--skills-root", required=True)
+    skill_sync_parser.add_argument("--write", action="store_true")
+    skill_sync_parser.add_argument("--json", action="store_true", dest="as_json")
 
     autonomous = subparsers.add_parser("autonomous")
     autonomous_subparsers = autonomous.add_subparsers(dest="autonomous_command", required=True)
@@ -221,6 +234,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "skill-source-map":
+            return skill_source_map_cli(root_path, args)
         if args.command == "autonomous":
             return autonomous_cli(root_path, args)
     except WorkspaceConfigError as exc:
@@ -248,6 +263,58 @@ def autonomous_cli(root_dir: Path, args: Any) -> int:
         return autonomous_stop(root_dir, args.work_id, args.reason, as_json=args.as_json)
     if args.autonomous_command == "daemon":
         return autonomous_daemon_cli(root_dir, args)
+    return 1
+
+
+def skill_source_map_cli(root_dir: Path, args: Any) -> int:
+    if args.skill_source_command == "audit":
+        report = audit_skill_source_map(root_dir, external_skills_root=args.skills_root)
+        payload = {
+            "kind": "skill-source-audit",
+            "version": "v1",
+            "ok": report.ok,
+            "declared_skill_count": len(report.declared_skills),
+            "manifest_skill_count": len(report.entries),
+            "external_skill_files_checked": list(report.external_skill_files_checked),
+            "issues": [
+                {
+                    "code": item.code,
+                    "skill_name": item.skill_name,
+                    "message": item.message,
+                }
+                for item in report.issues
+            ],
+        }
+        if args.as_json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"Skill source audit: ok={'yes' if report.ok else 'no'}")
+            print(f"Declared skills: {len(report.declared_skills)}")
+            print(f"Manifest skills: {len(report.entries)}")
+            print(f"External skill files checked: {len(report.external_skill_files_checked)}")
+            if report.issues:
+                print("Issues:")
+                for item in report.issues:
+                    print(f"- {item.skill_name}: {item.code} - {item.message}")
+        return 0
+
+    if args.skill_source_command == "sync-external":
+        report = sync_external_skill_sources(root_dir, args.skills_root, write=args.write)
+        if args.as_json:
+            print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            print(
+                "Skill source sync: "
+                f"root={report.external_skills_root} "
+                f"updated={report.updated_count} "
+                f"candidates={report.update_candidate_count} "
+                f"missing={report.missing_external_count}"
+            )
+            for item in report.items:
+                if item.status in {"updated", "would-update"}:
+                    print(f"- {item.skill_name}: {item.status}")
+        return 0
+
     return 1
 
 

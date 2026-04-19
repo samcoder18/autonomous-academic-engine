@@ -40,6 +40,46 @@ class SkillSourceAuditReport:
         return not self.issues
 
 
+@dataclass(frozen=True)
+class SkillSourceSyncItem:
+    skill_name: str
+    external_skill_id: str
+    skill_file: str
+    status: str
+    changed: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "skill_name": self.skill_name,
+            "external_skill_id": self.external_skill_id,
+            "skill_file": self.skill_file,
+            "status": self.status,
+            "changed": self.changed,
+        }
+
+
+@dataclass(frozen=True)
+class SkillSourceSyncReport:
+    external_skills_root: str
+    write_applied: bool
+    items: tuple[SkillSourceSyncItem, ...]
+    missing_external_count: int
+    update_candidate_count: int
+    updated_count: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": "skill-source-sync",
+            "version": "v1",
+            "external_skills_root": self.external_skills_root,
+            "write_applied": self.write_applied,
+            "missing_external_count": self.missing_external_count,
+            "update_candidate_count": self.update_candidate_count,
+            "updated_count": self.updated_count,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
 def skills_declared_in_agents(root_dir: str | Path) -> tuple[str, ...]:
     root = Path(root_dir).expanduser().resolve()
     agents_path = root / "AGENTS.md"
@@ -152,6 +192,70 @@ def audit_skill_source_map(
     )
 
 
+def sync_external_skill_sources(
+    root_dir: str | Path,
+    external_skills_root: str | Path,
+    *,
+    write: bool = False,
+) -> SkillSourceSyncReport:
+    root = Path(root_dir).expanduser().resolve()
+    external_root = Path(external_skills_root).expanduser().resolve()
+    entries = load_skill_source_map(root)
+    items: list[SkillSourceSyncItem] = []
+    missing_external_count = 0
+    update_candidate_count = 0
+    updated_count = 0
+
+    for entry in entries.values():
+        skill_file = external_root / entry.expected_external_skill_id / "SKILL.md"
+        if not skill_file.exists():
+            missing_external_count += 1
+            items.append(
+                SkillSourceSyncItem(
+                    skill_name=entry.skill_name,
+                    external_skill_id=entry.expected_external_skill_id,
+                    skill_file=str(skill_file),
+                    status="missing-external-skill",
+                    changed=False,
+                )
+            )
+            continue
+
+        original_text = skill_file.read_text(encoding="utf-8")
+        updated_text = _upsert_source_of_truth_section(
+            original_text,
+            _render_source_of_truth_section(root, entry),
+        )
+        changed = updated_text != original_text
+        status = "already-synced"
+        if changed:
+            update_candidate_count += 1
+            status = "would-update"
+            if write:
+                skill_file.write_text(_ensure_trailing_newline(updated_text), encoding="utf-8")
+                updated_count += 1
+                status = "updated"
+
+        items.append(
+            SkillSourceSyncItem(
+                skill_name=entry.skill_name,
+                external_skill_id=entry.expected_external_skill_id,
+                skill_file=str(skill_file),
+                status=status,
+                changed=changed,
+            )
+        )
+
+    return SkillSourceSyncReport(
+        external_skills_root=str(external_root),
+        write_applied=write,
+        items=tuple(items),
+        missing_external_count=missing_external_count,
+        update_candidate_count=update_candidate_count,
+        updated_count=updated_count,
+    )
+
+
 def _required_text(payload: dict[str, object], key: str, manifest_path: Path, skill_name: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -159,3 +263,29 @@ def _required_text(payload: dict[str, object], key: str, manifest_path: Path, sk
             f"Invalid skill source map entry `{skill_name}` in {manifest_path}: missing `{key}`."
         )
     return value.strip()
+
+
+def _render_source_of_truth_section(root_dir: Path, entry: SkillSourceMapEntry) -> str:
+    absolute_agent_path = (root_dir / entry.agent_path).resolve()
+    absolute_manifest_path = (root_dir / "meta" / "skill-source-map.toml").resolve()
+    return (
+        "## Source of truth\n\n"
+        f"- Repo role doc: [{entry.agent_path}]({absolute_agent_path})\n"
+        f"- Repo skill map: [meta/skill-source-map.toml]({absolute_manifest_path})\n"
+        "- Update this external skill in the same PR or maintenance pass as the repo-side role doc.\n"
+    )
+
+
+def _upsert_source_of_truth_section(text: str, section: str) -> str:
+    normalized = text.rstrip()
+    pattern = re.compile(r"(?ms)^## Source of truth\s*\n.*?(?=^##\s|\Z)")
+    replacement = section.rstrip()
+    if pattern.search(normalized):
+        return pattern.sub(replacement + "\n\n", normalized, count=1).rstrip() + "\n"
+    if not normalized:
+        return replacement + "\n"
+    return normalized + "\n\n" + replacement + "\n"
+
+
+def _ensure_trailing_newline(text: str) -> str:
+    return text if text.endswith("\n") else text + "\n"

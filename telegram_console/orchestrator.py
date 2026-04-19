@@ -16,6 +16,7 @@ from .contract_gates import evaluate_contract_gates
 from .finalization_engine import evaluate_article_finalization
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .thesis_runtime_signals import extract_thesis_runtime_signals
+from .thesis_evidence_ledger import audit_thesis_ledgers
 from .thesis_repair_planner import build_thesis_repair_plan
 from .runtime_status import (
     RuntimeRecord,
@@ -421,6 +422,7 @@ class WorkflowOrchestrator:
     def get_work_state(self, *, work_id: str | None = None) -> dict[str, Any]:
         work = self._work(work_id)
         thesis_overview: dict[str, Any] | None = None
+        thesis_ledger_advisory: dict[str, Any] | None = None
         article_overview: dict[str, Any] | None = None
 
         if work.supports("thesis") and work.thesis:
@@ -431,6 +433,7 @@ class WorkflowOrchestrator:
                 "sections": sections,
                 "summary": self._build_thesis_overview_summary(sections),
             }
+            thesis_ledger_advisory = audit_thesis_ledgers(work)
 
         if work.supports("article") and work.article:
             bundles = [self._article_bundle_status(slug, work.slug) for slug in self.list_article_slugs(work_id=work.slug)]
@@ -447,6 +450,7 @@ class WorkflowOrchestrator:
             work_title=work.title,
             active_lanes=work.active_lanes,
             thesis_overview=thesis_overview,
+            thesis_ledger_advisory=thesis_ledger_advisory,
             article_overview=article_overview,
             standards_profiles=self._resolve_work_standards_profiles(work),
             runtime_records=self._recent_workflow_runtime_records(work.slug, limit=5),

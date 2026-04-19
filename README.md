@@ -100,6 +100,15 @@ Launcher резолвит старые относительные пути (`man
 - `python3 -m telegram_console.work_cli work-status [--json]`
 
 `work-status` показывает индекс сигналов и следующий безопасный шаг; он не заменяет верификацию источников, citation pass или repair planner.
+Если в thesis lane есть `thesis/ledgers/*.md`, `work-status` также показывает ledger advisory как informational layer, а не как final quality verdict.
+
+## Maintenance
+
+- `python3 -m telegram_console.work_cli skill-source-map audit [--skills-root /path/to/skills] [--json]`
+- `python3 -m telegram_console.work_cli skill-source-map sync-external --skills-root /path/to/skills [--write] [--json]`
+
+`skill-source-map audit` проверяет покрытие manifest'ом и, при наличии external skill files, ожидаемую секцию `Source of truth`.
+`skill-source-map sync-external` генерирует и при `--write` применяет repo-first mapping к внешним `SKILL.md`, не трогая их молча без явного path и флага записи.
 
 ## Telegram console
 
