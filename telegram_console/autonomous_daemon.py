@@ -459,7 +459,7 @@ def run_daemon_tick(
                 observed_readiness_status=_observed_readiness_status(work_state),
             )
 
-        result = execute_autonomous_command(orchestrator, str(command))
+        result = execute_autonomous_command(orchestrator, str(command), work_id=work_id)
         result_status = _optional_text(result.get("status"))
         if result_status == "started-run":
             status = "waiting"

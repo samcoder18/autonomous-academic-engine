@@ -27,6 +27,15 @@ from .autonomous_daemon import (
     run_daemon_tick,
     start_daemon_process,
 )
+from .autonomous_scheduler import (
+    multi_daemon_status_payload,
+    read_multi_daemon_stop_request,
+    request_multi_daemon_stop,
+    resolve_works_scope,
+    run_multi_work_daemon_foreground,
+    run_multi_work_daemon_tick,
+    start_multi_work_daemon_process,
+)
 from .article_bundle_state import (
     article_bundle_manifest_path,
     build_article_bundle_state,
@@ -153,7 +162,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     daemon_subparsers = autonomous_daemon.add_subparsers(dest="daemon_command", required=True)
     for daemon_command in ("start", "run", "tick"):
         daemon_parser = daemon_subparsers.add_parser(daemon_command)
-        daemon_parser.add_argument("--work", dest="work_id", required=True)
+        daemon_parser.add_argument("--work", dest="work_id")
+        daemon_parser.add_argument("--works", dest="works_scope")
         daemon_parser.add_argument("--mode", choices=AUTONOMOUS_MODES, default="autonomous-full")
         daemon_parser.add_argument("--poll-seconds", type=int, default=30)
         daemon_parser.add_argument("--max-cycles", type=int, default=50)
@@ -161,11 +171,13 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
         daemon_parser.add_argument("--json", action="store_true", dest="as_json")
 
     daemon_status_parser = daemon_subparsers.add_parser("status")
-    daemon_status_parser.add_argument("--work", dest="work_id", required=True)
+    daemon_status_parser.add_argument("--work", dest="work_id")
+    daemon_status_parser.add_argument("--works", dest="works_scope")
     daemon_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
     daemon_stop_parser = daemon_subparsers.add_parser("stop")
-    daemon_stop_parser.add_argument("--work", dest="work_id", required=True)
+    daemon_stop_parser.add_argument("--work", dest="work_id")
+    daemon_stop_parser.add_argument("--works", dest="works_scope")
     daemon_stop_parser.add_argument("--reason", default="operator-stop")
     daemon_stop_parser.add_argument("--json", action="store_true", dest="as_json")
 
@@ -286,6 +298,8 @@ def autonomous_stop(root_dir: Path, work_id: str | None, reason: str, *, as_json
 
 
 def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
+    if _optional_text(getattr(args, "works_scope", None)):
+        return autonomous_multi_daemon_cli(root_dir, args)
     work_id = _resolve_daemon_work_id(root_dir, args.work_id)
     if args.daemon_command == "tick":
         payload = run_daemon_tick(
@@ -332,10 +346,74 @@ def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
     return 1
 
 
+def autonomous_multi_daemon_cli(root_dir: Path, args: Any) -> int:
+    if _optional_text(getattr(args, "work_id", None)):
+        raise WorkspaceConfigError("Используй только один параметр: --work или --works.")
+    works_scope = _optional_text(getattr(args, "works_scope", None)) or "all"
+    work_ids = _resolve_daemon_work_ids(root_dir, works_scope)
+    if args.daemon_command == "tick":
+        payload = run_multi_work_daemon_tick(
+            root_dir=root_dir,
+            work_ids=work_ids,
+            works_scope=works_scope,
+            mode=args.mode,
+            poll_seconds=args.poll_seconds,
+            max_cycles=args.max_cycles,
+            max_runtime_minutes=args.max_runtime_minutes,
+        )
+        _print_daemon_payload(payload, as_json=args.as_json)
+        return 0
+    if args.daemon_command == "run":
+        payload = run_multi_work_daemon_foreground(
+            root_dir=root_dir,
+            work_ids=work_ids,
+            works_scope=works_scope,
+            mode=args.mode,
+            poll_seconds=args.poll_seconds,
+            max_cycles=args.max_cycles,
+            max_runtime_minutes=args.max_runtime_minutes,
+        )
+        _print_daemon_payload(payload, as_json=args.as_json)
+        return 1 if payload.get("stop_reason") == "daemon-already-running" else 0
+    if args.daemon_command == "start":
+        payload = start_multi_work_daemon_process(
+            root_dir=root_dir,
+            works_scope=works_scope,
+            mode=args.mode,
+            poll_seconds=args.poll_seconds,
+            max_cycles=args.max_cycles,
+            max_runtime_minutes=args.max_runtime_minutes,
+        )
+        _print_daemon_payload(payload, as_json=args.as_json)
+        return 1 if payload.get("status") == "blocked" else 0
+    if args.daemon_command == "status":
+        payload = multi_daemon_status_payload(root_dir, works_scope=works_scope)
+        _print_daemon_payload(payload, as_json=args.as_json)
+        return 0
+    if args.daemon_command == "stop":
+        request_multi_daemon_stop(root_dir, works_scope=works_scope, reason=args.reason)
+        payload = read_multi_daemon_stop_request(root_dir) or {}
+        _print_daemon_payload(payload, as_json=args.as_json)
+        return 0
+    return 1
+
+
 def _resolve_daemon_work_id(root_dir: Path, work_id: str) -> str:
     workspace = load_workspace_config(root_dir)
     work = resolve_work_config(workspace, work_id=work_id)
     return work.slug
+
+
+def _resolve_daemon_work_ids(root_dir: Path, works_scope: str) -> list[str]:
+    workspace = load_workspace_config(root_dir)
+    return resolve_works_scope(workspace, works_scope)
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _print_daemon_payload(payload: dict[str, Any], *, as_json: bool) -> None:

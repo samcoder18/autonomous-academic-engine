@@ -112,7 +112,12 @@ def stop_autonomous_run(root_dir: str | Path, work_id: str, *, reason: str = "op
     return payload
 
 
-def execute_autonomous_command(orchestrator: WorkflowOrchestrator, command: str) -> dict[str, Any]:
+def execute_autonomous_command(
+    orchestrator: WorkflowOrchestrator,
+    command: str,
+    *,
+    work_id: str | None = None,
+) -> dict[str, Any]:
     args = shlex.split(command)
     if not args:
         return {"status": "skipped", "reason": "empty-command"}
@@ -121,17 +126,17 @@ def execute_autonomous_command(orchestrator: WorkflowOrchestrator, command: str)
     if args[0] == "standards-status":
         return {"status": "completed", "command": command}
     if args[0] == "export-thesis-docx":
-        result = orchestrator.export_docx("thesis")
+        result = orchestrator.export_docx("thesis", work_id=work_id)
         return {"status": "completed", "command": command, "export": result}
     if args[0] == "export-article-docx" and len(args) >= 2:
         article_slug = Path(args[1]).stem
-        result = orchestrator.export_docx(f"article:{article_slug}")
+        result = orchestrator.export_docx(f"article:{article_slug}", work_id=work_id)
         return {"status": "completed", "command": command, "export": result}
     if args[0] == "launch-thesis" and len(args) >= 3:
-        active = orchestrator.start_run("thesis", args[1], args[2])
+        active = orchestrator.start_run("thesis", args[1], args[2], work_id=work_id)
         return {"status": "started-run", "command": command, "run_id": active.get("run_id")}
     if args[0] == "launch-academic" and len(args) >= 3:
-        active = orchestrator.start_run("article", args[1], args[2])
+        active = orchestrator.start_run("article", args[1], args[2], work_id=work_id)
         return {"status": "started-run", "command": command, "run_id": active.get("run_id")}
     return {"status": "skipped", "reason": "unsupported-command", "command": command}
 

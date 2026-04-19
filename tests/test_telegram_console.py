@@ -48,6 +48,15 @@ from telegram_console.autonomous_daemon import (
     write_daemon_lock,
     write_daemon_state,
 )
+from telegram_console.autonomous_scheduler import (
+    build_multi_work_schedule,
+    multi_daemon_lock_path,
+    multi_daemon_state_path,
+    multi_daemon_stop_path,
+    resolve_works_scope,
+    run_multi_work_daemon_tick,
+    start_multi_work_daemon_process,
+)
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -569,6 +578,69 @@ def add_empty_work_scaffold(root: Path, slug: str = "empty-work") -> None:
     write_file(root / work_root / "work-canon.md", "# Empty work canon\n")
     write_file(root / work_root / "thesis" / "README.md", "# Empty thesis scaffold\n")
     write_file(root / work_root / "articles" / "README.md", "# Empty article scaffold\n")
+
+
+def add_demo_work_clone(root: Path, slug: str, *, include_review: bool = False) -> None:
+    workspace_file = root / "workspace.toml"
+    workspace_text = workspace_file.read_text(encoding="utf-8")
+    workspace_file.write_text(
+        workspace_text + f'{slug} = "works/{slug}"\n',
+        encoding="utf-8",
+    )
+
+    work_root = Path("works") / slug
+    article_root = work_root / "articles"
+    thesis_root = work_root / "thesis"
+    write_file(
+        root / work_root / "work.toml",
+        textwrap.dedent(
+            f"""\
+            version = 1
+            slug = "{slug}"
+            title = "Clone {slug}"
+            topic = "Clone topic"
+            artifact_type = "vkr"
+            language = "ru"
+            active_lanes = ["thesis", "article"]
+            work_canon = "work-canon.md"
+
+            [standards]
+            thesis_profile = "thesis-v1"
+            article_profile = "ru-law-article-v1"
+
+            [thesis]
+            root_dir = "thesis"
+            chapters_dir = "thesis/chapters"
+            sources_dir = "thesis/sources"
+            manuscript_dir = "thesis/manuscript"
+            manuscript_sections_dir = "thesis/manuscript/sections"
+            reviews_dir = "thesis/reviews"
+            sync_dir = "thesis/sync"
+            full_draft_path = "thesis/manuscript/full-draft.md"
+            docx_filename = "thesis-draft.docx"
+            section_order = ["thesis/manuscript/sections/01-introduction.md"]
+
+            [article]
+            root_dir = "articles"
+            briefs_dir = "articles/briefs"
+            evidence_dir = "articles/evidence"
+            claim_maps_dir = "articles/claim-maps"
+            drafts_dir = "articles/drafts"
+            reviews_dir = "articles/reviews"
+            final_dir = "articles/final"
+            docx_subdir = "articles"
+            """
+        ),
+    )
+    write_file(root / work_root / "work-canon.md", f"# Canon {slug}\n")
+    write_file(root / thesis_root / "manuscript" / "sections" / "01-introduction.md", "# Intro\n")
+    write_file(root / thesis_root / "reviews" / "01-introduction-review.md", "# Review\n")
+    write_file(root / article_root / "briefs" / "demo.md", "# Demo brief\n")
+    write_file(root / article_root / "drafts" / "demo.md", "# Demo draft\n")
+    write_file(root / article_root / "final" / "demo.md", "# Demo final\n")
+    write_file(root / article_root / "final" / "demo-checklist.md", "# Demo checklist\n")
+    if include_review:
+        write_file(root / article_root / "reviews" / "demo.md", "# Demo review\n")
 
 
 def build_fake_launchd_files(root: Path) -> None:
@@ -4137,6 +4209,213 @@ class AutonomousDaemonTests(unittest.TestCase):
         self.assertEqual(lock["work_id"], TEST_WORK_ID)
 
 
+class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        self.orchestrator = WorkflowOrchestrator(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def write_default_raw_manifests(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+
+    def test_scheduler_resolves_all_works_from_workspace(self) -> None:
+        add_empty_work_scaffold(self.root, slug="empty-work")
+        workspace = load_workspace_config(self.root)
+
+        work_ids = resolve_works_scope(workspace, "all")
+
+        self.assertEqual(work_ids, ["demo-work", "empty-work"])
+
+    def test_scheduler_skips_placeholder_work_and_selects_concrete_work(self) -> None:
+        add_empty_work_scaffold(self.root, slug="aaa-empty")
+        self.write_default_raw_manifests()
+        workspace = load_workspace_config(self.root)
+
+        schedule = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=resolve_works_scope(workspace, "all"),
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(schedule["kind"], "autonomous-daemon-schedule")
+        self.assertEqual(schedule["readiness_claim"], "none")
+        self.assertEqual(schedule["selected_work_id"], TEST_WORK_ID)
+        self.assertIn("launch-academic review", schedule["selected_command"])
+        empty_candidate = next(item for item in schedule["candidates"] if item["work_id"] == "aaa-empty")
+        self.assertEqual(empty_candidate["status"], "blocked")
+        self.assertEqual(empty_candidate["stop_reason"], "manual-target-required")
+
+    def test_scheduler_skips_work_with_single_work_daemon_lock(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+        write_daemon_lock(
+            self.root,
+            TEST_WORK_ID,
+            {
+                "mode": "autonomous-full",
+                "pid": os.getpid(),
+                "started_at": "2026-04-18T10:00:00+00:00",
+                "heartbeat_at": "2026-04-18T10:00:00+00:00",
+            },
+        )
+        workspace = load_workspace_config(self.root)
+
+        schedule = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=resolve_works_scope(workspace, "all"),
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(schedule["selected_work_id"], "zeta-work")
+        locked_candidate = next(item for item in schedule["candidates"] if item["work_id"] == TEST_WORK_ID)
+        self.assertEqual(locked_candidate["status"], "waiting")
+        self.assertEqual(locked_candidate["stop_reason"], "single-work-daemon-running")
+
+    def test_scheduler_waits_without_selection_when_global_active_run_exists(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+        self.orchestrator.store.set_active_run(
+            {
+                "run_id": "default:active",
+                "run_dir": str(self.orchestrator.store.runs_dir / "active"),
+                "pid": os.getpid(),
+                "lane": "article",
+                "action": "review",
+                "started_at": "2026-04-18T10:22:00+00:00",
+                "project_root": str(self.root),
+                "work_id": TEST_WORK_ID,
+                "target": TEST_ARTICLE_DRAFT.as_posix(),
+            }
+        )
+        workspace = load_workspace_config(self.root)
+
+        schedule = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=resolve_works_scope(workspace, "all"),
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(schedule["status"], "waiting")
+        self.assertEqual(schedule["stop_reason"], "active-run")
+        self.assertIsNone(schedule["selected_work_id"])
+        self.assertEqual(schedule["readiness_claim"], "none")
+
+    def test_scheduler_selects_another_work_when_first_has_only_blocked_continuation(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        workspace = load_workspace_config(self.root)
+
+        schedule = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=resolve_works_scope(workspace, "all"),
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(schedule["selected_work_id"], "zeta-work")
+        self.assertIn("launch-academic review", schedule["selected_command"])
+        blocked_candidate = next(item for item in schedule["candidates"] if item["work_id"] == TEST_WORK_ID)
+        self.assertEqual(blocked_candidate["status"], "blocked")
+        self.assertIn("standards-consistency", blocked_candidate["known_blocker_categories"])
+
+    def test_multi_work_tick_launches_one_action_and_next_tick_waits(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+
+        first = run_multi_work_daemon_tick(
+            root_dir=self.root,
+            work_ids=["demo-work", "zeta-work"],
+            works_scope="all",
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(first["status"], "waiting")
+        self.assertEqual(first["stop_reason"], "step-started")
+        self.assertEqual(first["selected_work_id"], TEST_WORK_ID)
+        self.assertEqual(first["last_result"]["status"], "started-run")
+        self.assertTrue(multi_daemon_state_path(self.root).exists())
+
+        second = run_multi_work_daemon_tick(
+            root_dir=self.root,
+            work_ids=["demo-work", "zeta-work"],
+            works_scope="all",
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(second["status"], "waiting")
+        self.assertEqual(second["stop_reason"], "active-run")
+        self.assertIsNone(second["selected_work_id"])
+        self.assertEqual(second["readiness_claim"], "none")
+
+    def test_multi_work_tick_exports_only_after_finalization_check_passes(self) -> None:
+        self.write_default_raw_manifests()
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+
+        payload = run_multi_work_daemon_tick(
+            root_dir=self.root,
+            work_ids=[TEST_WORK_ID],
+            works_scope="all",
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["stop_reason"], "terminal-export")
+        self.assertIn("export-article-docx", payload["selected_command"])
+        self.assertEqual(payload["selected_decision"]["decision"], "allowed")
+        self.assertEqual(payload["last_schedule"]["selected_decision"]["readiness_claim"], "none")
+
+    def test_multi_work_daemon_start_rejects_duplicate_aggregate_lock(self) -> None:
+        class FakeProcess:
+            pid = 7654
+
+        with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with patch("telegram_console.autonomous_scheduler._pid_is_alive", return_value=True):
+                first = start_multi_work_daemon_process(
+                    root_dir=self.root,
+                    works_scope="all",
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                )
+                second = start_multi_work_daemon_process(
+                    root_dir=self.root,
+                    works_scope="all",
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                )
+
+        self.assertEqual(first["status"], "running")
+        self.assertEqual(first["pid"], 7654)
+        self.assertEqual(second["status"], "blocked")
+        self.assertEqual(second["stop_reason"], "daemon-already-running")
+        self.assertEqual(popen.call_count, 1)
+        self.assertTrue(multi_daemon_lock_path(self.root).exists())
+        self.assertTrue(multi_daemon_state_path(self.root).exists())
+
+
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -5264,6 +5543,167 @@ class TelegramConsoleCliTests(unittest.TestCase):
                                 "start",
                                 "--work",
                                 TEST_WORK_ID,
+                                "--mode",
+                                "autonomous-full",
+                                "--json",
+                            ],
+                            root_dir=root,
+                        )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["stop_reason"], "daemon-already-running")
+            self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_autonomous_daemon_tick_works_all_returns_aggregate_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            add_demo_work_clone(root, "zeta-work")
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "autonomous",
+                        "daemon",
+                        "tick",
+                        "--works",
+                        "all",
+                        "--mode",
+                        "autonomous-full",
+                        "--poll-seconds",
+                        "0",
+                        "--max-cycles",
+                        "5",
+                        "--max-runtime-minutes",
+                        "10",
+                        "--json",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "autonomous-multi-work-daemon-state")
+            self.assertEqual(payload["works_scope"], "all")
+            self.assertEqual(payload["work_count"], 2)
+            self.assertEqual(payload["selected_work_id"], TEST_WORK_ID)
+            self.assertEqual(payload["last_schedule"]["kind"], "autonomous-daemon-schedule")
+            self.assertEqual(payload["readiness_claim"], "none")
+            self.assertTrue((root / "output" / "telegram" / "runtime" / "autonomous" / "multi-work.daemon.json").exists())
+
+    def test_autonomous_daemon_start_status_and_stop_works_all_are_json_first(self) -> None:
+        class FakeProcess:
+            pid = 8765
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            add_demo_work_clone(root, "zeta-work")
+            with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        [
+                            "autonomous",
+                            "daemon",
+                            "start",
+                            "--works",
+                            "all",
+                            "--mode",
+                            "autonomous-full",
+                            "--poll-seconds",
+                            "0",
+                            "--max-cycles",
+                            "5",
+                            "--max-runtime-minutes",
+                            "10",
+                            "--json",
+                        ],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            start_payload = json.loads(stdout.getvalue())
+            self.assertEqual(start_payload["status"], "running")
+            self.assertEqual(start_payload["works_scope"], "all")
+            self.assertEqual(start_payload["pid"], 8765)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "daemon", "status", "--works", "all", "--json"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            status_payload = json.loads(stdout.getvalue())
+            self.assertEqual(status_payload["status"], "running")
+            self.assertEqual(status_payload["works_scope"], "all")
+            self.assertEqual(status_payload["readiness_claim"], "none")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "daemon", "stop", "--works", "all", "--reason", "operator-stop", "--json"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            stop_payload = json.loads(stdout.getvalue())
+            self.assertEqual(stop_payload["kind"], "autonomous-daemon-stop-request")
+            self.assertEqual(stop_payload["works_scope"], "all")
+            self.assertEqual(stop_payload["reason"], "operator-stop")
+            self.assertEqual(stop_payload["readiness_claim"], "none")
+            self.assertTrue(multi_daemon_stop_path(root).exists())
+
+    def test_autonomous_daemon_start_works_all_refuses_duplicate_with_json_error(self) -> None:
+        class FakeProcess:
+            pid = 9876
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    work_cli_module.main(
+                        [
+                            "autonomous",
+                            "daemon",
+                            "start",
+                            "--works",
+                            "all",
+                            "--mode",
+                            "autonomous-full",
+                            "--json",
+                        ],
+                        root_dir=root,
+                    )
+
+                with patch("telegram_console.autonomous_scheduler._pid_is_alive", return_value=True):
+                    stdout = StringIO()
+                    stderr = StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = work_cli_module.main(
+                            [
+                                "autonomous",
+                                "daemon",
+                                "start",
+                                "--works",
+                                "all",
                                 "--mode",
                                 "autonomous-full",
                                 "--json",
