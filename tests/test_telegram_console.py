@@ -89,6 +89,7 @@ from telegram_console.workspace import (
     relative_to_workspace,
     resolve_target_for_action,
     resolve_work_selection,
+    work_summary_dict,
 )
 
 
@@ -2407,6 +2408,77 @@ class GuardedProseRegistryTests(unittest.TestCase):
         self.assertTrue(any(rule.code == "guarded-prose-dynamic-material" for rule in thesis_rules))
         self.assertTrue(any(rule.forbidden_markers for rule in article_rules))
         self.assertTrue(any(rule.regex_patterns for rule in thesis_rules))
+
+
+class ThesisEvidenceLedgerContractTests(unittest.TestCase):
+    def test_thesis_bundle_defaults_ledgers_dir_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            assert work.thesis is not None
+            self.assertEqual(
+                work.thesis.ledgers_dir.resolve(),
+                (root / TEST_WORK_ROOT / "thesis" / "ledgers").resolve(),
+            )
+            self.assertEqual(
+                work_summary_dict(workspace, work)["thesis"]["ledgers_dir"],
+                f"{TEST_WORK_ROOT.as_posix()}/thesis/ledgers",
+            )
+
+    def test_thesis_bundle_preserves_explicit_ledgers_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            work_path = root / TEST_WORK_ROOT / "work.toml"
+            content = work_path.read_text(encoding="utf-8")
+            content = content.replace(
+                'sources_dir = "thesis/sources"\n',
+                'sources_dir = "thesis/sources"\nledgers_dir = "thesis/claim-ledgers"\n',
+                1,
+            )
+            work_path.write_text(content, encoding="utf-8")
+
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            assert work.thesis is not None
+            self.assertEqual(
+                work.thesis.ledgers_dir.resolve(),
+                (root / TEST_WORK_ROOT / "thesis" / "claim-ledgers").resolve(),
+            )
+
+    def test_evidence_ledger_template_declares_required_fields(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        template_path = repo_root / "templates" / "evidence-ledger.md"
+
+        self.assertTrue(template_path.exists())
+        template_text = template_path.read_text(encoding="utf-8")
+
+        for field_name in (
+            "claim_id",
+            "section_target",
+            "claim_text",
+            "claim_type",
+            "verification_status",
+            "source_package_item_ids",
+            "primary_source_reference",
+            "primary_verification_date",
+            "support_scope",
+            "draft_use",
+            "notes",
+        ):
+            self.assertIn(field_name, template_text)
+
+    def test_source_package_template_links_related_ledger(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        template_path = repo_root / "templates" / "source-package-passport.md"
+
+        template_text = template_path.read_text(encoding="utf-8")
+
+        self.assertIn("related_ledger_path", template_text)
 
 
 class WorkspaceTargetResolutionTests(unittest.TestCase):

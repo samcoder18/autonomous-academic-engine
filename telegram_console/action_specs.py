@@ -902,6 +902,7 @@ def _thesis_allowed_writes(
             [
                 AllowedWriteScope("chapters", str(work.thesis.chapters_dir), "Chapter briefs and architecture notes."),
                 AllowedWriteScope("sources", str(work.thesis.sources_dir), "Thesis source packages."),
+                AllowedWriteScope("ledgers", str(work.thesis.ledgers_dir), "Claim-level evidence ledgers."),
                 AllowedWriteScope("sections", str(work.thesis.manuscript_sections_dir), "Canonical thesis sections."),
                 AllowedWriteScope("reviews", str(work.thesis.reviews_dir), "Review sheets."),
                 AllowedWriteScope("sync", str(work.thesis.sync_dir), "Checkpoint sync artifacts."),
@@ -909,7 +910,10 @@ def _thesis_allowed_writes(
                 AllowedWriteScope("docx", str(work.thesis.export_docx_path), "Optional DOCX export target."),
             ]
         )
-    elif action in {"source-pack", "verify", "write-section"}:
+    elif action in {"source-pack", "verify"}:
+        items.append(AllowedWriteScope("ledgers", str(work.thesis.ledgers_dir), "Claim-level evidence ledgers."))
+        items.append(AllowedWriteScope("sync", str(work.thesis.sync_dir), "Sync checkpoints for this work."))
+    elif action == "write-section":
         items.append(AllowedWriteScope("sync", str(work.thesis.sync_dir), "Sync checkpoints for this work."))
     elif action == "review-section" and review_path:
         items.append(AllowedWriteScope("review-artifact", str(review_path), "Dedicated review sheet."))

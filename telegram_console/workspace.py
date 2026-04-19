@@ -42,6 +42,7 @@ class ThesisBundleConfig:
     paths: LanePaths
     chapters_dir: Path
     sources_dir: Path
+    ledgers_dir: Path
     manuscript_dir: Path
     manuscript_sections_dir: Path
     reviews_dir: Path
@@ -488,6 +489,7 @@ def work_summary_dict(workspace: WorkspaceConfig, work: WorkConfig) -> dict[str,
             "root_dir": relative_to_workspace(workspace, work.thesis.paths.root_dir),
             "chapters_dir": relative_to_workspace(workspace, work.thesis.chapters_dir),
             "sources_dir": relative_to_workspace(workspace, work.thesis.sources_dir),
+            "ledgers_dir": relative_to_workspace(workspace, work.thesis.ledgers_dir),
             "manuscript_sections_dir": relative_to_workspace(workspace, work.thesis.manuscript_sections_dir),
             "reviews_dir": relative_to_workspace(workspace, work.thesis.reviews_dir),
             "sync_dir": relative_to_workspace(workspace, work.thesis.sync_dir),
@@ -541,6 +543,7 @@ def _build_thesis_config(
         paths=lane_paths,
         chapters_dir=_resolve_work_path(work_dir, _required_text(payload, "chapters_dir", work_file)),
         sources_dir=_resolve_work_path(work_dir, _required_text(payload, "sources_dir", work_file)),
+        ledgers_dir=_resolve_work_path(work_dir, _optional_text(payload.get("ledgers_dir")) or "thesis/ledgers"),
         manuscript_dir=_resolve_work_path(work_dir, _required_text(payload, "manuscript_dir", work_file)),
         manuscript_sections_dir=_resolve_work_path(
             work_dir,

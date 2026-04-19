@@ -1256,6 +1256,7 @@ def _thesis_related_context(
         work.thesis.paths.root_dir / "README.md",
         work.thesis.manuscript_dir / "README.md",
         workspace.root_dir / "templates" / "source-package-passport.md",
+        workspace.root_dir / "templates" / "evidence-ledger.md",
         workspace.root_dir / "templates" / "chapter-brief.md",
         workspace.root_dir / "templates" / "chapter-review-sheet.md",
         workspace.root_dir / "templates" / "chat-sync.md",
@@ -1265,6 +1266,7 @@ def _thesis_related_context(
     for directory in (
         work.thesis.chapters_dir,
         work.thesis.sources_dir,
+        work.thesis.ledgers_dir,
         work.thesis.manuscript_sections_dir,
         work.thesis.reviews_dir,
         work.thesis.sync_dir,
