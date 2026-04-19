@@ -15,6 +15,7 @@ RULES_FILE = Path(__file__).with_name("guarded_prose_rules.toml")
 
 @dataclass(frozen=True)
 class GuardedProseRule:
+    mode: str
     category: str
     code: str
     message: str
@@ -25,8 +26,8 @@ class GuardedProseRule:
     forbidden_markers: tuple[str, ...] = ()
 
 
-@lru_cache(maxsize=4)
-def load_guarded_prose_rules(lane: str) -> tuple[GuardedProseRule, ...]:
+@lru_cache(maxsize=8)
+def load_guarded_prose_rules(lane: str, mode: str = "block") -> tuple[GuardedProseRule, ...]:
     payload = _read_rules_payload()
     items = payload.get("rules")
     if not isinstance(items, list):
@@ -38,8 +39,44 @@ def load_guarded_prose_rules(lane: str) -> tuple[GuardedProseRule, ...]:
         item_lane = str(item.get("lane") or "").strip().lower()
         if item_lane != lane.strip().lower():
             continue
+        item_mode = str(item.get("mode") or "block").strip().lower()
+        if item_mode != mode.strip().lower():
+            continue
         selected.append(_rule_from_payload(item))
     return tuple(selected)
+
+
+def extract_guarded_prose_matches(
+    source_name: str,
+    text: str,
+    *,
+    normalize_line: Callable[[str], str],
+    rules: Sequence[GuardedProseRule],
+) -> list[dict[str, str]]:
+    matches: list[dict[str, str]] = []
+    for raw_line in text.splitlines():
+        line = normalize_line(re.sub(r"^\s*(?:[-*]\s+)?", "", raw_line))
+        if not line or ":" in line:
+            continue
+        normalized = line.casefold().strip(" .")
+        if not normalized:
+            continue
+        for rule in rules:
+            if not _matches_rule(rule, normalized):
+                continue
+            matches.append(
+                {
+                    "source": source_name,
+                    "field": rule.field,
+                    "value": line,
+                    "category": rule.category,
+                    "code": rule.code,
+                    "message": rule.message,
+                    "mode": rule.mode,
+                }
+            )
+            break
+    return matches
 
 
 def extract_guarded_prose_blockers(
@@ -51,27 +88,22 @@ def extract_guarded_prose_blockers(
     build_blocker: Callable[..., Blocker],
 ) -> list[Blocker]:
     blockers: list[Blocker] = []
-    for raw_line in text.splitlines():
-        line = normalize_line(re.sub(r"^\s*(?:[-*]\s+)?", "", raw_line))
-        if not line or ":" in line:
-            continue
-        normalized = line.casefold().strip(" .")
-        if not normalized:
-            continue
-        for rule in rules:
-            if not _matches_rule(rule, normalized):
-                continue
-            blockers.append(
-                build_blocker(
-                    source_name,
-                    rule.field,
-                    line,
-                    category=rule.category,
-                    code=rule.code,
-                    message=rule.message,
-                )
+    for match in extract_guarded_prose_matches(
+        source_name,
+        text,
+        normalize_line=normalize_line,
+        rules=rules,
+    ):
+        blockers.append(
+            build_blocker(
+                source_name,
+                match["field"],
+                match["value"],
+                category=match["category"],
+                code=match["code"],
+                message=match["message"],
             )
-            break
+        )
     return blockers
 
 
@@ -95,6 +127,7 @@ def _read_rules_payload() -> dict[str, Any]:
 
 def _rule_from_payload(payload: dict[str, Any]) -> GuardedProseRule:
     return GuardedProseRule(
+        mode=str(payload.get("mode") or "block").strip() or "block",
         category=str(payload.get("category") or "").strip(),
         code=str(payload.get("code") or "").strip(),
         message=str(payload.get("message") or "").strip(),

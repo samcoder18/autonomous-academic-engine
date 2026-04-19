@@ -55,6 +55,7 @@ def build_work_state(
     thesis_overview: dict[str, Any] | None,
     thesis_ledger_advisory: dict[str, Any] | None,
     article_overview: dict[str, Any] | None,
+    quality_advisories: dict[str, Any] | None = None,
     standards_profiles: dict[str, Any],
     runtime_records: Iterable[Any],
     active_run: dict[str, Any] | None = None,
@@ -94,6 +95,7 @@ def build_work_state(
         "active_lanes": lane_list,
         "thesis": _strip_internal(thesis),
         "article": _strip_internal(article),
+        "quality_advisories": _compact_quality_advisories(root_path, quality_advisories),
         "standards": _strip_internal(standards),
         "runtime": _strip_internal(runtime),
         "known_blockers": known_blockers,
@@ -330,6 +332,7 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
     thesis_summary = state.get("thesis", {}).get("summary", {})
     thesis_ledger = state.get("thesis", {}).get("ledger_advisory", {})
     article_summary = state.get("article", {}).get("summary", {})
+    quality_advisories = state.get("quality_advisories", {})
     standards_profiles = state.get("standards", {}).get("profiles", {})
     runtime = state.get("runtime", {})
     next_action = state.get("suggested_next_action")
@@ -362,6 +365,17 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
                 f"claims={thesis_ledger.get('claim_count') or 0}, "
                 f"recheck={thesis_ledger.get('needs_recheck_count') or 0}, "
                 f"unsafe={thesis_ledger.get('unsafe_for_draft_count') or 0}"
+            )
+    if isinstance(quality_advisories, dict):
+        thesis_quality = quality_advisories.get("thesis") if isinstance(quality_advisories.get("thesis"), dict) else {}
+        article_quality = quality_advisories.get("article") if isinstance(quality_advisories.get("article"), dict) else {}
+        thesis_status = _optional_text((thesis_quality.get("verification_advisory") or {}).get("status"))
+        article_status = _optional_text((article_quality.get("verification_advisory") or {}).get("status"))
+        if thesis_status or article_status:
+            lines.append(
+                "Quality advisory: "
+                f"thesis={thesis_quality.get('coverage') or 'missing'}/{thesis_status or 'missing'}, "
+                f"article={article_quality.get('coverage') or 'missing'}/{article_status or 'missing'}"
             )
     if isinstance(standards_profiles, dict) and standards_profiles:
         standards_parts = []
@@ -588,6 +602,48 @@ def _compact_article_state(root_dir: Path, overview: dict[str, Any] | None) -> d
         },
         "blockers": blockers,
     }
+
+
+def _compact_quality_advisories(root_dir: Path, advisories: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(advisories, dict):
+        return {
+            "kind": "quality-advisories",
+            "version": "v1",
+            "advisory_only": True,
+            "readiness_claim": "none",
+            "does_not_replace": [],
+            "thesis": _compact_lane_quality_advisory(root_dir, None),
+            "article": _compact_lane_quality_advisory(root_dir, None),
+        }
+    result = dict(advisories)
+    result["thesis"] = _compact_lane_quality_advisory(root_dir, advisories.get("thesis"))
+    result["article"] = _compact_lane_quality_advisory(root_dir, advisories.get("article"))
+    return result
+
+
+def _compact_lane_quality_advisory(root_dir: Path, payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {
+            "coverage": "missing",
+            "sources": [],
+            "verification_advisory": {"status": "missing", "issue_count": 0, "flags": [], "issues": []},
+            "source_mix_advisory": {"status": "missing", "issue_count": 0, "flags": [], "issues": []},
+            "prose_advisory": {"status": "missing", "issue_count": 0, "flags": [], "issues": []},
+        }
+    result = dict(payload)
+    for key in ("verification_advisory", "source_mix_advisory", "prose_advisory"):
+        advisory = payload.get(key) if isinstance(payload.get(key), dict) else {}
+        issues: list[dict[str, Any]] = []
+        for raw_issue in advisory.get("issues") or []:
+            if not isinstance(raw_issue, dict):
+                continue
+            issue = dict(raw_issue)
+            issue["artifact_path"] = _compact_path(root_dir, _optional_text(raw_issue.get("artifact_path")))
+            issues.append(issue)
+        compact_advisory = dict(advisory)
+        compact_advisory["issues"] = issues
+        result[key] = compact_advisory
+    return result
 
 
 def _compact_standards_state(profiles: dict[str, Any]) -> dict[str, Any]:

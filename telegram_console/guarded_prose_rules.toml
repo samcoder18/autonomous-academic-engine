@@ -107,3 +107,25 @@ regex_patterns = [
   "\\bслаб\\w*\\s+вывод",
   "\\bcontested\\s+conclusion\\b",
 ]
+
+[[rules]]
+lane = "thesis"
+mode = "advisory"
+category = "prose"
+code = "guarded-prose-generic-prose-pattern"
+message = "Advisory prose artifact flags a generic prose pattern."
+regex_patterns = [
+  "\\bgeneric\\s+prose\\s+pattern\\b",
+  "\\bшаблонн\\w*\\s+формул",
+]
+
+[[rules]]
+lane = "thesis"
+mode = "advisory"
+category = "prose"
+code = "guarded-prose-empty-emphasis"
+message = "Advisory prose artifact flags empty emphasis."
+regex_patterns = [
+  "\\bempty\\s+emphasis\\b",
+  "\\bпуст\\w*\\s+усилен",
+]

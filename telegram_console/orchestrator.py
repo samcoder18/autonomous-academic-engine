@@ -14,6 +14,7 @@ from .article_bundle_state import article_bundle_manifest_path, build_article_bu
 from .article_runtime_signals import extract_article_artifact_signals
 from .contract_gates import evaluate_contract_gates
 from .finalization_engine import evaluate_article_finalization
+from .quality_advisories import build_quality_advisories
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .thesis_evidence_ledger import audit_thesis_ledgers
@@ -452,6 +453,7 @@ class WorkflowOrchestrator:
             thesis_overview=thesis_overview,
             thesis_ledger_advisory=thesis_ledger_advisory,
             article_overview=article_overview,
+            quality_advisories=build_quality_advisories(work),
             standards_profiles=self._resolve_work_standards_profiles(work),
             runtime_records=self._recent_workflow_runtime_records(work.slug, limit=5),
             active_run=self._active_workflow_run_for_work(work.slug),

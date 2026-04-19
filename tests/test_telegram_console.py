@@ -69,6 +69,7 @@ from telegram_console.skill_source_map import (
     sync_external_skill_sources,
 )
 from telegram_console.thesis_evidence_ledger import audit_thesis_ledgers
+from telegram_console.quality_advisories import build_quality_advisories
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -2410,9 +2411,11 @@ class GuardedProseRegistryTests(unittest.TestCase):
     def test_machine_readable_registry_loads_article_and_thesis_rules(self) -> None:
         article_rules = load_guarded_prose_rules("article")
         thesis_rules = load_guarded_prose_rules("thesis")
+        thesis_advisory_rules = load_guarded_prose_rules("thesis", mode="advisory")
 
         self.assertTrue(any(rule.code == "guarded-prose-primary-support" for rule in article_rules))
         self.assertTrue(any(rule.code == "guarded-prose-dynamic-material" for rule in thesis_rules))
+        self.assertTrue(any(rule.code == "guarded-prose-generic-prose-pattern" for rule in thesis_advisory_rules))
         self.assertTrue(any(rule.forbidden_markers for rule in article_rules))
         self.assertTrue(any(rule.regex_patterns for rule in thesis_rules))
 
@@ -2893,6 +2896,201 @@ class ThesisLedgerAdvisoryTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["thesis"]["ledger_advisory"]["advisory_status"], "needs-attention")
+        self.assertEqual(payload["known_blocker_count"], 0)
+
+
+class QualityAdvisoryTests(unittest.TestCase):
+    def test_build_quality_advisories_parses_thesis_and_article_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md",
+                textwrap.dedent(
+                    """\
+                    # Verification log
+
+                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | conflicting primary | needs-recheck | needs-review | conflict |
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "reviews" / "01-introduction-glossary.md",
+                textwrap.dedent(
+                    """\
+                    # Glossary
+
+                    - term: biometric identifier
+                    - preferred usage: biometric identifier
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "reviews" / "01-introduction-micro-review.md",
+                textwrap.dedent(
+                    """\
+                    # Micro review
+
+                    - paragraph: 1
+                    - generic prose pattern: yes
+                    - empty emphasis: yes
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ## 4. Claim Passport Register
+
+                    ### Claim Passport 1
+
+                    - Claim ID: A-1
+                    - Claim text: Empirical support is partial.
+                    - basis_type: empirical
+                    - primary_identifier: Dataset 1
+                    - official_primary_link: https://example.test/dataset
+                    - jurisdiction: RU
+                    - statement_precision: exact
+                    - knowledge_date: 2026-04-19
+                    - verification_result: partial support only
+                    - verification_status: needs-recheck
+                    - support_scope: partial
+                    - draft_use: narrow
+                    - false_attribution_check: passed
+                    - Notes: missing metadata
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Claim Map
+
+                    ## 2. Claims
+
+                    ### Claim 1
+
+                    - Claim ID: A-2
+                    - Claim text: Foreign-law claim still relies on doctrine.
+                    - Section role: comparison
+                    - basis_type: secondary-doctrine
+                    - Status: partial
+                    - Source IDs: S2
+                    - primary_identifier:
+                    - official_primary_link:
+                    - jurisdiction: foreign
+                    - statement_precision: qualified
+                    - knowledge_date: 2026-04-19
+                    - verification_result: secondary summary only
+                    - false_attribution_check: passed
+                    - Safe for final text: no
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertTrue(advisories["advisory_only"])
+        self.assertEqual(advisories["thesis"]["coverage"], "full")
+        self.assertIn("verification-log", advisories["thesis"]["sources"])
+        self.assertIn("conflicting_primary", advisories["thesis"]["verification_advisory"]["flags"])
+        self.assertIn("false_attribution_risk", advisories["thesis"]["verification_advisory"]["flags"])
+        self.assertIn("generic_prose_pattern", advisories["thesis"]["prose_advisory"]["flags"])
+        self.assertEqual(advisories["article"]["coverage"], "full")
+        self.assertIn("partial_support", advisories["article"]["verification_advisory"]["flags"])
+        self.assertIn("stats_missing_metadata", advisories["article"]["source_mix_advisory"]["flags"])
+        self.assertIn("foreign_law_secondary_only", advisories["article"]["source_mix_advisory"]["flags"])
+
+    def test_build_quality_advisories_marks_legacy_ledgers_as_limited_without_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | claim_type | verification_status | source_package_item_ids | primary_source_reference | primary_verification_date | support_scope | draft_use | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Legacy claim | norm | verified | S1 | Official source | 2026-04-19 | direct | safe | ok |
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertEqual(advisories["thesis"]["coverage"], "limited")
+        self.assertEqual(advisories["thesis"]["verification_advisory"]["status"], "limited")
+        self.assertEqual(advisories["thesis"]["verification_advisory"]["issue_count"], 0)
+        self.assertNotIn("missing_official_primary_link", advisories["thesis"]["verification_advisory"]["flags"])
+
+    def test_work_status_exposes_quality_advisories_without_affecting_signals_only_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    """
+                ),
+            )
+            write_file(root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md", "# Verification log\n")
+            write_file(root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md", "# Evidence Pack\n")
+            write_file(root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md", "# Claim Map\n")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Quality advisory:", stdout.getvalue())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status", "--json"], root_dir=root)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["assessment_scope"]["depth"], "signals-only")
+        self.assertEqual(payload["assessment_scope"]["readiness_claim"], "none")
+        self.assertIn("ledger_advisory", payload["thesis"])
+        self.assertIn("quality_advisories", payload)
+        self.assertEqual(payload["quality_advisories"]["kind"], "quality-advisories")
         self.assertEqual(payload["known_blocker_count"], 0)
 
 
