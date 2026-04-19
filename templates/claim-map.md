@@ -13,11 +13,18 @@
 - Claim ID:
 - Claim text:
 - Section role:
-- Claim type: `legal` / `factual` / `statistical` / `analytical`
+- basis_type: `primary-normative` / `official-guidance` / `court-decision` / `empirical` / `secondary-doctrine` / `news` / `commentary` / `analytical`
 - Status: `verified` / `partial` / `analytical conclusion` / `unsafe`
 - Source IDs:
+- primary_identifier:
+- official_primary_link:
+- jurisdiction:
+- statement_precision:
+- knowledge_date:
+- verification_result:
 - Counterargument to address:
 - Limits or caveats:
+- false_attribution_check:
 - Safe for final text: `yes` / `no`
 
 ### Claim 2
@@ -25,11 +32,18 @@
 - Claim ID:
 - Claim text:
 - Section role:
-- Claim type: `legal` / `factual` / `statistical` / `analytical`
+- basis_type: `primary-normative` / `official-guidance` / `court-decision` / `empirical` / `secondary-doctrine` / `news` / `commentary` / `analytical`
 - Status: `verified` / `partial` / `analytical conclusion` / `unsafe`
 - Source IDs:
+- primary_identifier:
+- official_primary_link:
+- jurisdiction:
+- statement_precision:
+- knowledge_date:
+- verification_result:
 - Counterargument to address:
 - Limits or caveats:
+- false_attribution_check:
 - Safe for final text: `yes` / `no`
 
 ## 3. Bundle Summary

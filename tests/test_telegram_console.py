@@ -2466,15 +2466,20 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
 
         for field_name in (
             "claim_id",
+            "basis_type",
+            "primary_identifier",
+            "official_primary_link",
+            "jurisdiction",
+            "statement_precision",
+            "knowledge_date",
+            "verification_result",
             "section_target",
             "claim_text",
-            "claim_type",
             "verification_status",
             "source_package_item_ids",
-            "primary_source_reference",
-            "primary_verification_date",
             "support_scope",
             "draft_use",
+            "false_attribution_check",
             "notes",
         ):
             self.assertIn(field_name, template_text)
@@ -2486,6 +2491,56 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
         template_text = template_path.read_text(encoding="utf-8")
 
         self.assertIn("related_ledger_path", template_text)
+        self.assertIn("claim passport", template_text.casefold())
+        self.assertIn("official_primary_link", template_text)
+        self.assertIn("false_attribution_check", template_text)
+
+    def test_evidence_pack_template_declares_claim_passport_fields(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        template_text = (repo_root / "templates" / "evidence-pack.md").read_text(encoding="utf-8")
+
+        for field_name in (
+            "basis_type",
+            "primary_identifier",
+            "official_primary_link",
+            "knowledge_date",
+            "verification_result",
+            "false_attribution_check",
+        ):
+            self.assertIn(field_name, template_text)
+
+    def test_claim_map_template_declares_claim_passport_fields(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        template_text = (repo_root / "templates" / "claim-map.md").read_text(encoding="utf-8")
+
+        for field_name in (
+            "basis_type",
+            "primary_identifier",
+            "official_primary_link",
+            "knowledge_date",
+            "verification_result",
+            "false_attribution_check",
+        ):
+            self.assertIn(field_name, template_text)
+
+    def test_verification_log_template_declares_required_fields(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        template_path = repo_root / "templates" / "verification-log.md"
+
+        self.assertTrue(template_path.exists())
+        template_text = template_path.read_text(encoding="utf-8")
+
+        for field_name in (
+            "claim_id",
+            "primary_identifier",
+            "official_primary_link",
+            "knowledge_date",
+            "verification_result",
+            "verification_status",
+            "false_attribution_check",
+            "notes",
+        ):
+            self.assertIn(field_name, template_text)
 
 
 class DocumentationOwnershipContractTests(unittest.TestCase):
@@ -2516,6 +2571,24 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
         self.assertIn("## Output paths", readme_text)
         self.assertIn("meta/master-protocol.md", readme_text)
         self.assertNotIn("## Как работать", readme_text)
+
+    def test_source_verifier_doc_requires_claim_passport_and_false_attribution_check(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        verifier_text = (repo_root / "agents" / "source-verifier.md").read_text(encoding="utf-8")
+
+        self.assertIn("claim passport", verifier_text.casefold())
+        self.assertIn("official_primary_link", verifier_text)
+        self.assertIn("false attribution", verifier_text.casefold())
+        self.assertIn("support_scope", verifier_text)
+
+    def test_academic_source_verifier_doc_requires_claim_passport_and_false_attribution_check(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        verifier_text = (repo_root / "agents" / "academic-source-verifier.md").read_text(encoding="utf-8")
+
+        self.assertIn("claim passport", verifier_text.casefold())
+        self.assertIn("official_primary_link", verifier_text)
+        self.assertIn("false attribution", verifier_text.casefold())
+        self.assertIn("support_scope", verifier_text)
 
 
 class SkillSourceMapAuditTests(unittest.TestCase):
@@ -2675,6 +2748,34 @@ class ThesisLedgerAdvisoryTests(unittest.TestCase):
         self.assertEqual(advisory["advisory_status"], "blocked-for-draft")
         self.assertTrue(any(issue["code"] == "needs-recheck-claims" for issue in advisory["issues"]))
         self.assertTrue(any(issue["code"] == "unsafe-for-draft-claims" for issue in advisory["issues"]))
+
+    def test_audit_thesis_ledgers_accepts_expanded_claim_passport_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            ledger_path = root / TEST_WORK_ROOT / "thesis" / "ledgers" / "02-method-ledger.md"
+            write_file(
+                ledger_path,
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-010 | thesis/manuscript/sections/01-introduction.md | Verified norm claim | primary-normative | S10 | Art. 10 | https://example.test/official | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisory = audit_thesis_ledgers(work)
+
+        self.assertTrue(advisory["available"])
+        self.assertEqual(advisory["claim_count"], 1)
+        self.assertEqual(advisory["verified_count"], 1)
+        self.assertEqual(advisory["missing_primary_date_count"], 0)
+        self.assertEqual(advisory["advisory_status"], "clear")
 
     def test_work_status_exposes_ledger_advisory_without_turning_it_into_known_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

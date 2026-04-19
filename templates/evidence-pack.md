@@ -50,7 +50,43 @@
 - Safe for drafting: `yes` / `no`
 - Limitations:
 
-## 4. Coverage Summary
+## 4. Claim Passport Register
+
+### Claim Passport 1
+
+- Claim ID:
+- Claim text:
+- basis_type:
+- primary_identifier:
+- official_primary_link:
+- jurisdiction:
+- statement_precision:
+- knowledge_date:
+- verification_result:
+- verification_status:
+- support_scope:
+- draft_use:
+- false_attribution_check:
+- Notes:
+
+### Claim Passport 2
+
+- Claim ID:
+- Claim text:
+- basis_type:
+- primary_identifier:
+- official_primary_link:
+- jurisdiction:
+- statement_precision:
+- knowledge_date:
+- verification_result:
+- verification_status:
+- support_scope:
+- draft_use:
+- false_attribution_check:
+- Notes:
+
+## 5. Coverage Summary
 
 - Claims with direct primary support:
 - Claims with only partial support:

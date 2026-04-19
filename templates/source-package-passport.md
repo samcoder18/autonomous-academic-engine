@@ -7,6 +7,7 @@
 - Тип пакета: `рамка темы` / `глава` / `методы` / `эмпирика` / `кейс` / `данные`
 - Связанный раздел диплома:
 - related_ledger_path:
+- related_verification_log_path:
 - Дата сборки:
 - Дата последней проверки:
 
@@ -16,7 +17,25 @@
 - Что этот пакет не покрывает:
 - Какие вопросы остаются вне пакета:
 
-## 3. Список источников
+## 3. Claim Passport Contract
+
+- Every strong claim that leaves this package should have a claim passport in the related ledger.
+- Minimal claim passport fields:
+  - `claim_id`
+  - `basis_type`
+  - `primary_identifier`
+  - `official_primary_link`
+  - `jurisdiction`
+  - `statement_precision`
+  - `knowledge_date`
+  - `verification_result`
+  - `verification_status`
+  - `support_scope`
+  - `draft_use`
+  - `false_attribution_check`
+  - `notes`
+
+## 4. Список источников
 
 ### Источник 1
 
@@ -34,6 +53,13 @@
 - Дата / редакция проверки:
 - Уровень доверия: `высокий` / `средний` / `низкий`
 - Ограничения по использованию:
+- Claim passport handoff:
+  - claim_id:
+  - primary_identifier:
+  - official_primary_link:
+  - knowledge_date:
+  - verification_result:
+  - false_attribution_check:
 
 ### Источник 2
 
@@ -51,8 +77,15 @@
 - Дата / редакция проверки:
 - Уровень доверия: `высокий` / `средний` / `низкий`
 - Ограничения по использованию:
+- Claim passport handoff:
+  - claim_id:
+  - primary_identifier:
+  - official_primary_link:
+  - knowledge_date:
+  - verification_result:
+  - false_attribution_check:
 
-## 4. Итог по пакету
+## 5. Итог по пакету
 
 - Какие тезисы уже проверены и можно использовать в тексте:
 - Какие тезисы требуют дополнительной проверки:

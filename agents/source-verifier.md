@@ -19,6 +19,9 @@
 - можно ли по источнику подтвердить именно тот тезис, который планируется использовать;
 - нет ли подмены прямого правила вольным пересказом;
 - совпадает ли запись в evidence ledger с реально подтверждаемым тезисом;
+- для каждого strong claim требует claim passport с `claim_id`, `basis_type`, `primary_identifier`, `official_primary_link`, `jurisdiction`, `statement_precision`, `knowledge_date`, `verification_result`, `verification_status`, `support_scope`, `draft_use`, `false_attribution_check`, `notes`;
+- фиксирует auditable primary-source verification и явный `support_scope`;
+- отдельно проверяет false attribution risk: не приписана ли источнику формулировка, которой он не поддерживает;
 - где заканчивается факт и начинается аналитический вывод.
 
 ## Жесткие запреты
@@ -30,6 +33,7 @@
 ## Результат
 
 - маркировка тезисов: `проверено` / `нужна доп.проверка` / `аналитический вывод`;
-- обновленный evidence ledger с датой проверки первички и пределом опоры;
+- обновленный evidence ledger с claim passport, датой знания/проверки и пределом опоры;
+- verification log по сильным утверждениям;
 - дата последней проверки;
 - список источников, которые можно безопасно пускать в черновик.

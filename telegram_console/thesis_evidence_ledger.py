@@ -6,7 +6,7 @@ from typing import Iterable
 from .workspace import WorkConfig
 
 
-REQUIRED_FIELDS = (
+LEGACY_REQUIRED_FIELDS = (
     "claim_id",
     "section_target",
     "claim_text",
@@ -17,6 +17,25 @@ REQUIRED_FIELDS = (
     "primary_verification_date",
     "support_scope",
     "draft_use",
+    "notes",
+)
+
+EXPANDED_REQUIRED_FIELDS = (
+    "claim_id",
+    "section_target",
+    "claim_text",
+    "basis_type",
+    "verification_status",
+    "source_package_item_ids",
+    "primary_identifier",
+    "official_primary_link",
+    "jurisdiction",
+    "statement_precision",
+    "knowledge_date",
+    "verification_result",
+    "support_scope",
+    "draft_use",
+    "false_attribution_check",
     "notes",
 )
 
@@ -142,7 +161,8 @@ def _extract_ledger_rows(text: str) -> list[dict[str, str]]:
     lines = text.splitlines()
     index = 0
     rows: list[dict[str, str]] = []
-    required_set = set(REQUIRED_FIELDS)
+    legacy_required_set = set(LEGACY_REQUIRED_FIELDS)
+    expanded_required_set = set(EXPANDED_REQUIRED_FIELDS)
     while index < len(lines) - 1:
         header_line = lines[index].strip()
         separator_line = lines[index + 1].strip()
@@ -150,7 +170,8 @@ def _extract_ledger_rows(text: str) -> list[dict[str, str]]:
             index += 1
             continue
         headers = _split_table_row(header_line)
-        if not required_set.issubset(set(headers)):
+        header_set = set(headers)
+        if not legacy_required_set.issubset(header_set) and not expanded_required_set.issubset(header_set):
             index += 1
             continue
         index += 2
@@ -162,7 +183,8 @@ def _extract_ledger_rows(text: str) -> list[dict[str, str]]:
             if len(values) != len(headers):
                 index += 1
                 continue
-            rows.append({header: _normalize_cell(value) for header, value in zip(headers, values)})
+            row = {header: _normalize_cell(value) for header, value in zip(headers, values)}
+            rows.append(_normalize_ledger_row(row))
             index += 1
         continue
     return rows
@@ -186,6 +208,21 @@ def _is_separator_row(line: str) -> bool:
 
 def _normalize_cell(value: str) -> str:
     return value.strip().strip("`")
+
+
+def _normalize_ledger_row(row: dict[str, str]) -> dict[str, str]:
+    normalized = dict(row)
+    if not normalized.get("claim_type") and normalized.get("basis_type"):
+        normalized["claim_type"] = normalized["basis_type"]
+    if not normalized.get("primary_source_reference"):
+        normalized["primary_source_reference"] = (
+            normalized.get("primary_identifier")
+            or normalized.get("official_primary_link")
+            or ""
+        )
+    if not normalized.get("primary_verification_date") and normalized.get("knowledge_date"):
+        normalized["primary_verification_date"] = normalized["knowledge_date"]
+    return normalized
 
 
 def _issue(
