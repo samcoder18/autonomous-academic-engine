@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from .autonomous_daemon import (
     DAEMON_STATE_VERSION,
@@ -22,7 +22,6 @@ from .autonomous_runner import execute_autonomous_command
 from .orchestrator import WorkflowOrchestrator
 from .utils import parse_datetime, utc_now
 from .workspace import WorkspaceConfig, WorkspaceConfigError, load_workspace_config
-
 
 MULTI_WORK_DAEMON_ID = "multi-work"
 MULTI_WORK_STATE_KIND = "autonomous-multi-work-daemon-state"
@@ -86,7 +85,11 @@ def build_multi_work_schedule(
         for work_id in unique_work_ids
     ]
     ready = [candidate for candidate in candidates if candidate.get("status") == "ready"]
-    selected = sorted(ready, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids))[0] if ready else None
+    selected = (
+        sorted(ready, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids))[0]
+        if ready
+        else None
+    )
     if selected is not None:
         status = "ready"
         stop_reason = None
@@ -102,7 +105,9 @@ def build_multi_work_schedule(
         work_ids=unique_work_ids,
         rotated_work_ids=rotated_work_ids,
         round_robin_cursor=round_robin_cursor,
-        candidates=sorted(candidates, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids)),
+        candidates=sorted(
+            candidates, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids)
+        ),
         selected=selected,
         status=status,
         stop_reason=stop_reason,
@@ -345,7 +350,9 @@ def run_multi_work_daemon_tick(
         )
         selected_work_id = _optional_text(schedule.get("selected_work_id"))
         selected_command = _optional_text(schedule.get("selected_command"))
-        selected_decision = schedule.get("selected_decision") if isinstance(schedule.get("selected_decision"), dict) else None
+        selected_decision = (
+            schedule.get("selected_decision") if isinstance(schedule.get("selected_decision"), dict) else None
+        )
         if schedule.get("status") == "waiting":
             return _write_multi_daemon_cycle_state(
                 root_dir=root_dir,
@@ -361,7 +368,12 @@ def run_multi_work_daemon_tick(
                 schedule=schedule,
                 result={"status": "waiting", "active_run": schedule.get("active_run")},
             )
-        if not selected_work_id or not selected_command or not selected_decision or selected_decision.get("decision") != "allowed":
+        if (
+            not selected_work_id
+            or not selected_command
+            or not selected_decision
+            or selected_decision.get("decision") != "allowed"
+        ):
             return _write_multi_daemon_cycle_state(
                 root_dir=root_dir,
                 mode=mode,
@@ -441,7 +453,7 @@ def run_multi_work_daemon_foreground(
             result=None,
         )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     state = _write_multi_daemon_cycle_state(
         root_dir=root_dir,
         mode=mode,
@@ -460,7 +472,7 @@ def run_multi_work_daemon_foreground(
     try:
         while True:
             current_cycles = int(state.get("cycle_count") or 0)
-            elapsed = datetime.now(timezone.utc) - started_at
+            elapsed = datetime.now(UTC) - started_at
             if current_cycles >= max_cycles:
                 state = _write_multi_daemon_cycle_state(
                     root_dir=root_dir,
@@ -526,7 +538,9 @@ def start_multi_work_daemon_process(
     max_runtime_minutes: int = 240,
 ) -> dict[str, Any]:
     existing = read_multi_daemon_lock(root_dir)
-    if isinstance(existing, dict) and not _multi_daemon_lock_is_stale(existing, stale_after_seconds=max(60, poll_seconds * 3)):
+    if isinstance(existing, dict) and not _multi_daemon_lock_is_stale(
+        existing, stale_after_seconds=max(60, poll_seconds * 3)
+    ):
         return _normalize_multi_daemon_state(
             root_dir,
             {
@@ -691,7 +705,11 @@ def _build_work_candidate(
         priority = 9999
     else:
         decision, _, priority = first_blocked
-    stop_reason = _optional_text(decision.get("stop_reason")) or _optional_text(plan.get("stop_reason")) or "no-safe-concrete-action"
+    stop_reason = (
+        _optional_text(decision.get("stop_reason"))
+        or _optional_text(plan.get("stop_reason"))
+        or "no-safe-concrete-action"
+    )
     status = "waiting" if stop_reason == "active-run" else "blocked"
     return _candidate_payload(
         work_id=work_id,
@@ -719,7 +737,9 @@ def _schedule_payload(
     stop_reason: str | None,
     active_run: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    selected_decision = selected.get("decision") if isinstance(selected, dict) and isinstance(selected.get("decision"), dict) else None
+    selected_decision = (
+        selected.get("decision") if isinstance(selected, dict) and isinstance(selected.get("decision"), dict) else None
+    )
     risk_controls = _risk_controls()
     return {
         "kind": SCHEDULE_KIND,
@@ -841,9 +861,19 @@ def _write_multi_daemon_cycle_state(
     now = utc_now()
     selected_work_id = _optional_text(schedule.get("selected_work_id")) if isinstance(schedule, dict) else None
     selected_command = _optional_text(schedule.get("selected_command")) if isinstance(schedule, dict) else None
-    selected_decision = schedule.get("selected_decision") if isinstance(schedule, dict) and isinstance(schedule.get("selected_decision"), dict) else None
-    round_robin = schedule.get("round_robin") if isinstance(schedule, dict) and isinstance(schedule.get("round_robin"), dict) else {}
-    round_robin_cursor = _optional_text(round_robin.get("next_cursor_work_id")) or _optional_text(previous.get("round_robin_cursor"))
+    selected_decision = (
+        schedule.get("selected_decision")
+        if isinstance(schedule, dict) and isinstance(schedule.get("selected_decision"), dict)
+        else None
+    )
+    round_robin = (
+        schedule.get("round_robin")
+        if isinstance(schedule, dict) and isinstance(schedule.get("round_robin"), dict)
+        else {}
+    )
+    round_robin_cursor = _optional_text(round_robin.get("next_cursor_work_id")) or _optional_text(
+        previous.get("round_robin_cursor")
+    )
     trace_item = {
         "cycle": cycle_count,
         "timestamp": now,
@@ -926,12 +956,16 @@ def _normalize_multi_daemon_state(root_dir: str | Path, payload: dict[str, Any])
         "round_robin_cursor": _optional_text(payload.get("round_robin_cursor")),
         "last_schedule": schedule,
         "last_result": payload.get("last_result") if isinstance(payload.get("last_result"), dict) else None,
-        "cycle_trace": (payload.get("cycle_trace") if isinstance(payload.get("cycle_trace"), list) else [])[-SCHEDULER_TRACE_LIMIT:],
+        "cycle_trace": (payload.get("cycle_trace") if isinstance(payload.get("cycle_trace"), list) else [])[
+            -SCHEDULER_TRACE_LIMIT:
+        ],
         "stop_reason": _optional_text(payload.get("stop_reason")),
         "blocked": list(payload.get("blocked") or []) if isinstance(payload.get("blocked"), list) else [],
         "waiting": list(payload.get("waiting") or []) if isinstance(payload.get("waiting"), list) else [],
         "assessment_scope": _assessment_scope(),
-        "risk_controls": payload.get("risk_controls") if isinstance(payload.get("risk_controls"), dict) else _risk_controls(),
+        "risk_controls": payload.get("risk_controls")
+        if isinstance(payload.get("risk_controls"), dict)
+        else _risk_controls(),
         "readiness_claim": "none",
     }
     return normalized
@@ -1047,7 +1081,9 @@ def _known_blocker_categories(work_state: dict[str, Any]) -> list[str]:
     return sorted(categories)
 
 
-def _candidate_sort_key(candidate: dict[str, Any], *, rotated_work_ids: list[str] | None = None) -> tuple[int, int, int, str]:
+def _candidate_sort_key(
+    candidate: dict[str, Any], *, rotated_work_ids: list[str] | None = None
+) -> tuple[int, int, int, str]:
     status_rank = {"ready": 0, "waiting": 1, "blocked": 2}.get(str(candidate.get("status") or ""), 9)
     work_id = str(candidate.get("work_id") or "")
     if rotated_work_ids and work_id in rotated_work_ids:
@@ -1081,7 +1117,7 @@ def _multi_daemon_lock_is_stale(lock: dict[str, Any], *, stale_after_seconds: in
     if pid is not None and not _pid_is_alive(pid):
         return True
     heartbeat_at = parse_datetime(_optional_text(lock.get("heartbeat_at")))
-    age = datetime.now(timezone.utc) - heartbeat_at
+    age = datetime.now(UTC) - heartbeat_at
     return age.total_seconds() > stale_after_seconds
 
 

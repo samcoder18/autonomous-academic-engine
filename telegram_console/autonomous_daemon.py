@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 import json
 import os
 import re
@@ -10,12 +7,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from .autonomous_planner import build_autonomous_plan
 from .autonomous_runner import execute_autonomous_command
+from .ops_alerts import AlertSeverity, emit_alert
 from .orchestrator import WorkflowOrchestrator
+from .resource_guards import ResourceGuardError, RunGuards, StuckDetector, TimeoutBudget
 from .utils import parse_datetime, utc_now
-
 
 DAEMON_STATE_VERSION = "v1"
 DAEMON_TRACE_LIMIT = 25
@@ -89,6 +91,18 @@ def acquire_daemon_lock(
                 "recovered_stale_lock": False,
             }
         if not _daemon_lock_is_stale(existing, stale_after_seconds=stale_after_seconds):
+            emit_alert(
+                severity=AlertSeverity.WARNING,
+                code="daemon/lock-blocked",
+                message="Autonomous daemon refused to start: lock held by another pid.",
+                component="autonomous-daemon",
+                work_id=work_id,
+                details={
+                    "owner_pid": owner_pid,
+                    "existing_pid": existing_pid,
+                    "mode": mode,
+                },
+            )
             return {
                 "kind": "autonomous-daemon-lock-result",
                 "version": DAEMON_STATE_VERSION,
@@ -115,6 +129,20 @@ def acquire_daemon_lock(
         "heartbeat_at": now,
     }
     write_daemon_lock(root_dir, work_id, lock)
+    if recovered:
+        emit_alert(
+            severity=AlertSeverity.WARNING,
+            code="daemon/stale-lock-recovered",
+            message="Autonomous daemon recovered a stale lock and took ownership.",
+            component="autonomous-daemon",
+            work_id=work_id,
+            details={
+                "owner_pid": owner_pid,
+                "stale_after_seconds": stale_after_seconds,
+                "previous_pid": _optional_int(existing.get("pid")) if isinstance(existing, dict) else None,
+                "mode": mode,
+            },
+        )
     return {
         **lock,
         "acquired": True,
@@ -223,7 +251,12 @@ def evaluate_daemon_action(
         "readiness_claim": "none",
     }
     if not command:
-        return {**base, "decision": "blocked", "stop_reason": "no-safe-concrete-action", "reason": "No command was available."}
+        return {
+            **base,
+            "decision": "blocked",
+            "stop_reason": "no-safe-concrete-action",
+            "reason": "No command was available.",
+        }
     if _contains_placeholder(command) or _contains_placeholder(target):
         return {
             **base,
@@ -300,7 +333,12 @@ def evaluate_daemon_action(
                 "reason": "Daemon repair requires repair planner metadata.",
                 "blocking_categories": ["repair-plan"],
             }
-        return {**base, "decision": "allowed", "safe_command": command, "reason": "Repair planner metadata allows repair."}
+        return {
+            **base,
+            "decision": "allowed",
+            "safe_command": command,
+            "reason": "Repair planner metadata allows repair.",
+        }
 
     lane_categories = _lane_blocker_categories(blockers, lane)
     if "dynamic-material" in lane_categories and intent not in {"verify", "review"}:
@@ -401,7 +439,9 @@ def run_daemon_tick(
         orchestrator = WorkflowOrchestrator(root_dir)
         orchestrator.sync_active_run()
         work_state = orchestrator.get_work_state(work_id=work_id)
-        active_run = (work_state.get("runtime") or {}).get("active_run") if isinstance(work_state.get("runtime"), dict) else None
+        active_run = (
+            (work_state.get("runtime") or {}).get("active_run") if isinstance(work_state.get("runtime"), dict) else None
+        )
         if isinstance(active_run, dict):
             decision = {
                 "kind": "autonomous-daemon-decision",
@@ -505,6 +545,7 @@ def run_daemon_foreground(
     max_runtime_minutes: int = 240,
     pid: int | None = None,
     sleep_between_cycles: bool = True,
+    stuck_after_minutes: int | None = None,
 ) -> dict[str, Any]:
     owner_pid = pid or os.getpid()
     lock = acquire_daemon_lock(root_dir, work_id, mode=mode, pid=owner_pid)
@@ -531,7 +572,13 @@ def run_daemon_foreground(
             result=None,
         )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
+    guards = _build_foreground_guards(
+        max_runtime_minutes=max_runtime_minutes,
+        stuck_after_minutes=_resolve_stuck_after_minutes(stuck_after_minutes),
+    )
+    guards.start()
+    last_command: str | None = None
     state = _write_daemon_cycle_state(
         root_dir=root_dir,
         work_id=work_id,
@@ -551,7 +598,7 @@ def run_daemon_foreground(
     try:
         while True:
             current_cycles = int(state.get("cycle_count") or 0)
-            elapsed = datetime.now(timezone.utc) - started_at
+            elapsed = datetime.now(UTC) - started_at
             if current_cycles >= max_cycles:
                 state = _write_daemon_cycle_state(
                     root_dir=root_dir,
@@ -568,6 +615,11 @@ def run_daemon_foreground(
                     command=None,
                     result=None,
                     increment_cycle=False,
+                )
+                _emit_daemon_terminal_alert(
+                    work_id=work_id,
+                    reason="max-cycles",
+                    details={"mode": mode, "max_cycles": max_cycles, "cycle_count": current_cycles},
                 )
                 break
             if elapsed.total_seconds() >= max_runtime_minutes * 60:
@@ -587,6 +639,43 @@ def run_daemon_foreground(
                     result=None,
                     increment_cycle=False,
                 )
+                _emit_daemon_terminal_alert(
+                    work_id=work_id,
+                    reason="max-runtime",
+                    details={"mode": mode, "max_runtime_minutes": max_runtime_minutes},
+                )
+                break
+            try:
+                guards.check()
+            except ResourceGuardError as guard_error:
+                state = _write_daemon_cycle_state(
+                    root_dir=root_dir,
+                    work_id=work_id,
+                    mode=mode,
+                    status="stopped",
+                    pid=owner_pid,
+                    max_cycles=max_cycles,
+                    poll_seconds=poll_seconds,
+                    max_runtime_minutes=max_runtime_minutes,
+                    stop_reason=guard_error.code,
+                    decision={
+                        "decision": "blocked",
+                        "stop_reason": guard_error.code,
+                        "readiness_claim": "none",
+                    },
+                    plan=None,
+                    command=None,
+                    result={"status": "stopped", "guard": guard_error.to_dict()},
+                    increment_cycle=False,
+                )
+                emit_alert(
+                    severity=AlertSeverity.CRITICAL,
+                    code=f"daemon/{guard_error.code}",
+                    message=str(guard_error),
+                    component="autonomous-daemon",
+                    work_id=work_id,
+                    details={"mode": mode, **guard_error.details},
+                )
                 break
             state = run_daemon_tick(
                 root_dir=root_dir,
@@ -599,13 +688,75 @@ def run_daemon_foreground(
                 lock_already_acquired=True,
                 keep_lock=True,
             )
+            cycle_command = _optional_text(state.get("command"))
+            if cycle_command and cycle_command != last_command:
+                guards.checkpoint(f"command:{cycle_command}")
+                last_command = cycle_command
             if state.get("status") in DAEMON_TERMINAL_STATUSES:
                 break
             if sleep_between_cycles and poll_seconds > 0:
                 time.sleep(poll_seconds)
+    except Exception as exc:  # noqa: BLE001 — long-running loop must not vanish silently
+        emit_alert(
+            severity=AlertSeverity.CRITICAL,
+            code="daemon/unhandled-exception",
+            message=f"Autonomous daemon crashed: {type(exc).__name__}: {exc}",
+            component="autonomous-daemon",
+            work_id=work_id,
+            details={
+                "mode": mode,
+                "traceback": traceback.format_exc(limit=6),
+            },
+        )
+        raise
     finally:
         release_daemon_lock(root_dir, work_id)
     return state
+
+
+def _resolve_stuck_after_minutes(explicit: int | None) -> int | None:
+    if explicit is not None:
+        return explicit if explicit > 0 else None
+    raw = os.environ.get("DAEMON_STUCK_AFTER_MINUTES")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _build_foreground_guards(
+    *,
+    max_runtime_minutes: int,
+    stuck_after_minutes: int | None,
+) -> RunGuards:
+    # `max_runtime_minutes` is already checked inline above, so the guard-level
+    # timeout is set generously to avoid double-firing. The guards-level budget
+    # exists as a defense-in-depth net for scenarios where the inline check is
+    # bypassed (e.g. future refactors of the loop).
+    timeout = TimeoutBudget(
+        limit=timedelta(minutes=max(max_runtime_minutes + 5, max_runtime_minutes)),
+        label="autonomous-daemon-run",
+    )
+    stuck_minutes = stuck_after_minutes if stuck_after_minutes is not None else max(max_runtime_minutes, 1)
+    stuck = StuckDetector(
+        stuck_after=timedelta(minutes=stuck_minutes),
+        label="autonomous-daemon-progress",
+    )
+    return RunGuards(timeout=timeout, stuck=stuck)
+
+
+def _emit_daemon_terminal_alert(*, work_id: str, reason: str, details: dict[str, Any]) -> None:
+    emit_alert(
+        severity=AlertSeverity.WARNING,
+        code=f"daemon/terminal-{reason}",
+        message=f"Autonomous daemon reached terminal state: {reason}.",
+        component="autonomous-daemon",
+        work_id=work_id,
+        details=details,
+    )
 
 
 def start_daemon_process(
@@ -618,7 +769,9 @@ def start_daemon_process(
     max_runtime_minutes: int = 240,
 ) -> dict[str, Any]:
     existing = read_daemon_lock(root_dir, work_id)
-    if isinstance(existing, dict) and not _daemon_lock_is_stale(existing, stale_after_seconds=max(60, poll_seconds * 3)):
+    if isinstance(existing, dict) and not _daemon_lock_is_stale(
+        existing, stale_after_seconds=max(60, poll_seconds * 3)
+    ):
         return _normalize_daemon_state(
             root_dir,
             work_id,
@@ -795,10 +948,16 @@ def _normalize_daemon_state(root_dir: str | Path, work_id: str, payload: dict[st
         "last_decision": payload.get("last_decision") if isinstance(payload.get("last_decision"), dict) else None,
         "last_command": _optional_text(payload.get("last_command")),
         "last_result": payload.get("last_result") if isinstance(payload.get("last_result"), dict) else None,
-        "cycle_trace": (payload.get("cycle_trace") if isinstance(payload.get("cycle_trace"), list) else [])[-DAEMON_TRACE_LIMIT:],
+        "cycle_trace": (payload.get("cycle_trace") if isinstance(payload.get("cycle_trace"), list) else [])[
+            -DAEMON_TRACE_LIMIT:
+        ],
         "stop_reason": _optional_text(payload.get("stop_reason")),
-        "blocking_categories": list(payload.get("blocking_categories") or []) if isinstance(payload.get("blocking_categories"), list) else [],
-        "blocking_gate_ids": list(payload.get("blocking_gate_ids") or []) if isinstance(payload.get("blocking_gate_ids"), list) else [],
+        "blocking_categories": list(payload.get("blocking_categories") or [])
+        if isinstance(payload.get("blocking_categories"), list)
+        else [],
+        "blocking_gate_ids": list(payload.get("blocking_gate_ids") or [])
+        if isinstance(payload.get("blocking_gate_ids"), list)
+        else [],
         "assessment_scope": _assessment_scope(),
         "readiness_claim": "none",
     }
@@ -848,7 +1007,7 @@ def _daemon_lock_is_stale(lock: dict[str, Any], *, stale_after_seconds: int) -> 
     if pid is not None and not _pid_is_alive(pid):
         return True
     heartbeat_at = parse_datetime(_optional_text(lock.get("heartbeat_at")))
-    age = datetime.now(timezone.utc) - heartbeat_at
+    age = datetime.now(UTC) - heartbeat_at
     return age.total_seconds() > stale_after_seconds
 
 

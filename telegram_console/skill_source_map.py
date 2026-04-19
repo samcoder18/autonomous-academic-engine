@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import re
 import tomllib
-
+from dataclasses import dataclass
+from pathlib import Path
 
 SKILL_PATTERN = re.compile(r"`\$([a-z0-9-]+)`")
 
@@ -142,7 +141,9 @@ def audit_skill_source_map(
                 SkillSourceAuditIssue(
                     code="missing-manifest-entry",
                     skill_name=skill_name,
-                    message=f"Skill `{skill_name}` is declared in AGENTS.md but missing from meta/skill-source-map.toml.",
+                    message=(
+                        f"Skill `{skill_name}` is declared in AGENTS.md but missing from meta/skill-source-map.toml."
+                    ),
                 )
             )
 
@@ -168,9 +169,7 @@ def audit_skill_source_map(
             absolute_source_path = str((root / entry.agent_path).resolve())
             has_source_header = "Source of truth" in text
             has_expected_path = (
-                entry.expected_source_of_truth_path in text
-                or entry.agent_path in text
-                or absolute_source_path in text
+                entry.expected_source_of_truth_path in text or entry.agent_path in text or absolute_source_path in text
             )
             if not has_source_header or not has_expected_path:
                 issues.append(
@@ -259,9 +258,7 @@ def sync_external_skill_sources(
 def _required_text(payload: dict[str, object], key: str, manifest_path: Path, skill_name: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(
-            f"Invalid skill source map entry `{skill_name}` in {manifest_path}: missing `{key}`."
-        )
+        raise ValueError(f"Invalid skill source map entry `{skill_name}` in {manifest_path}: missing `{key}`.")
     return value.strip()
 
 

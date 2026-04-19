@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-from urllib import error, parse, request
 import json
 import mimetypes
 import uuid
+from pathlib import Path
+from typing import Any
+from urllib import error, parse, request
 
 
 class TelegramApiError(RuntimeError):
@@ -135,7 +135,7 @@ class TelegramBotApi:
             parts.extend(
                 [
                     b"--" + boundary_bytes + b"\r\n",
-                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"),
+                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode(),
                     str(value).encode("utf-8"),
                     b"\r\n",
                 ]
@@ -146,11 +146,8 @@ class TelegramBotApi:
         parts.extend(
             [
                 b"--" + boundary_bytes + b"\r\n",
-                (
-                    f'Content-Disposition: form-data; name="{file_field}"; '
-                    f'filename="{file_path.name}"\r\n'
-                ).encode("utf-8"),
-                f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"),
+                (f'Content-Disposition: form-data; name="{file_field}"; filename="{file_path.name}"\r\n').encode(),
+                f"Content-Type: {mime_type}\r\n\r\n".encode(),
                 file_bytes,
                 b"\r\n",
                 b"--" + boundary_bytes + b"--\r\n",

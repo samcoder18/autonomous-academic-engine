@@ -14,3 +14,8 @@ output/docx/**/*.docx
 
 output/telegram/projects.json
 output/telegram/runtime/
+
+# Автогенерируемые артефакты автономного движка
+output/sources-cache/
+works/*/thesis/reviews/*-one-shot-report.json
+works/*/thesis/frontmatter/

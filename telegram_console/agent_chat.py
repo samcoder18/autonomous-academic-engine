@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 import os
 import subprocess
 import sys
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from .orchestrator import slugify
-from .prompting import PromptBuilder
 from .projects import ProjectService
+from .prompting import PromptBuilder
 from .state import RuntimeStore
 from .utils import parse_datetime, shorten_text, utc_now
 
@@ -135,7 +135,7 @@ class AgentChatService:
             context_mode=context_mode,
             current_focus=self.describe_project_focus(project.id),
         )
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         task_token = f"{timestamp}-{slugify(project.id)}-chat"
         task_id = f"{project.id}:{timestamp}-chat"
         task_dir = self.store.agent_tasks_dir / task_token
@@ -339,7 +339,9 @@ class AgentChatService:
             work_id=self._optional_text(request.get("work_id")),
             work_title=self._optional_text(request.get("work_title")),
             status=status,
-            started_at=self._optional_text(result.get("started_at")) or self._optional_text(request.get("started_at")) or utc_now(),
+            started_at=self._optional_text(result.get("started_at"))
+            or self._optional_text(request.get("started_at"))
+            or utc_now(),
             finished_at=self._optional_text(result.get("finished_at")),
             prompt=self._optional_text(request.get("prompt")),
             response_text=response_text,

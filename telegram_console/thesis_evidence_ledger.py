@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 from .workspace import WorkConfig
-
 
 LEGACY_REQUIRED_FIELDS = (
     "claim_id",
@@ -216,9 +214,7 @@ def _normalize_ledger_row(row: dict[str, str]) -> dict[str, str]:
         normalized["claim_type"] = normalized["basis_type"]
     if not normalized.get("primary_source_reference"):
         normalized["primary_source_reference"] = (
-            normalized.get("primary_identifier")
-            or normalized.get("official_primary_link")
-            or ""
+            normalized.get("primary_identifier") or normalized.get("official_primary_link") or ""
         )
     if not normalized.get("primary_verification_date") and normalized.get("knowledge_date"):
         normalized["primary_verification_date"] = normalized["knowledge_date"]

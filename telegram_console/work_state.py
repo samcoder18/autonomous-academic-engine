@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .contract_gates import blocking_gate_blockers
 from .quality_advisories import QUALITY_ADVISORY_DOES_NOT_REPLACE
-
 
 WORK_STATE_VERSION = "v1"
 QUALITY_STATUS_SEVERITY = {
@@ -145,7 +145,9 @@ def resolve_next_actions(
 
     raw_blocker = _first_blocker(known_blockers, category="standards-consistency", code_contains="raw")
     if raw_blocker is not None:
-        profile_id = _optional_text(raw_blocker.get("profile_id")) or _optional_text((raw_blocker.get("details") or {}).get("profile_id"))
+        profile_id = _optional_text(raw_blocker.get("profile_id")) or _optional_text(
+            (raw_blocker.get("details") or {}).get("profile_id")
+        )
         actions.append(
             WorkNextAction(
                 action_id="standards-refresh",
@@ -163,13 +165,16 @@ def resolve_next_actions(
 
     conflict_blocker = _first_blocker(known_blockers, category="standards-consistency", code_contains="conflict")
     if conflict_blocker is not None:
-        profile_id = _optional_text(conflict_blocker.get("profile_id")) or _optional_text((conflict_blocker.get("details") or {}).get("profile_id"))
+        profile_id = _optional_text(conflict_blocker.get("profile_id")) or _optional_text(
+            (conflict_blocker.get("details") or {}).get("profile_id")
+        )
         actions.append(
             WorkNextAction(
                 action_id="standards-review",
                 label="Review standards conflict",
                 command=f"standards-status {profile_id or '<profile-id>'}",
-                reason=_optional_text(conflict_blocker.get("message")) or "Standards profile has a visible conflict flag.",
+                reason=_optional_text(conflict_blocker.get("message"))
+                or "Standards profile has a visible conflict flag.",
                 priority=standards_priority + 1,
                 lane=_optional_text(conflict_blocker.get("lane")),
                 profile_id=profile_id,
@@ -187,7 +192,8 @@ def resolve_next_actions(
                 action_id="article-repair",
                 label="Repair article blockers",
                 command=f"launch-academic repair {target or '<article-draft-or-final>'}",
-                reason=_optional_text(article_blocker.get("message")) or "Article blockers should be repaired before export.",
+                reason=_optional_text(article_blocker.get("message"))
+                or "Article blockers should be repaired before export.",
                 priority=30,
                 lane="article",
                 target=target,
@@ -209,7 +215,8 @@ def resolve_next_actions(
                 action_id="thesis-verify",
                 label="Verify thesis blockers",
                 command=f"launch-thesis {action} {target or '<thesis-section>'}",
-                reason=_optional_text(thesis_blocker.get("message")) or "Thesis blockers should be verified before export.",
+                reason=_optional_text(thesis_blocker.get("message"))
+                or "Thesis blockers should be verified before export.",
                 priority=35,
                 lane="thesis",
                 target=target,
@@ -375,7 +382,9 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
             )
     if isinstance(quality_advisories, dict):
         thesis_quality = quality_advisories.get("thesis") if isinstance(quality_advisories.get("thesis"), dict) else {}
-        article_quality = quality_advisories.get("article") if isinstance(quality_advisories.get("article"), dict) else {}
+        article_quality = (
+            quality_advisories.get("article") if isinstance(quality_advisories.get("article"), dict) else {}
+        )
         thesis_status = _lane_quality_summary_status(thesis_quality)
         article_status = _lane_quality_summary_status(article_quality)
         if thesis_status or article_status:
@@ -514,8 +523,10 @@ def _compact_thesis_state(
         "summary": {
             "kind": "thesis-overview-summary",
             "section_count": _optional_int(summary.get("section_count")) or len(sections),
-            "reviewed_count": _optional_int(summary.get("reviewed_count")) or sum(1 for item in sections if item["review_exists"]),
-            "blocked_count": _optional_int(summary.get("blocked_count")) or sum(1 for item in sections if item["blocker_count"]),
+            "reviewed_count": _optional_int(summary.get("reviewed_count"))
+            or sum(1 for item in sections if item["review_exists"]),
+            "blocked_count": _optional_int(summary.get("blocked_count"))
+            or sum(1 for item in sections if item["blocker_count"]),
             "suggested_next_action": _optional_text(summary.get("suggested_next_action")),
         },
         "blockers": blockers,
@@ -550,7 +561,12 @@ def _compact_article_state(root_dir: Path, overview: dict[str, Any] | None) -> d
         return {
             "available": False,
             "bundles": [],
-            "summary": {"kind": "article-overview-summary", "bundle_count": 0, "blocked_count": 0, "review_missing_count": 0},
+            "summary": {
+                "kind": "article-overview-summary",
+                "bundle_count": 0,
+                "blocked_count": 0,
+                "review_missing_count": 0,
+            },
             "blockers": [],
         }
     bundles: list[dict[str, Any]] = []
@@ -581,7 +597,9 @@ def _compact_article_state(root_dir: Path, overview: dict[str, Any] | None) -> d
         for raw_blocker in state_blockers:
             if not isinstance(raw_blocker, dict):
                 continue
-            blockers.append(_enrich_blocker(raw_blocker, lane="article", article_slug=slug, target=_article_bundle_target(bundle)))
+            blockers.append(
+                _enrich_blocker(raw_blocker, lane="article", article_slug=slug, target=_article_bundle_target(bundle))
+            )
         if blocker_count and not state_blockers:
             blockers.append(
                 {
@@ -601,7 +619,8 @@ def _compact_article_state(root_dir: Path, overview: dict[str, Any] | None) -> d
         "summary": {
             "kind": "article-overview-summary",
             "bundle_count": _optional_int(summary.get("bundle_count")) or len(bundles),
-            "blocked_count": _optional_int(summary.get("blocked_count")) or sum(1 for item in bundles if item["blocker_count"]),
+            "blocked_count": _optional_int(summary.get("blocked_count"))
+            or sum(1 for item in bundles if item["blocker_count"]),
             "submission_ready_count": _optional_int(summary.get("submission_ready_count")) or 0,
             "review_missing_count": _optional_int(summary.get("review_missing_count"))
             or sum(1 for item in bundles if not item["review_present"]),
@@ -657,7 +676,7 @@ def _compact_lane_quality_advisory(root_dir: Path, payload: Any) -> dict[str, An
 
 def _lane_quality_summary_status(payload: dict[str, Any]) -> str:
     statuses = [
-        _optional_text(((payload.get(key) if isinstance(payload.get(key), dict) else {}).get("status")))
+        _optional_text((payload.get(key) if isinstance(payload.get(key), dict) else {}).get("status"))
         for key in ("verification_advisory", "source_mix_advisory", "prose_advisory")
     ]
     available = [status for status in statuses if status]
@@ -692,7 +711,9 @@ def _compact_standards_state(profiles: dict[str, Any]) -> dict[str, Any]:
                 {
                     "category": "standards-consistency",
                     "code": f"{lane_text}-standards-raw-{raw_status}",
-                    "message": f"Raw standards bundle is {raw_status} for {lane_text} profile `{payload.get('profile_id')}`.",
+                    "message": (
+                        f"Raw standards bundle is {raw_status} for {lane_text} profile `{payload.get('profile_id')}`."
+                    ),
                     "repairable": True,
                     "lane": lane_text,
                     "profile_id": payload.get("profile_id"),
@@ -994,7 +1015,9 @@ def _first_article_export_target(article: dict[str, Any]) -> str | None:
     return None
 
 
-def _article_bundle_target(bundle: dict[str, Any], preferred: tuple[str, ...] = ("draft", "final", "review", "brief")) -> str | None:
+def _article_bundle_target(
+    bundle: dict[str, Any], preferred: tuple[str, ...] = ("draft", "final", "review", "brief")
+) -> str | None:
     files = bundle.get("files") if isinstance(bundle.get("files"), dict) else {}
     for name in preferred:
         payload = files.get(name) if isinstance(files.get(name), dict) else {}

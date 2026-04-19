@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
-from pathlib import Path
 import json
 import os
 import re
@@ -10,8 +7,19 @@ import tempfile
 import textwrap
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
+from telegram_console import chat_wrapper as chat_wrapper_module
+from telegram_console import run_wrapper as run_wrapper_module
+from telegram_console import work_cli as work_cli_module
+from telegram_console.action_specs import (
+    build_article_execution_contract,
+    build_thesis_execution_contract,
+    list_action_specs,
+)
 from telegram_console.agent_chat import (
     AgentBusyError,
     AgentChatService,
@@ -20,18 +28,6 @@ from telegram_console.agent_chat import (
 )
 from telegram_console.article_bundle_state import article_bundle_manifest_path
 from telegram_console.article_runtime_signals import extract_article_artifact_signals
-from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
-from telegram_console.thesis_repair_planner import build_thesis_repair_plan
-from telegram_console.guarded_prose import load_guarded_prose_rules
-from telegram_console.action_specs import (
-    build_article_execution_contract,
-    build_thesis_execution_contract,
-    list_action_specs,
-)
-from telegram_console.contract_gates import evaluate_contract_gates
-from telegram_console.autonomous_policy import evaluate_autonomous_policy
-from telegram_console.autonomous_planner import build_autonomous_plan
-from telegram_console.finalization_engine import evaluate_article_finalization
 from telegram_console.autonomous_daemon import (
     acquire_daemon_lock,
     daemon_lock_path,
@@ -48,6 +44,12 @@ from telegram_console.autonomous_daemon import (
     write_daemon_lock,
     write_daemon_state,
 )
+from telegram_console.autonomous_launchd import (
+    DEFAULT_AUTONOMOUS_DAEMON_LABEL,
+    AutonomousDaemonLaunchdManager,
+)
+from telegram_console.autonomous_planner import build_autonomous_plan
+from telegram_console.autonomous_policy import evaluate_autonomous_policy
 from telegram_console.autonomous_scheduler import (
     build_multi_work_schedule,
     multi_daemon_lock_path,
@@ -58,36 +60,34 @@ from telegram_console.autonomous_scheduler import (
     run_multi_work_daemon_tick,
     start_multi_work_daemon_process,
 )
-from telegram_console.autonomous_launchd import (
-    DEFAULT_AUTONOMOUS_DAEMON_LABEL,
-    AutonomousDaemonLaunchdManager,
-)
-from telegram_console.skill_source_map import (
-    audit_skill_source_map,
-    load_skill_source_map,
-    skills_declared_in_agents,
-    sync_external_skill_sources,
-)
-from telegram_console.thesis_evidence_ledger import audit_thesis_ledgers
+from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
+from telegram_console.config import TelegramConsoleConfig
+from telegram_console.contract_gates import evaluate_contract_gates
+from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
+from telegram_console.finalization_engine import evaluate_article_finalization
+from telegram_console.guarded_prose import load_guarded_prose_rules
+from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
+from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
+from telegram_console.projects import ProjectService
+from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
 from telegram_console.quality_advisories import build_quality_advisories
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
     run_bounded_repair_loop,
 )
-from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
-from telegram_console.config import TelegramConsoleConfig
-from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
-from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
-from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
-from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
-from telegram_console.projects import ProjectService
 from telegram_console.runtime_status import build_runtime_status, record_from_payload
-from telegram_console import chat_wrapper as chat_wrapper_module
-from telegram_console import run_wrapper as run_wrapper_module
+from telegram_console.skill_source_map import (
+    audit_skill_source_map,
+    load_skill_source_map,
+    skills_declared_in_agents,
+    sync_external_skill_sources,
+)
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
-from telegram_console import work_cli as work_cli_module
+from telegram_console.thesis_evidence_ledger import audit_thesis_ledgers
+from telegram_console.thesis_repair_planner import build_thesis_repair_plan
+from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
 from telegram_console.work_state import build_work_state
 from telegram_console.workspace import (
     article_bundle_paths,
@@ -100,7 +100,6 @@ from telegram_console.workspace import (
     resolve_work_selection,
     work_summary_dict,
 )
-
 
 TEST_WORK_ID = "demo-work"
 TEST_WORK_ROOT = Path("works") / TEST_WORK_ID
@@ -1022,7 +1021,7 @@ class DummySmtpClient:
         *,
         timeout: int,
         kind: str,
-        sink: list["DummySmtpClient"],
+        sink: list[DummySmtpClient],
     ) -> None:
         self.host = host
         self.port = port
@@ -1034,7 +1033,7 @@ class DummySmtpClient:
         self.sent_messages: list[object] = []
         sink.append(self)
 
-    def __enter__(self) -> "DummySmtpClient":
+    def __enter__(self) -> DummySmtpClient:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -1698,7 +1697,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(status["repair_decision"]["action"], "repair")
         self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
 
-        bundle_state = json.loads(article_bundle_manifest_path(work, "review-artifact-demo").read_text(encoding="utf-8"))
+        bundle_state = json.loads(
+            article_bundle_manifest_path(work, "review-artifact-demo").read_text(encoding="utf-8")
+        )
         self.assertEqual(bundle_state["current_status"], "strong-draft-with-blockers")
         self.assertEqual(bundle_state["terminal_reason"], "blocked-primary-support")
         self.assertTrue(any(item["category"] == "primary-support" for item in bundle_state["blockers"]))
@@ -1808,7 +1809,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(status["repair_decision"]["action"], "repair")
         self.assertTrue(any(item["category"] == "primary-support" for item in status["blockers"]))
 
-        bundle_state = json.loads(article_bundle_manifest_path(work, "checklist-blocker-demo").read_text(encoding="utf-8"))
+        bundle_state = json.loads(
+            article_bundle_manifest_path(work, "checklist-blocker-demo").read_text(encoding="utf-8")
+        )
         self.assertEqual(bundle_state["current_status"], "strong-draft-with-blockers")
         self.assertEqual(bundle_state["terminal_reason"], "blocked-primary-support")
         self.assertTrue(any(item["category"] == "primary-support" for item in bundle_state["blockers"]))
@@ -2188,7 +2191,9 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 "execution_contract": contract.to_dict(),
             }
             manifest_file.parent.mkdir(parents=True, exist_ok=True)
-            manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            manifest_file.write_text(
+                json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
             run_dir = self.orchestrator.store.runs_dir / run_name
             run_dir.mkdir(parents=True, exist_ok=True)
             request = {
@@ -2374,7 +2379,9 @@ class ThesisRuntimeSignalsTests(unittest.TestCase):
         )
 
         self.assertEqual(signals.status_hint, "ready-with-caveats")
-        self.assertEqual({item.category for item in signals.blockers}, {"primary-support", "review", "dynamic-material"})
+        self.assertEqual(
+            {item.category for item in signals.blockers}, {"primary-support", "review", "dynamic-material"}
+        )
         self.assertTrue(any(item.details["source"] == "review" for item in signals.blockers))
 
     def test_extract_thesis_runtime_signals_ignores_neutral_review_answers(self) -> None:
@@ -2653,7 +2660,9 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
     def test_critic_and_citation_docs_keep_role_boundaries(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         argument_critic = (repo_root / "agents" / "argument-critic.md").read_text(encoding="utf-8")
-        counterargument_critic = (repo_root / "agents" / "academic-counterargument-critic.md").read_text(encoding="utf-8")
+        counterargument_critic = (repo_root / "agents" / "academic-counterargument-critic.md").read_text(
+            encoding="utf-8"
+        )
         citation_checker = (repo_root / "agents" / "citation-checker.md").read_text(encoding="utf-8")
         academic_citation_checker = (repo_root / "agents" / "academic-citation-checker.md").read_text(encoding="utf-8")
 
@@ -3074,7 +3083,10 @@ class QualityAdvisoryTests(unittest.TestCase):
                     """
                 ),
             )
-            write_file(root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md", "# Verification log\n")
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md",
+                "# Verification log\n",
+            )
             write_file(root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md", "# Evidence Pack\n")
             write_file(root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md", "# Claim Map\n")
 
@@ -3125,7 +3137,9 @@ class QualityAdvisoryTests(unittest.TestCase):
         self.assertEqual(payload["quality_advisories"]["thesis"]["coverage"], "missing")
         self.assertEqual(payload["known_blocker_count"], 0)
 
-    def test_build_quality_advisories_marks_multi_bundle_article_coverage_limited_when_claim_map_is_partial(self) -> None:
+    def test_build_quality_advisories_marks_multi_bundle_article_coverage_limited_when_claim_map_is_partial(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
@@ -3194,7 +3208,9 @@ class QualityAdvisoryTests(unittest.TestCase):
 
         self.assertEqual(advisories["article"]["coverage"], "limited")
 
-    def test_build_quality_advisories_marks_thesis_coverage_limited_when_verification_log_claims_do_not_match(self) -> None:
+    def test_build_quality_advisories_marks_thesis_coverage_limited_when_verification_log_claims_do_not_match(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
@@ -3504,7 +3520,9 @@ class WorkspaceTargetResolutionTests(unittest.TestCase):
             prefixes = set(legacy_target_prefixes(work))
 
             self.assertTrue({"chapters/", "sources/", "manuscript/sections/", "reviews/"}.issubset(prefixes))
-            self.assertTrue({"articles/briefs/", "articles/drafts/", "articles/reviews/", "articles/final/"}.issubset(prefixes))
+            self.assertTrue(
+                {"articles/briefs/", "articles/drafts/", "articles/reviews/", "articles/final/"}.issubset(prefixes)
+            )
 
     def test_legacy_target_entries_are_derived_from_work_config(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -4221,7 +4239,9 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         self.assertEqual(self.chat.started[0]["prompt"], "привет")
 
     def test_slash_text_is_sent_to_chat(self) -> None:
-        self.bot._handle_message({"chat": {"id": 1}, "text": "/run диплом проверить manuscript/sections/01-introduction.md"})
+        self.bot._handle_message(
+            {"chat": {"id": 1}, "text": "/run диплом проверить manuscript/sections/01-introduction.md"}
+        )
 
         self.assertEqual(len(self.chat.started), 1)
         self.assertEqual(
@@ -4317,7 +4337,7 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
                             "terminal_reason": None,
                             "suggested_next_action": "review-section",
                         }
-                    }
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -4635,7 +4655,9 @@ class ContractGateEvaluatorTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def build_article_contract(self, slug: str, action: str = "article"):
-        profile = resolve_standard_profile(self.root, self.workspace, self.work, lane="article", requested_profile_id=None)
+        profile = resolve_standard_profile(
+            self.root, self.workspace, self.work, lane="article", requested_profile_id=None
+        )
         bundle = article_bundle_paths(self.work, slug)
         return (
             profile,
@@ -4739,7 +4761,11 @@ class AutonomousControlPlaneTests(unittest.TestCase):
 
         decision = evaluate_autonomous_policy(
             work_state=state,
-            action={"command": "launch-academic review works/demo-work/articles/drafts/demo.md", "intent": "review", "lane": "article"},
+            action={
+                "command": "launch-academic review works/demo-work/articles/drafts/demo.md",
+                "intent": "review",
+                "lane": "article",
+            },
             mode="autonomous-safe",
         ).to_dict()
 
@@ -4756,7 +4782,11 @@ class AutonomousControlPlaneTests(unittest.TestCase):
 
         decision = evaluate_autonomous_policy(
             work_state=state,
-            action={"command": "export-article-docx works/demo-work/articles/final/demo.md", "intent": "export", "lane": "article"},
+            action={
+                "command": "export-article-docx works/demo-work/articles/final/demo.md",
+                "intent": "export",
+                "lane": "article",
+            },
             mode="autonomous-full",
         ).to_dict()
 
@@ -4782,7 +4812,11 @@ class AutonomousControlPlaneTests(unittest.TestCase):
 
         decision = evaluate_autonomous_policy(
             work_state=state,
-            action={"command": "export-article-docx works/demo-work/articles/final/demo.md", "intent": "export", "lane": "article"},
+            action={
+                "command": "export-article-docx works/demo-work/articles/final/demo.md",
+                "intent": "export",
+                "lane": "article",
+            },
             mode="autonomous-full",
         ).to_dict()
 
@@ -4804,9 +4838,17 @@ class AutonomousControlPlaneTests(unittest.TestCase):
     def test_policy_requires_confirmation_for_drafting_export_and_finalize(self) -> None:
         state = self.work_state()
         for action in (
-            {"command": "launch-thesis write-section works/demo-work/thesis/manuscript/sections/01-introduction.md", "intent": "draft", "lane": "thesis"},
+            {
+                "command": "launch-thesis write-section works/demo-work/thesis/manuscript/sections/01-introduction.md",
+                "intent": "draft",
+                "lane": "thesis",
+            },
             {"command": "export-thesis-docx", "intent": "export", "lane": "thesis"},
-            {"command": "launch-academic finalize works/demo-work/articles/final/demo.md", "intent": "finalize-checklist", "lane": "article"},
+            {
+                "command": "launch-academic finalize works/demo-work/articles/final/demo.md",
+                "intent": "finalize-checklist",
+                "lane": "article",
+            },
         ):
             decision = evaluate_autonomous_policy(work_state=state, action=action, mode="autonomous-safe").to_dict()
             self.assertEqual(decision["decision"], "requires-confirmation")
@@ -4817,7 +4859,11 @@ class AutonomousControlPlaneTests(unittest.TestCase):
 
         decision = evaluate_autonomous_policy(
             work_state=state,
-            action={"command": "launch-thesis verify manuscript/sections/01-introduction.md", "intent": "verify", "lane": "thesis"},
+            action={
+                "command": "launch-thesis verify manuscript/sections/01-introduction.md",
+                "intent": "verify",
+                "lane": "thesis",
+            },
             mode="autonomous-safe",
             target_resolution={"warning_code": "legacy-root-target"},
         ).to_dict()
@@ -4870,7 +4916,9 @@ class FinalizationEngineTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def test_finalization_blocks_missing_final_markdown(self) -> None:
-        result = evaluate_article_finalization(bundle=self.bundle, readiness_status="strong-draft", blockers=[], contract_gates=[]).to_dict()
+        result = evaluate_article_finalization(
+            bundle=self.bundle, readiness_status="strong-draft", blockers=[], contract_gates=[]
+        ).to_dict()
 
         self.assertEqual(result["status"], "block")
         self.assertIn("final-markdown-missing", result["blocked_reasons"])
@@ -4938,8 +4986,17 @@ class AutonomousDaemonTests(unittest.TestCase):
         write_sample_standards_registry(self.root)
         write_sample_normalized_profiles(self.root)
         self.orchestrator = WorkflowOrchestrator(self.root)
+        from telegram_console import ops_alerts as _ops_alerts
+
+        self._prev_sink = _ops_alerts._default_sink
+        _ops_alerts.configure_default_sink(
+            _ops_alerts.OpsAlertSink(chat_id=None, log_path=Path(self.tempdir.name) / "ops-alerts.log")
+        )
 
     def tearDown(self) -> None:
+        from telegram_console import ops_alerts as _ops_alerts
+
+        _ops_alerts._default_sink = self._prev_sink
         self.tempdir.cleanup()
 
     def work_state(self, work_id: str = TEST_WORK_ID) -> dict[str, object]:
@@ -5143,7 +5200,9 @@ class AutonomousDaemonTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["stop_reason"], "manual-target-required")
-        self.assertEqual(payload["last_command"], "launch-thesis write-section <section> or launch-academic article --topic <topic>")
+        self.assertEqual(
+            payload["last_command"], "launch-thesis write-section <section> or launch-academic article --topic <topic>"
+        )
         self.assertEqual(payload["readiness_claim"], "none")
 
     def test_daemon_tick_launches_one_concrete_review_run(self) -> None:
@@ -5633,7 +5692,12 @@ class RepairKernelTests(unittest.TestCase):
             contract=contract,
             blockers=[
                 Blocker(category="style", code="generic-voice", message="Text sounds too generic.", repairable=True),
-                Blocker(category="citation", code="missing-footnote", message="A strong claim lacks a footnote.", repairable=True),
+                Blocker(
+                    category="citation",
+                    code="missing-footnote",
+                    message="A strong claim lacks a footnote.",
+                    repairable=True,
+                ),
                 Blocker(category="review", code="overclaim", message="Conclusion is overstated.", repairable=True),
             ],
             repair_iteration=1,
@@ -5701,7 +5765,9 @@ class ThesisRepairPlannerTests(unittest.TestCase):
         build_fake_repo(self.root)
         workspace = load_workspace_config(self.root)
         self.work = load_work_config(workspace, TEST_WORK_ID)
-        self.profile = resolve_standard_profile(self.root, workspace, self.work, lane="thesis", requested_profile_id=None)
+        self.profile = resolve_standard_profile(
+            self.root, workspace, self.work, lane="thesis", requested_profile_id=None
+        )
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -5907,8 +5973,16 @@ class TelegramConsoleCliTests(unittest.TestCase):
             write_sample_standards_registry(root)
 
             fetch_payloads = {
-                "https://example.test/jrp-home.html": (b"<html>home</html>", "https://example.test/jrp-home.html", "text/html"),
-                "https://example.test/jrp-rules.html": (b"<html>rules</html>", "https://example.test/jrp-rules.html", "text/html"),
+                "https://example.test/jrp-home.html": (
+                    b"<html>home</html>",
+                    "https://example.test/jrp-home.html",
+                    "text/html",
+                ),
+                "https://example.test/jrp-rules.html": (
+                    b"<html>rules</html>",
+                    "https://example.test/jrp-rules.html",
+                    "text/html",
+                ),
             }
 
             stdout = StringIO()
@@ -5957,7 +6031,9 @@ class TelegramConsoleCliTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
-            manifest_after = json.loads((root / "meta/standards/raw/journal-jrp/manifest.json").read_text(encoding="utf-8"))
+            manifest_after = json.loads(
+                (root / "meta/standards/raw/journal-jrp/manifest.json").read_text(encoding="utf-8")
+            )
             self.assertNotEqual(
                 manifest_before["sources"][0]["checksum_sha256"],
                 manifest_after["sources"][0]["checksum_sha256"],
@@ -6524,7 +6600,9 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["work_id"], TEST_WORK_ID)
             self.assertEqual(payload["readiness_claim"], "none")
             self.assertEqual(payload["assessment_scope"]["depth"], "signals-only")
-            self.assertTrue((root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.daemon.json").exists())
+            self.assertTrue(
+                (root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.daemon.json").exists()
+            )
 
     def test_autonomous_daemon_start_status_and_stop_are_json_first(self) -> None:
         class FakeProcess:
@@ -6680,7 +6758,9 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["selected_work_id"], TEST_WORK_ID)
             self.assertEqual(payload["last_schedule"]["kind"], "autonomous-daemon-schedule")
             self.assertEqual(payload["readiness_claim"], "none")
-            self.assertTrue((root / "output" / "telegram" / "runtime" / "autonomous" / "multi-work.daemon.json").exists())
+            self.assertTrue(
+                (root / "output" / "telegram" / "runtime" / "autonomous" / "multi-work.daemon.json").exists()
+            )
 
     def test_autonomous_daemon_tick_works_active_and_comma_list_are_public_scopes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -7173,7 +7253,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
                                 "terminal_reason": None,
                                 "suggested_next_action": "review-section",
                             }
-                        }
+                        },
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -7337,7 +7417,9 @@ class LaunchdServiceManagerTests(unittest.TestCase):
         status = manager.restart()
 
         self.assertTrue(status.loaded)
-        self.assertTrue(any(command[:3] == ["launchctl", "kickstart", "-k"] for command in self.fake_launchctl.commands))
+        self.assertTrue(
+            any(command[:3] == ["launchctl", "kickstart", "-k"] for command in self.fake_launchctl.commands)
+        )
 
     def test_uninstall_removes_plist_but_keeps_env(self) -> None:
         manager = self.build_manager()

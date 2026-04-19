@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
 
 from .email_delivery import SmtpSettings
 
@@ -48,7 +48,7 @@ class TelegramConsoleConfig:
         )
 
     @classmethod
-    def from_env(cls, root_dir: str | Path | None = None) -> "TelegramConsoleConfig":
+    def from_env(cls, root_dir: str | Path | None = None) -> TelegramConsoleConfig:
         root = Path(root_dir or Path(__file__).resolve().parents[1]).resolve()
         token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         if not token:

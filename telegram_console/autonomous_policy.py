@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 AUTONOMOUS_MODES = ("off", "suggest", "assisted", "autonomous-safe", "autonomous-full")
 POLICY_DECISIONS = ("allowed", "requires-confirmation", "blocked")
 READ_ONLY_INTENTS = {"explain", "status", "standards-status", "runtime-status", "work-status"}
@@ -111,7 +110,9 @@ def evaluate_autonomous_policy(
         )
 
     if intent in READ_ONLY_INTENTS:
-        return _decision("allowed", "Read-only autonomous check is allowed.", mode_text, command, intent, lane, target, action_id)
+        return _decision(
+            "allowed", "Read-only autonomous check is allowed.", mode_text, command, intent, lane, target, action_id
+        )
 
     runtime_blockers = _blocker_categories(work_state, category="runtime")
     if runtime_blockers:
@@ -196,13 +197,37 @@ def evaluate_autonomous_policy(
         )
 
     if intent in SAFE_AUTONOMOUS_INTENTS:
-        return _decision("allowed", "Safe review/verify action is allowed.", mode_text, command, intent, lane, target, action_id)
+        return _decision(
+            "allowed", "Safe review/verify action is allowed.", mode_text, command, intent, lane, target, action_id
+        )
 
     finalization_check = action_payload.get("finalization_check")
     if mode_text == "autonomous-full" and intent == "export" and _finalization_export_ready(finalization_check):
-        return _decision("allowed", "Deterministic finalization checks allow export.", mode_text, command, intent, lane, target, action_id)
-    if mode_text == "autonomous-full" and intent in {"draft", "write-section", "article"} and not _has_workflow_blockers(work_state):
-        return _decision("allowed", "Full autonomous mode allows bounded drafting when blockers are clear.", mode_text, command, intent, lane, target, action_id)
+        return _decision(
+            "allowed",
+            "Deterministic finalization checks allow export.",
+            mode_text,
+            command,
+            intent,
+            lane,
+            target,
+            action_id,
+        )
+    if (
+        mode_text == "autonomous-full"
+        and intent in {"draft", "write-section", "article"}
+        and not _has_workflow_blockers(work_state)
+    ):
+        return _decision(
+            "allowed",
+            "Full autonomous mode allows bounded drafting when blockers are clear.",
+            mode_text,
+            command,
+            intent,
+            lane,
+            target,
+            action_id,
+        )
 
     if intent in CONFIRMATION_INTENTS or mode_text in {"assisted", "autonomous-safe", "autonomous-full"}:
         return _decision(
@@ -216,7 +241,16 @@ def evaluate_autonomous_policy(
             action_id,
         )
 
-    return _decision("blocked", "Action is not recognized as safe for autonomous execution.", mode_text, command, intent, lane, target, action_id)
+    return _decision(
+        "blocked",
+        "Action is not recognized as safe for autonomous execution.",
+        mode_text,
+        command,
+        intent,
+        lane,
+        target,
+        action_id,
+    )
 
 
 def _decision(

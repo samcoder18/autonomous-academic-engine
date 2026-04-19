@@ -9,7 +9,7 @@
 
 - собирает thesis workflow вокруг active work;
 - держит порядок `structure -> source package -> evidence ledger -> verification -> draft -> review/style`;
-- сверяет ход работы с [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md);
+- сверяет ход работы с [meta/master-protocol.md](meta/master-protocol.md);
 - не подменяет собой специализированные thesis роли.
 
 ## Результат

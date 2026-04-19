@@ -68,7 +68,9 @@ def build_autonomous_plan(
             command=enriched_action.get("command"),
             action_id=enriched_action.get("action_id"),
             policy=decision,
-            finalization_check=enriched_action.get("finalization_check") if isinstance(enriched_action.get("finalization_check"), dict) else None,
+            finalization_check=enriched_action.get("finalization_check")
+            if isinstance(enriched_action.get("finalization_check"), dict)
+            else None,
         )
         if decision.decision == "allowed":
             allowed_steps.append(step)
@@ -93,7 +95,13 @@ def build_autonomous_plan(
     )
     if not steps and stop_reason is None:
         stop_reason = "no-autonomous-actions"
-    status = "ready" if any(step.policy.decision == "allowed" for step in steps) else "blocked" if not steps else "needs-confirmation"
+    status = (
+        "ready"
+        if any(step.policy.decision == "allowed" for step in steps)
+        else "blocked"
+        if not steps
+        else "needs-confirmation"
+    )
     return AutonomousPlan(
         mode=mode,
         work_id=_optional_text(work_state.get("work_id")),
@@ -105,8 +113,11 @@ def build_autonomous_plan(
 
 def format_autonomous_plan(plan: AutonomousPlan) -> str:
     payload = plan.to_dict()
+    wid = payload.get("work_id") or "n/a"
+    mode = payload.get("mode")
+    st = payload.get("status")
     lines = [
-        f"Autonomous plan: work={payload.get('work_id') or 'n/a'} mode={payload.get('mode')} status={payload.get('status')}",
+        f"Autonomous plan: work={wid} mode={mode} status={st}",
         "Readiness claim: none",
     ]
     steps = payload.get("steps") if isinstance(payload.get("steps"), list) else []
@@ -175,7 +186,11 @@ def _article_finalization_check_from_state(work_state: dict[str, Any], action: d
     for blocker in _known_blockers(work_state):
         category = _optional_text(blocker.get("category"))
         if category == "contract-gate":
-            gate_id = _optional_text((blocker.get("details") or {}).get("gate_id")) if isinstance(blocker.get("details"), dict) else None
+            gate_id = (
+                _optional_text((blocker.get("details") or {}).get("gate_id"))
+                if isinstance(blocker.get("details"), dict)
+                else None
+            )
             blocked.append(f"gate:{gate_id or 'contract-gate'}")
         elif category == "standards-consistency":
             blocked.append("standards-blockers")

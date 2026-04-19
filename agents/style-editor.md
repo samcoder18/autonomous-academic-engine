@@ -52,3 +52,22 @@
 - более естественный академический текст;
 - сниженный объем повторов и штампов;
 - сохраненная проверяемость всех ключевых утверждений.
+
+## Структурированный verdict (обязательно)
+
+В конце вывода всегда добавляй один fenced-блок с машинно-читаемым
+verdict'ом (схема [meta/schemas/verdict.schema.json](../meta/schemas/verdict.schema.json)).
+
+```verdict
+{
+  "verdict_version": "1",
+  "lane": "thesis",
+  "kind": "style-editor",
+  "status": "updated",
+  "summary": "Стилистическая правка без изменения доказательной базы."
+}
+```
+
+- `status` — `updated` после редакторской правки.
+- Если в ходе редактуры обнаружились substantive issues (требуется усиление аргумента или источника), НЕ чинить их самому, а вернуть в `draft/verifier`, эмитируя blocker в verdict:
+  - `category: "review"`, `code: "needs-substantive-strengthening"`.

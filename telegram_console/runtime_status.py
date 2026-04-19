@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import json
-import tempfile
 
 from .utils import parse_datetime
-
 
 RUNTIME_STATUS_VERSION = "v2"
 FAILURE_CATEGORIES = ("config", "input", "process", "codex", "artifact", "runtime", "external")
@@ -290,10 +289,16 @@ def record_from_payload(
         repair_decision=payload.get("repair_decision") if isinstance(payload.get("repair_decision"), dict) else None,
         repair_iteration=repair_iteration,
         terminal_reason=_optional_text(payload.get("terminal_reason")),
-        thesis_repair_plan=payload.get("thesis_repair_plan") if isinstance(payload.get("thesis_repair_plan"), dict) else None,
+        thesis_repair_plan=payload.get("thesis_repair_plan")
+        if isinstance(payload.get("thesis_repair_plan"), dict)
+        else None,
         contract_gates=tuple(item for item in contract_gates if isinstance(item, dict)),
-        finalization_check=payload.get("finalization_check") if isinstance(payload.get("finalization_check"), dict) else None,
-        target_resolution=payload.get("target_resolution") if isinstance(payload.get("target_resolution"), dict) else None,
+        finalization_check=payload.get("finalization_check")
+        if isinstance(payload.get("finalization_check"), dict)
+        else None,
+        target_resolution=payload.get("target_resolution")
+        if isinstance(payload.get("target_resolution"), dict)
+        else None,
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},
         runtime_dir=str(runtime_dir) if runtime_dir else None,
@@ -327,7 +332,9 @@ def synthesize_runtime_record(runtime_dir: Path, entity_kind: str) -> RuntimeRec
             finished_at=_optional_text((result or {}).get("finished_at")),
             summary=_optional_text(request.get("target")) or _optional_text(request.get("topic")),
             failure=(result or {}).get("failure") if isinstance((result or {}).get("failure"), dict) else None,
-            target_resolution=request.get("target_resolution") if isinstance(request.get("target_resolution"), dict) else None,
+            target_resolution=request.get("target_resolution")
+            if isinstance(request.get("target_resolution"), dict)
+            else None,
             attachments=attachments,
             runtime_dir=str(runtime_dir),
             status_path=None,

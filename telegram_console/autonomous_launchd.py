@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from subprocess import CompletedProcess
-from typing import Callable
 import html
 import os
 import subprocess
 import sys
-
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from subprocess import CompletedProcess
 
 DEFAULT_AUTONOMOUS_DAEMON_LABEL = "com.albina.academic-autonomous-daemon"
 CommandRunner = Callable[[list[str]], CompletedProcess[str]]
@@ -265,7 +264,8 @@ class AutonomousDaemonLaunchdManager:
                     [
                         "Autonomous daemon LaunchAgent is not installed.",
                         f"Expected plist: {self.paths.installed_plist}",
-                        "Run `python3 -m telegram_console.work_cli autonomous daemon launchd install --works all` first.",
+                        "Run `python3 -m telegram_console.work_cli autonomous daemon launchd install "
+                        "--works all` first.",
                     ]
                 )
             )

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev tools
+        run: pip install "ruff>=0.8"
+
+      - name: Ruff
+        run: ruff check telegram_console tests
+
+      - name: Unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m unittest discover -s tests -q
+
+      - name: Skill source map audit
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m telegram_console.work_cli skill-source-map audit --json
+
+      - name: Smoke one-shot pipeline (offline fixture)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python3 -m unittest tests.test_regression_harness -v
+
+      - name: Smoke verdict parser (fake codex)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          OUTPUT="$(bash scripts/tests/fake_codex.sh)"
+          echo "$OUTPUT"
+          python3 -c "
+          import sys
+          from telegram_console.verdict_parser import extract_structured_verdicts
+          text = sys.stdin.read()
+          verdicts, errors = extract_structured_verdicts({'output': text})
+          assert not errors, f'unexpected verdict errors: {errors}'
+          assert len(verdicts) == 1, f'expected 1 verdict, got {len(verdicts)}'
+          v = verdicts[0]
+          assert v.lane == 'thesis' and v.kind == 'submission-evaluator', v
+          print('smoke-ok', v.status)
+          " <<< "$OUTPUT"

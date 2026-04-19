@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
-import tomllib
-
 
 SUPPORTED_LANES = ("thesis", "article")
 
@@ -188,9 +187,7 @@ def load_workspace_config(root_dir: str | Path) -> WorkspaceConfig:
         raise WorkspaceConfigError(f"Некорректное описание work `{slug}` в {workspace_file}.")
 
     if default_work not in works:
-        raise WorkspaceConfigError(
-            f"default_work `{default_work}` не найден в секции [works] файла {workspace_file}."
-        )
+        raise WorkspaceConfigError(f"default_work `{default_work}` не найден в секции [works] файла {workspace_file}.")
 
     return WorkspaceConfig(
         root_dir=root,
@@ -216,9 +213,7 @@ def load_work_config(workspace: WorkspaceConfig, slug: str) -> WorkConfig:
     active_lanes = _normalize_lanes(payload.get("active_lanes"), work_file, "active_lanes")
     work_slug = _required_text(payload, "slug", work_file)
     if work_slug != slug:
-        raise WorkspaceConfigError(
-            f"Slug `{work_slug}` в {work_file} не совпадает с ключом `{slug}` в workspace.toml."
-        )
+        raise WorkspaceConfigError(f"Slug `{work_slug}` в {work_file} не совпадает с ключом `{slug}` в workspace.toml.")
 
     work_canon_path = _resolve_work_path(work_dir, _required_text(payload, "work_canon", work_file))
 
@@ -365,7 +360,8 @@ def resolve_target_for_action(
     allowed = set(list_targets_for_action(work, lane, action, workspace))
     if resolution.normalized_path not in allowed:
         raise WorkspaceConfigError(
-            f"Этот файл не подходит для сценария `{lane} / {action}` в work `{work.slug}`:\n{resolution.normalized_path}"
+            f"Этот файл не подходит для сценария `{lane} / {action}` в work `{work.slug}`:\n"
+            f"{resolution.normalized_path}"
         )
     return resolution
 
@@ -415,8 +411,7 @@ def resolve_target_path(
         if used_legacy_root_mapping:
             warning_code = "legacy-root-target"
             warning_message = (
-                f"Legacy target path `{raw}` resolved to `{normalized}`. "
-                "Prefer the canonical `works/<slug>/...` path."
+                f"Legacy target path `{raw}` resolved to `{normalized}`. Prefer the canonical `works/<slug>/...` path."
             )
         return TargetResolution(
             raw_target=raw,

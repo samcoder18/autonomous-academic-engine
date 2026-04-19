@@ -4,13 +4,13 @@
 
 ## Активные файлы
 
-- [master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md) - общий рабочий регламент для всех works и lane.
-- [project-canon.md](/Users/albina/дипломная/meta/project-canon.md) - compatibility shim для legacy-ссылок; не использовать как primary source of truth, пока активный канон хранится в `works/<slug>/work-canon.md`.
-- [standards/](/Users/albina/дипломная/meta/standards) - raw и normalized publication standards для academic engine.
+- [master-protocol.md](meta/master-protocol.md) - общий рабочий регламент для всех works и lane.
+- [project-canon.md](meta/project-canon.md) - compatibility shim для legacy-ссылок; не использовать как primary source of truth, пока активный канон хранится в `works/<slug>/work-canon.md`.
+- [standards/](meta/standards) - raw и normalized publication standards для academic engine.
 
 ## Архив
 
-- [archive/](/Users/albina/дипломная/meta/archive) - устаревшие или вспомогательные памятки.
+- [archive/](meta/archive) - устаревшие или вспомогательные памятки.
 
 ## Правило
 

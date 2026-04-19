@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-from urllib import parse, request
 import hashlib
 import json
 import mimetypes
 import re
 import tomllib
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from urllib import parse, request
 
 from .workspace import WorkConfig, WorkspaceConfig, WorkspaceConfigError, load_work_config, load_workspace_config
-
 
 DEFAULT_FALLBACK_PROFILES = {
     "thesis": "thesis-v1",
@@ -159,7 +158,8 @@ def resolve_standard_profile(
             raise WorkspaceConfigError(f"Fallback profile `{fallback_profile_id}` не найден в реестре standards.")
         if not fallback.normalized_path.exists():
             raise WorkspaceConfigError(
-                f"Fallback profile `{fallback_profile_id}` не может быть использован: отсутствует {fallback.normalized_path}"
+                f"Fallback profile `{fallback_profile_id}` не может быть использован: "
+                f"отсутствует {fallback.normalized_path}"
             )
         spec = fallback
 
@@ -304,7 +304,9 @@ def sync_standard_profile(
     manifest_path = spec.raw_dir / "manifest.json"
     _write_json(manifest_path, manifest_payload)
     spec.normalized_path.parent.mkdir(parents=True, exist_ok=True)
-    spec.normalized_path.write_text(_render_normalized_profile(registry.root_dir, spec, manifest_payload), encoding="utf-8")
+    spec.normalized_path.write_text(
+        _render_normalized_profile(registry.root_dir, spec, manifest_payload), encoding="utf-8"
+    )
 
     raw_status, last_refresh_at = raw_status_for_profile(spec)
     resolution = StandardProfileResolution(
@@ -427,8 +429,12 @@ def _parse_profile_spec(
     sources: list[StandardSourceSpec] = []
     for index, raw_source in enumerate(raw_sources, start=1):
         if not isinstance(raw_source, dict):
-            raise WorkspaceConfigError(f"Источник #{index} профиля `{profile_id}` в {registry_path} должен быть таблицей.")
-        source_id = _optional_text(raw_source.get("id")) or _slugify_url(_required_text(raw_source, "url", registry_path))
+            raise WorkspaceConfigError(
+                f"Источник #{index} профиля `{profile_id}` в {registry_path} должен быть таблицей."
+            )
+        source_id = _optional_text(raw_source.get("id")) or _slugify_url(
+            _required_text(raw_source, "url", registry_path)
+        )
         sources.append(
             StandardSourceSpec(
                 source_id=source_id,
@@ -444,7 +450,9 @@ def _parse_profile_spec(
         workflow_lane=workflow_lane,
         unit_kind=_required_text(raw_profile, "unit_kind", registry_path),
         status=_required_text(raw_profile, "status", registry_path),
-        normalized_path=_resolve_workspace_path(root_dir, _required_text(raw_profile, "normalized_path", registry_path)),
+        normalized_path=_resolve_workspace_path(
+            root_dir, _required_text(raw_profile, "normalized_path", registry_path)
+        ),
         raw_dir=_resolve_workspace_path(root_dir, _required_text(raw_profile, "raw_dir", registry_path)),
         official_only=bool(raw_profile.get("official_only", True)),
         conflict_flag=bool(raw_profile.get("conflict_flag", False)),
@@ -512,7 +520,9 @@ def _reuse_source_entry(
         if filename is not None and (raw_dir / filename).exists():
             return existing_entry
 
-    fallback_filename = source.filename or _derive_download_filename(source, source.url, _content_type_from_url(source.url))
+    fallback_filename = source.filename or _derive_download_filename(
+        source, source.url, _content_type_from_url(source.url)
+    )
     candidate_path = raw_dir / fallback_filename
     if not candidate_path.exists():
         return None
@@ -547,15 +557,23 @@ def _render_normalized_profile(
     for source in spec.sources:
         manifest_entry = manifest_sources.get(source.source_id, {})
         error = _optional_text(manifest_entry.get("error"))
-        filename = _optional_text(manifest_entry.get("filename")) or (source.filename if error is None else None) or "not downloaded yet"
+        filename = (
+            _optional_text(manifest_entry.get("filename"))
+            or (source.filename if error is None else None)
+            or "not downloaded yet"
+        )
         final_url = _optional_text(manifest_entry.get("final_url")) or source.url
+        if filename != "not downloaded yet":
+            local_display = relative_to_root(root_dir, spec.raw_dir / filename)
+        else:
+            local_display = filename
         source_lines.extend(
             [
                 f"- `{source.source_id}`: {source.label}",
                 f"  - URL: {source.url}",
                 f"  - Final URL: {final_url}",
                 f"  - Source date: {source.source_date or 'not specified'}",
-                f"  - Local file: {relative_to_root(root_dir, spec.raw_dir / filename) if filename != 'not downloaded yet' else filename}",
+                f"  - Local file: {local_display}",
             ]
         )
         if error is not None:
@@ -603,14 +621,18 @@ def _render_normalized_profile(
             "",
             "## 6. Workflow Notes",
             "",
-            f"- Thesis/article workflows may bind this profile only when lane compatibility is explicit. Current lane: `{spec.workflow_lane or 'reference-only'}`.",
+            (
+                f"- Thesis/article workflows may bind this profile only when lane compatibility is "
+                f"explicit. Current lane: `{spec.workflow_lane or 'reference-only'}`."
+            ),
             "- Stable mode default is preserved: the profile is not refreshed automatically during workflow runs.",
             "",
             "## 7. Finalization Impact",
             "",
             "- Finalizer may rely on this normalized profile only together with the corresponding raw bundle state.",
             "- Missing or partial raw material remains a blocker for claiming full formal compliance.",
-            "- If conflict metadata is flagged, the newest declared source stays operative but the checklist must preserve the conflict note.",
+            "- If conflict metadata is flagged, the newest declared source stays operative but the "
+            "checklist must preserve the conflict note.",
             "",
         ]
     )
@@ -665,9 +687,7 @@ def _guess_content_type(path: Path) -> str:
 
 def _fallback_profile_id(registry: StandardsRegistry, workspace: WorkspaceConfig, lane: str) -> str:
     return (
-        registry.fallback_profiles.get(lane)
-        or workspace.default_profiles.get(lane)
-        or DEFAULT_FALLBACK_PROFILES[lane]
+        registry.fallback_profiles.get(lane) or workspace.default_profiles.get(lane) or DEFAULT_FALLBACK_PROFILES[lane]
     )
 
 
@@ -753,4 +773,4 @@ def _slugify_url(url: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

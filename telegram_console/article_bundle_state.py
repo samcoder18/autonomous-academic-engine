@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Iterable
 import json
 import tempfile
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from .workspace import WorkConfig, WorkspaceConfigError
-
 
 ARTICLE_BUNDLE_STATE_VERSION = "v1"
 ARTICLE_READINESS_STATUSES = ("submission-ready", "strong-draft", "strong-draft-with-blockers")
@@ -165,7 +165,7 @@ def build_article_bundle_state(
             "input_brief": input_brief,
             "target_path": target_path,
         },
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -333,7 +333,11 @@ def _standards_gate(blockers: tuple[dict[str, Any], ...]) -> str:
 def _export_readiness(bundle_files: dict[str, dict[str, Any]], readiness_status: str | None) -> str:
     if readiness_status == "submission-ready" and _exists(bundle_files, "docx"):
         return "exported"
-    if readiness_status in {"submission-ready", "strong-draft"} and _exists(bundle_files, "final_markdown") and _exists(bundle_files, "checklist"):
+    if (
+        readiness_status in {"submission-ready", "strong-draft"}
+        and _exists(bundle_files, "final_markdown")
+        and _exists(bundle_files, "checklist")
+    ):
         return "ready-for-export"
     return "not-ready"
 

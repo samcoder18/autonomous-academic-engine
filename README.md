@@ -16,6 +16,17 @@
 - **Pandoc** — внешняя утилита для экспорта DOCX (`export_docx.sh`, `export_academic_docx.sh`), не ставится через pip.
 - Рантайм Telegram читает секреты из переменных окружения (см. `telegram_console/config.py`); файл `.env` не коммитится.
 
+## Разработка и тесты
+
+Основной набор тестов на стандартном `unittest` (без обязательного `pytest`):
+
+```bash
+export PYTHONPATH=.
+python3 -m unittest discover -s tests -q
+```
+
+Подробнее: [tests/README.md](tests/README.md). В опциональных dev-зависимостях ([pyproject.toml](pyproject.toml)) можно поставить `pytest` для локального удобства; каноничный прогон в CI ориентируйте на `unittest discover`.
+
 История перехода на модель `works/<slug>/`: [meta/migration-history.md](meta/migration-history.md).
 
 ## Основные уровни
@@ -33,8 +44,8 @@
 ## Текущая работа по умолчанию
 
 - `biometrics-vkr`
-- Путь: [works/biometrics-vkr](/Users/albina/дипломная/works/biometrics-vkr)
-- Канон: [work-canon.md](/Users/albina/дипломная/works/biometrics-vkr/work-canon.md)
+- Путь: [works/biometrics-vkr](works/biometrics-vkr)
+- Канон: [work-canon.md](works/biometrics-vkr/work-canon.md)
 
 ## Структура work bundle
 
@@ -58,8 +69,8 @@
 
 ## Операционные ориентиры
 
-- Детальный workflow-reglament для thesis lane и article lane живет только в [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
-- Индекс ролей, launcher links и hard rules живут в [AGENTS.md](/Users/albina/дипломная/AGENTS.md).
+- Детальный workflow-reglament для thesis lane и article lane живет только в [meta/master-protocol.md](meta/master-protocol.md).
+- Индекс ролей, launcher links и hard rules живут в [AGENTS.md](AGENTS.md).
 - Канонический thesis-текст редактируется только в `works/<slug>/thesis/manuscript/sections/`.
 - Article bundle ведется только в `works/<slug>/articles/`.
 
@@ -99,8 +110,34 @@ Launcher резолвит старые относительные пути (`man
 - `python3 -m telegram_console.work_cli standards-status [profile-id]`
 - `python3 -m telegram_console.work_cli work-status [--json]`
 
+## Autonomous VKR / thesis pipeline
+
+Deterministic machine-driven gates: источники, GOST-библиография,
+DOCX-conformance, оригинальность, work-type структура, VKR-фронтматтер.
+
+- `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work biometrics-vkr]` —
+  генерирует `title-page.md`, `abstract-ru.md`, `abstract-en.md`,
+  `keywords.md`, `task-sheet.md` из `works/<slug>/thesis/metadata.toml`.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work biometrics-vkr] [--corpus path/to/corpus.json] [--skip-docx] [--work-type vkr-bachelor]` —
+  прогон всех deterministic gates с честным итоговым статусом
+  (`submission-ready` только когда все gates прошли; иначе
+  `strong-draft-with-blockers` с полным списком blockers).
+- Отчёт сохраняется в `works/<slug>/thesis/reviews/<дата>-one-shot-report.(md|json)`.
+- Known limits и unknowns: [meta/autonomous-engine-unknowns-2026-04-19.md](meta/autonomous-engine-unknowns-2026-04-19.md).
+
+### Operational alerts (daemon / long-running)
+
+- `autonomous_daemon` и `bot.py` эмитят структурированные ops-события (stale-lock recovery, lock-blocked, terminal-stop, run-stuck, unhandled exception) через [`telegram_console/ops_alerts.py`](telegram_console/ops_alerts.py).
+- Доставка настраивается env-переменными: `OPS_ALERT_CHAT_ID` (Telegram-чат для ops) и `OPS_ALERT_LOG_PATH` (tee-файл). Без конфигурации события идут в stderr + Python `logging`.
+- Stuck-detector включается флагом `--stuck-after-minutes` у `autonomous daemon run` или переменной `DAEMON_STUCK_AFTER_MINUTES`. Срабатывание = terminal-state `run-stuck` + CRITICAL alert.
+- Интеграционные тесты: [`tests/test_daemon_ops_integration.py`](tests/test_daemon_ops_integration.py).
+
 `work-status` показывает индекс сигналов и следующий безопасный шаг; он не заменяет верификацию источников, citation pass или repair planner.
 Если в thesis lane есть `thesis/ledgers/*.md`, `work-status` также показывает ledger advisory как informational layer, а не как final quality verdict.
+
+## CI
+
+В репозитории есть [`.github/workflows/ci.yml`](.github/workflows/ci.yml): `ruff check`, `python3 -m unittest discover -s tests`, `skill-source-map audit`. Локально можно подключить [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (`pip install pre-commit && pre-commit install`).
 
 ## Maintenance
 

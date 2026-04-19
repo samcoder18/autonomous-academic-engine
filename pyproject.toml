@@ -13,10 +13,13 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
   "ruff>=0.8",
+  "pytest>=8.0",
+  "pre-commit>=3.6",
 ]
 
-[tool.setuptools]
-packages = ["telegram_console"]
+[tool.setuptools.packages.find]
+include = ["telegram_console*"]
+exclude = ["tests*", "scripts*"]
 
 [tool.ruff]
 line-length = 120
@@ -25,3 +28,7 @@ src = ["telegram_console", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# tests/test_telegram_console.py: very long integration module; E501 deferred (engineering audit 2026-04-19).
+[tool.ruff.lint.per-file-ignores]
+"tests/test_telegram_console.py" = ["E501"]

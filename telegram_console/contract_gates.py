@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .action_specs import ExecutionContract, RequiredArtifact
 from .standards import StandardProfileResolution
-
 
 CONTRACT_GATE_STATUSES = {"pass", "warn", "block", "not-applicable"}
 

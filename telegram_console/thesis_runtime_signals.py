@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from .guarded_prose import extract_guarded_prose_blockers, load_guarded_prose_rules
 from .repair_kernel import Blocker
-
+from .verdict_parser import extract_structured_verdicts
 
 THESIS_STATUS_HINTS = {
     "updated",
@@ -40,11 +40,7 @@ FIELD_ALIASES = {
     },
 }
 
-FIELD_ALIAS_INDEX = {
-    alias: canonical
-    for canonical, aliases in FIELD_ALIASES.items()
-    for alias in aliases
-}
+FIELD_ALIAS_INDEX = {alias: canonical for canonical, aliases in FIELD_ALIASES.items() for alias in aliases}
 
 GUARDED_PROSE_RULES = load_guarded_prose_rules("thesis")
 
@@ -56,10 +52,24 @@ class ThesisRuntimeSignals:
 
 
 def extract_thesis_runtime_signals(artifact_texts: dict[str, str]) -> ThesisRuntimeSignals:
-    status_hint = _extract_status_hint(artifact_texts.get("output", ""))
+    verdicts, verdict_errors = extract_structured_verdicts(artifact_texts)
+    thesis_verdicts = tuple(v for v in verdicts if v.lane == "thesis")
+
+    status_hint: str | None
+    if thesis_verdicts:
+        status_hint = _pick_thesis_status_from_verdicts(thesis_verdicts)
+    else:
+        status_hint = _extract_status_hint(artifact_texts.get("output", ""))
+
     blockers: list[Blocker] = []
-    for source_name, text in artifact_texts.items():
-        blockers.extend(_extract_source_blockers(source_name, text))
+    for verdict in thesis_verdicts:
+        blockers.extend(verdict.blockers)
+    for error in verdict_errors:
+        blockers.append(error.to_blocker())
+
+    if not thesis_verdicts:
+        for source_name, text in artifact_texts.items():
+            blockers.extend(_extract_source_blockers(source_name, text))
 
     if status_hint == "blocked-primary-support" and not any(item.category == "primary-support" for item in blockers):
         blockers.append(
@@ -86,6 +96,22 @@ def extract_thesis_runtime_signals(artifact_texts: dict[str, str]) -> ThesisRunt
         )
 
     return ThesisRuntimeSignals(status_hint=status_hint, blockers=_dedupe_blockers(blockers))
+
+
+def _pick_thesis_status_from_verdicts(verdicts: tuple) -> str | None:
+    priority = (
+        "blocked-runtime",
+        "blocked-primary-support",
+        "blocked-standards",
+        "ready-with-caveats",
+        "reviewed",
+        "updated",
+    )
+    seen_statuses = {verdict.status for verdict in verdicts}
+    for candidate in priority:
+        if candidate in seen_statuses:
+            return candidate
+    return None
 
 
 def _extract_status_hint(text: str) -> str | None:

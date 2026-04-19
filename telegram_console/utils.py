@@ -1,28 +1,27 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 import json
 import re
-
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 _LEGACY_TIMESTAMP_PATTERN = re.compile(r"\d{8}-\d{6}")
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def parse_datetime(raw: str | None) -> datetime:
     if not raw:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
+        return datetime.fromtimestamp(0, tz=UTC)
     if _LEGACY_TIMESTAMP_PATTERN.fullmatch(raw):
-        return datetime.strptime(raw, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(raw, "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
+        return datetime.fromtimestamp(0, tz=UTC)
 
 
 def shorten_text(value: str | None, limit: int = 140) -> str:

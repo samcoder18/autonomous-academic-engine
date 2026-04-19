@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import smtplib
+import ssl
 from dataclasses import dataclass
 from email.headerregistry import Address
 from email.message import EmailMessage
 from html import escape
 from pathlib import Path
-import smtplib
-import ssl
-
 
 DOCX_MIME_TYPE = (
     "application",
@@ -113,18 +112,32 @@ class SmtpDocxSender:
         from_name = escape(self.settings.from_name)
         safe_file_name = escape(file_name)
         safe_artifact_kind = escape(artifact_kind)
+        body_style = (
+            "margin:0;padding:24px;background:#f3ede4;font-family:Georgia,'Times New Roman',serif;color:#33261f;"
+        )
+        card_style = (
+            "max-width:640px;margin:0 auto;background:#fffaf3;border:1px solid #e3d5c5;"
+            "border-radius:18px;padding:28px 32px;"
+        )
+        label_style = "margin:0 0 12px;font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#8c6e57;"
         return f"""\
 <html>
-  <body style="margin:0;padding:24px;background:#f3ede4;font-family:Georgia,'Times New Roman',serif;color:#33261f;">
-    <div style="max-width:640px;margin:0 auto;background:#fffaf3;border:1px solid #e3d5c5;border-radius:18px;padding:28px 32px;">
-      <p style="margin:0 0 12px;font-size:12px;letter-spacing:0.16em;text-transform:uppercase;color:#8c6e57;">Академический workflow</p>
+  <body style="{body_style}">
+    <div style="{card_style}">
+      <p style="{label_style}">Академический workflow</p>
       <h1 style="margin:0 0 18px;font-size:30px;line-height:1.2;color:#2a1e18;">Здравствуйте!</h1>
-      <p style="margin:0 0 14px;font-size:17px;line-height:1.7;">Готовый DOCX уже подготовлен и приложен к этому письму.</p>
+      <p style="margin:0 0 14px;font-size:17px;line-height:1.7;">
+        Готовый DOCX уже подготовлен и приложен к этому письму.
+      </p>
       <div style="margin:18px 0;padding:16px 18px;background:#f8efe4;border-radius:14px;">
-        <p style="margin:0 0 8px;font-size:16px;line-height:1.6;"><strong>Тип результата:</strong> {safe_artifact_kind}</p>
+        <p style="margin:0 0 8px;font-size:16px;line-height:1.6;">
+          <strong>Тип результата:</strong> {safe_artifact_kind}
+        </p>
         <p style="margin:0;font-size:16px;line-height:1.6;"><strong>Файл:</strong> {safe_file_name}</p>
       </div>
-      <p style="margin:0 0 14px;font-size:17px;line-height:1.7;">Пусть финальная версия принесет спокойную вычитку и уверенную подачу.</p>
+      <p style="margin:0 0 14px;font-size:17px;line-height:1.7;">
+        Пусть финальная версия принесет спокойную вычитку и уверенную подачу.
+      </p>
       <p style="margin:22px 0 0;font-size:17px;line-height:1.7;">С теплом,<br>{from_name}</p>
     </div>
   </body>

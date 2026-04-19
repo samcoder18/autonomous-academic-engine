@@ -151,3 +151,28 @@ id = "journal-kmp-yurist-formatting"
 label = "Formatting rules page"
 url = "https://lawinfo.ru/for-authors/pravila-oformleniya-materialov"
 filename = "journal-kmp-yurist-formatting.html"
+
+[profiles."ru-vkr-gost-r-7-0-100-2018"]
+workflow_lane = "thesis"
+unit_kind = "bibliography"
+status = "official"
+normalized_path = "meta/standards/normalized/ru-vkr-gost-r-7-0-100-2018.md"
+raw_dir = "meta/standards/raw/ru-vkr-gost-r-7-0-100-2018"
+official_only = true
+notes = [
+  "ГОСТ Р 7.0.100-2018 - базовый стандарт библиографического описания для ВКР и диссертаций.",
+  "Машинные проверки реализованы в telegram_console/gost_linter.py.",
+]
+
+[profiles."ru-vkr-university-default"]
+workflow_lane = "thesis"
+unit_kind = "university"
+status = "provisional"
+normalized_path = "meta/standards/normalized/ru-vkr-university-default.md"
+raw_dir = "meta/standards/raw/ru-vkr-university-default"
+official_only = false
+notes = [
+  "Дефолтный профиль форматирования ВКР (TNR 14, 1.5, поля 30/20/20/20).",
+  "Используется при отсутствии подтверждённой кафедральной методички.",
+  "Машинные проверки в telegram_console/docx_conformance.py.",
+]

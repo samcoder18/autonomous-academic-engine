@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import re
+import tomllib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Sequence
-import re
-import tomllib
+from typing import Any
 
 from .repair_kernel import Blocker
-
 
 RULES_FILE = Path(__file__).with_name("guarded_prose_rules.toml")
 

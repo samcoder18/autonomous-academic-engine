@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Iterable
 import re
+from collections.abc import Iterable
+from pathlib import Path
 
 from .guarded_prose import extract_guarded_prose_matches, load_guarded_prose_rules
 from .workspace import WorkConfig, article_bundle_paths, discover_article_slugs
-
 
 LEGACY_LEDGER_FIELDS = {
     "claim_id",
@@ -191,7 +190,9 @@ def _build_thesis_quality_advisory(work: WorkConfig) -> dict[str, object]:
                 _append_source(sources, "verification-log")
                 rows = _extract_markdown_table_rows(text, VERIFICATION_LOG_FIELDS)
                 for row in rows:
-                    verification_log_records.append(_normalize_claim_record(row, artifact_path=path, record_format="expanded"))
+                    verification_log_records.append(
+                        _normalize_claim_record(row, artifact_path=path, record_format="expanded")
+                    )
                 continue
             _append_source(sources, "ledger")
             expanded_rows = _extract_markdown_table_rows(text, EXPANDED_LEDGER_FIELDS)
@@ -291,7 +292,9 @@ def _thesis_quality_coverage(
     if has_legacy_ledger or not has_log_file or not verification_log_records:
         return "limited"
 
-    ledger_claim_ids = _structured_claim_ids(record for record in ledger_records if record.get("record_format") == "expanded")
+    ledger_claim_ids = _structured_claim_ids(
+        record for record in ledger_records if record.get("record_format") == "expanded"
+    )
     verification_claim_ids = _structured_claim_ids(verification_log_records)
     if not ledger_claim_ids or ledger_claim_ids != verification_claim_ids:
         return "limited"
@@ -322,7 +325,9 @@ def _article_bundle_quality_payload(bundle: dict[str, Path], *, slug: str) -> di
 
     if claim_map_present:
         _append_source(sources, "claim-map")
-        claim_map_records = [record for record in _parse_artifact_records(claim_map_path) if _has_claim_passport_shape(record)]
+        claim_map_records = [
+            record for record in _parse_artifact_records(claim_map_path) if _has_claim_passport_shape(record)
+        ]
 
     coverage = "limited"
     if evidence_present and claim_map_present and evidence_claim_records and claim_map_records:
@@ -362,9 +367,7 @@ def _parse_artifact_records(path: Path) -> list[dict[str, str]]:
 
 def _structured_claim_ids(records: Iterable[dict[str, str]]) -> set[str]:
     return {
-        claim_id
-        for claim_id in (_normalize_inline_value(record.get("claim_id", "")) for record in records)
-        if claim_id
+        claim_id for claim_id in (_normalize_inline_value(record.get("claim_id", "")) for record in records) if claim_id
     }
 
 
@@ -458,9 +461,13 @@ def _build_verification_advisory(
         if "conflicting primary" in result:
             issues.append(_issue("conflicting_primary", "Primary materials appear to conflict on this claim.", record))
         if basis_type and basis_type != "analytical" and not record.get("official_primary_link"):
-            issues.append(_issue("missing_official_primary_link", "Strong claim is missing an official primary link.", record))
+            issues.append(
+                _issue("missing_official_primary_link", "Strong claim is missing an official primary link.", record)
+            )
         if "needs-recheck" in status or "needs recheck" in status or "stale" in result:
-            issues.append(_issue("stale_knowledge_date", "Claim is explicitly marked for re-check or stale verification.", record))
+            issues.append(
+                _issue("stale_knowledge_date", "Claim is explicitly marked for re-check or stale verification.", record)
+            )
         if basis_type in DYNAMIC_BASIS_TYPES and not record.get("knowledge_date"):
             issues.append(_issue("stale_knowledge_date", "Dynamic material is missing a knowledge_date.", record))
         false_attribution_check = _normalized_text(record.get("false_attribution_check"))
@@ -475,7 +482,9 @@ def _build_source_mix_advisory(
     records: Iterable[dict[str, str]],
     base_status: str,
 ) -> dict[str, object]:
-    claim_records = [record for record in records if record.get("record_format") != "legacy" and record.get("basis_type")]
+    claim_records = [
+        record for record in records if record.get("record_format") != "legacy" and record.get("basis_type")
+    ]
     issues: list[dict[str, str]] = []
     basis_counts: dict[str, int] = {}
     for record in claim_records:
@@ -483,10 +492,18 @@ def _build_source_mix_advisory(
         if basis_type:
             basis_counts[basis_type] = basis_counts.get(basis_type, 0) + 1
         if basis_type == "empirical" and not _record_has_stats_metadata(record):
-            issues.append(_issue("stats_missing_metadata", "Empirical support is missing basic statistics metadata.", record))
+            issues.append(
+                _issue("stats_missing_metadata", "Empirical support is missing basic statistics metadata.", record)
+            )
         jurisdiction = _normalized_text(record.get("jurisdiction"))
-        if _is_foreign_jurisdiction(jurisdiction) and basis_type in SECONDARY_BASIS_TYPES and not record.get("official_primary_link"):
-            issues.append(_issue("foreign_law_secondary_only", "Foreign-law claim relies on secondary material only.", record))
+        if (
+            _is_foreign_jurisdiction(jurisdiction)
+            and basis_type in SECONDARY_BASIS_TYPES
+            and not record.get("official_primary_link")
+        ):
+            issues.append(
+                _issue("foreign_law_secondary_only", "Foreign-law claim relies on secondary material only.", record)
+            )
 
     total_claims = sum(basis_counts.values())
     if total_claims >= 2 and len(basis_counts) == 1:
@@ -658,7 +675,10 @@ def _normalize_claim_record(
 def _has_claim_passport_shape(record: dict[str, str]) -> bool:
     if not record.get("claim_id") or not record.get("basis_type"):
         return False
-    return any(record.get(field) for field in ("verification_result", "official_primary_link", "jurisdiction", "knowledge_date"))
+    return any(
+        record.get(field)
+        for field in ("verification_result", "official_primary_link", "jurisdiction", "knowledge_date")
+    )
 
 
 def _record_has_stats_metadata(record: dict[str, str]) -> bool:

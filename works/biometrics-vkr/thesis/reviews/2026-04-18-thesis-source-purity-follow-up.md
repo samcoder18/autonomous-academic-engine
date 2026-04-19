@@ -4,7 +4,7 @@
 
 ## Объем проверки
 
-- Повторно просмотрены [01-introduction.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/01-introduction.md), [02-chapter-1.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/02-chapter-1.md), [03-chapter-2.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/03-chapter-2.md), [04-chapter-3.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/04-chapter-3.md) и [06-bibliography.md](/Users/albina/дипломная/works/biometrics-vkr/thesis/manuscript/sections/06-bibliography.md).
+- Повторно просмотрены [01-introduction.md](works/biometrics-vkr/thesis/manuscript/sections/01-introduction.md), [02-chapter-1.md](works/biometrics-vkr/thesis/manuscript/sections/02-chapter-1.md), [03-chapter-2.md](works/biometrics-vkr/thesis/manuscript/sections/03-chapter-2.md), [04-chapter-3.md](works/biometrics-vkr/thesis/manuscript/sections/04-chapter-3.md) и [06-bibliography.md](works/biometrics-vkr/thesis/manuscript/sections/06-bibliography.md).
 - Цель прохода: сократить число ссылок на `consultant.ru` там, где официальный источник быстро и надежно доступен, не переписывая аргументацию и не искажая датировку нормы.
 
 ## Что удалось усилить

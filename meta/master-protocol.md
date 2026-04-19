@@ -7,14 +7,14 @@
 
 ## 1. Источники истины
 
-- [workspace.toml](/Users/albina/дипломная/workspace.toml) хранит корневую конфигурацию workspace.
+- [workspace.toml](workspace.toml) хранит корневую конфигурацию workspace.
 - `works/<slug>/work.toml` хранит конфигурацию конкретной работы.
 - `works/<slug>/work-canon.md` хранит только утвержденные решения конкретной работы.
 - `works/<slug>/thesis/manuscript/sections/` хранит канонический thesis-текст конкретной работы.
 - `works/<slug>/thesis/ledgers/` хранит claim-level evidence ledger для thesis lane, если он создан.
 - `works/<slug>/articles/` хранит article bundle и финальный article text конкретной работы.
-- [meta/standards](/Users/albina/дипломная/meta/standards) хранит raw и normalized publication standards.
-- [templates/](/Users/albina/дипломная/templates) задает минимальные reusable формы для повторяемых задач.
+- [meta/standards](meta/standards) хранит raw и normalized publication standards.
+- [templates/](templates) задает минимальные reusable формы для повторяемых задач.
 
 Если решение не зафиксировано в каноне активной работы, оно не считается окончательным.
 
@@ -33,7 +33,7 @@
 
 ## 3. Агентная цепочка
 
-Порядок ролей описан в [AGENTS.md](/Users/albina/дипломная/AGENTS.md) и реализуется через специализированные файлы в [agents/](/Users/albina/дипломная/agents).
+Порядок ролей описан в [AGENTS.md](AGENTS.md) и реализуется через специализированные файлы в [agents/](agents).
 
 Базовая цепочка для thesis lane:
 
@@ -108,9 +108,9 @@
 - Перед drafting сильные тезисы по возможности проходят через `source package -> evidence ledger -> verification`.
 - Для больших thesis sections (`> 8 manuscript pages` или `5+ subsections`) критика идет в два прохода: `skeleton pass`, затем `local paragraph pass`.
 - Сноски оформляются как Markdown-сноски в конце соответствующей секции.
-- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh) с `--work`.
-- Для Word-версии со сносками используется [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh) с `--work`.
-- Проверку ориентировочного объема удобно делать через [scripts/check_section_length.sh](/Users/albina/дипломная/scripts/check_section_length.sh).
+- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](scripts/assemble_thesis.sh) с `--work`.
+- Для Word-версии со сносками используется [scripts/export_docx.sh](scripts/export_docx.sh) с `--work`.
+- Проверку ориентировочного объема удобно делать через [scripts/check_section_length.sh](scripts/check_section_length.sh).
 
 ## 8. Правила работы с article bundle
 
@@ -120,16 +120,16 @@
 - Draft хранится в `works/<slug>/articles/drafts/`.
 - Findings-first review хранится в `works/<slug>/articles/reviews/`.
 - Финальный Markdown и checklist хранятся в `works/<slug>/articles/final/`.
-- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](/Users/albina/дипломная/scripts/export_academic_docx.sh) с `--work`.
+- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](scripts/export_academic_docx.sh) с `--work`.
 - Finalizer не должен утверждать полную формальную готовность, если relevant raw standard отсутствует или конфликтует с normalized profile.
 
 ## 9. Листы проверки и синхронизации
 
-- Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](/Users/albina/дипломная/templates/chapter-review-sheet.md).
+- Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](templates/chapter-review-sheet.md).
 - Для больших thesis sections можно дополнительно вести section-scoped `*-glossary.md` и `*-micro-review.md` в `works/<slug>/thesis/reviews/`.
-- После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](/Users/albina/дипломная/templates/chat-sync.md).
+- После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](templates/chat-sync.md).
 - Если этап агентной цепочки был безопасно пропущен, причина этого фиксируется именно в sync-следе работы.
-- Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](/Users/albina/дипломная/templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
+- Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
 
 ## 10. Минимальный результат рабочего цикла
 
@@ -146,3 +146,25 @@
 - какой статус результата сейчас допустим;
 - какие blockers мешают `submission-ready`;
 - какие файлы составляют текущий article bundle.
+
+## 11. Автономные machine-driven гейты (thesis / VKR / диссертация)
+
+Перед тем как объявить любой thesis-результат `submission-ready`, рукопись обязана пройти детерминированный one-shot pipeline:
+
+- `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — собирает title-page, abstract, keywords, task-sheet из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра (автор, научный руководитель, abstract < 200 символов, < 3 ключевых слов RU/EN) блокирует сборку.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — запускает гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure` и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
+
+Правила статуса:
+
+- при любом FAIL хотя бы одного гейта отчёт получает статус `strong-draft-with-blockers` — финализатор обязан понизить итоговый статус и передать список блокеров в `repair_kernel`;
+- статус `submission-ready` разрешён только если все применимые гейты PASS и `work-type-structure` сошёлся с выбранным профилем (`article`, `vkr-bachelor`, `vkr-specialist`, `master-thesis`, `dissertation-candidate`, `dissertation-doctor`);
+- origin-text originality-gate обязан использовать локальный corpus (`telegram_console.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
+
+### 11.1 Операционный канал daemon'а
+
+- Долгоживущие компоненты (`autonomous_daemon.run_daemon_foreground`, Telegram bot) эмитят структурированные ops-alerts через [`telegram_console.ops_alerts`](../telegram_console/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
+- Конфигурация доставки: `OPS_ALERT_CHAT_ID` (Telegram-чат для ops-событий, **не** совпадающий с пользовательским чатом проекта) и `OPS_ALERT_LOG_PATH` (файл для offline-tee). Если ни одно не выставлено, алерты идут в stderr и в Python `logging` — local-run остаётся тихим, но событие не теряется.
+- Stuck-detector активируется флагом `--stuck-after-minutes` у `autonomous daemon run` или переменной `DAEMON_STUCK_AFTER_MINUTES`. При срабатывании daemon пишет terminal-state `run-stuck`, эмитит `daemon/run-stuck` (severity CRITICAL) и завершается штатно.
+- Ops-канал намеренно отделён от продуктовых уведомлений: сбой одного не блокирует другой. Любое изменение kind-ов алертов фиксируется в [tests/test_daemon_ops_integration.py](../tests/test_daemon_ops_integration.py) и в §6 unknowns.
+
+Известные пределы pipeline документированы в [meta/autonomous-engine-unknowns-2026-04-19.md](autonomous-engine-unknowns-2026-04-19.md). Любые pragmatic boundaries обновляются там, а не в прозе work-canon.

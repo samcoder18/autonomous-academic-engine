@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from .action_specs import ExecutionContract
 from .repair_kernel import Blocker, determine_terminal_reason
-
 
 THESIS_REPAIR_PLAN_KIND = "thesis-repair-plan"
 VERIFY_CATEGORIES = {"citation", "dynamic-material", "primary-support", "source", "verification"}
@@ -218,7 +218,11 @@ def _coerce_blockers(items: Iterable[Blocker | dict[str, Any]]) -> list[Blocker]
         if not isinstance(item, dict):
             continue
         raw_statuses = item.get("blocks_statuses")
-        statuses = tuple(str(status).strip() for status in raw_statuses if str(status).strip()) if isinstance(raw_statuses, list | tuple) else ()
+        statuses = (
+            tuple(str(status).strip() for status in raw_statuses if str(status).strip())
+            if isinstance(raw_statuses, list | tuple)
+            else ()
+        )
         details = item.get("details")
         result.append(
             Blocker(

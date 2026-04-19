@@ -20,3 +20,28 @@
 - список конкретных проблем;
 - рекомендации по усилению доказательности;
 - перечень фрагментов, которые еще нельзя считать готовыми.
+
+## Структурированный verdict (обязательно)
+
+В конце вывода всегда добавляй один fenced-блок с машинно-читаемым
+verdict'ом (схема [meta/schemas/verdict.schema.json](../meta/schemas/verdict.schema.json)).
+
+```verdict
+{
+  "verdict_version": "1",
+  "lane": "thesis",
+  "kind": "argument-critic",
+  "status": "ready-with-caveats",
+  "summary": "Краткое обоснование статуса.",
+  "blockers": [
+    {
+      "category": "logic",
+      "code": "missing-transition",
+      "message": "Переход между § 1.2 и § 1.3 не обоснован."
+    }
+  ]
+}
+```
+
+- `status` — обычно `reviewed` (ок), `ready-with-caveats` (есть что поправить, но не блокер), или `blocked-primary-support` / `needs-repair` при серьёзных разрывах.
+- Каждая отмеченная проблема должна иметь соответствующий blocker.

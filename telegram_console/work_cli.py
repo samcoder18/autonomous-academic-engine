@@ -1,24 +1,27 @@
 from __future__ import annotations
 
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import json
-import os
-import re
-import shlex
-import subprocess
-import sys
 
 from .action_specs import (
     ExecutionContract,
     build_article_execution_contract,
     build_thesis_execution_contract,
 )
-from .autonomous_planner import build_autonomous_plan, format_autonomous_plan
-from .autonomous_policy import AUTONOMOUS_MODES
-from .autonomous_runner import read_autonomous_state, run_autonomous_plan, stop_autonomous_run
+from .article_bundle_state import (
+    article_bundle_manifest_path,
+    build_article_bundle_state,
+    load_article_bundle_state,
+    write_article_bundle_state,
+)
 from .autonomous_daemon import (
     daemon_status_payload,
     read_daemon_stop_request,
@@ -32,6 +35,9 @@ from .autonomous_launchd import (
     AutonomousDaemonLaunchdError,
     AutonomousDaemonLaunchdManager,
 )
+from .autonomous_planner import build_autonomous_plan, format_autonomous_plan
+from .autonomous_policy import AUTONOMOUS_MODES
+from .autonomous_runner import read_autonomous_state, run_autonomous_plan, stop_autonomous_run
 from .autonomous_scheduler import (
     multi_daemon_status_payload,
     read_multi_daemon_stop_request,
@@ -41,13 +47,8 @@ from .autonomous_scheduler import (
     run_multi_work_daemon_tick,
     start_multi_work_daemon_process,
 )
-from .article_bundle_state import (
-    article_bundle_manifest_path,
-    build_article_bundle_state,
-    load_article_bundle_state,
-    write_article_bundle_state,
-)
 from .orchestrator import WorkflowOrchestrator
+from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .standards import (
     StandardProfileResolution,
     format_profile_resolution_lines,
@@ -56,17 +57,14 @@ from .standards import (
     resolve_status_profile,
     sync_standard_profile,
 )
-from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .work_state import format_work_state_summary
 from .workspace import (
     TargetResolution,
+    WorkConfig,
     WorkspaceConfig,
     WorkspaceConfigError,
-    WorkConfig,
     article_bundle_paths,
     derive_review_path,
-    list_targets_for_action,
-    load_work_config,
     load_workspace_config,
     relative_to_workspace,
     resolve_target_for_action,
@@ -74,7 +72,6 @@ from .workspace import (
     resolve_work_config,
     resolve_work_selection,
 )
-
 
 THESIS_PRESETS = (
     "full-cycle",
@@ -119,6 +116,36 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
 
     export_thesis = subparsers.add_parser("export-thesis-docx")
     export_thesis.add_argument("--work", dest="work_id")
+
+    vkr_front = subparsers.add_parser(
+        "build-vkr-frontmatter",
+        help="Generate title-page/abstract/keywords/task-sheet from thesis/metadata.toml.",
+    )
+    vkr_front.add_argument("--work", dest="work_id")
+
+    one_shot = subparsers.add_parser(
+        "one-shot-thesis",
+        help="Run deterministic VKR gates (frontmatter/GOST/DOCX/originality) and write a report.",
+    )
+    one_shot.add_argument("--work", dest="work_id")
+    one_shot.add_argument(
+        "--skip-docx",
+        action="store_true",
+        help="Skip DOCX conformance gate even if DOCX is present.",
+    )
+    one_shot.add_argument(
+        "--corpus",
+        dest="corpus_path",
+        help="Optional path to originality corpus JSON. If omitted, the originality gate is skipped.",
+    )
+    one_shot.add_argument(
+        "--work-type",
+        dest="work_type",
+        help=(
+            "Work-type profile (vkr-bachelor, vkr-specialist, master-thesis, "
+            "dissertation-candidate, dissertation-doctor). Defaults to work.toml artifact_type."
+        ),
+    )
 
     export_article = subparsers.add_parser("export-article-docx")
     export_article.add_argument("input_md")
@@ -186,6 +213,15 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
         daemon_parser.add_argument("--poll-seconds", type=int, default=30)
         daemon_parser.add_argument("--max-cycles", type=int, default=50)
         daemon_parser.add_argument("--max-runtime-minutes", type=int, default=240)
+        daemon_parser.add_argument(
+            "--stuck-after-minutes",
+            type=int,
+            default=None,
+            help=(
+                "Emit daemon/run-stuck critical alert and stop if no new command is issued "
+                "within this many minutes. Overrides DAEMON_STUCK_AFTER_MINUTES env var."
+            ),
+        )
         daemon_parser.add_argument("--json", action="store_true", dest="as_json")
 
     daemon_status_parser = daemon_subparsers.add_parser("status")
@@ -224,6 +260,16 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return assemble_thesis(root_path, args.work_id)
         if args.command == "export-thesis-docx":
             return export_thesis_docx(root_path, args.work_id)
+        if args.command == "build-vkr-frontmatter":
+            return build_vkr_frontmatter(root_path, args.work_id)
+        if args.command == "one-shot-thesis":
+            return one_shot_thesis(
+                root_path,
+                args.work_id,
+                skip_docx=args.skip_docx,
+                corpus_path=args.corpus_path,
+                work_type=args.work_type,
+            )
         if args.command == "export-article-docx":
             return export_article_docx(root_path, args.input_md, args.output_docx, args.work_id)
         if args.command == "standards-intake":
@@ -407,6 +453,7 @@ def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
             poll_seconds=args.poll_seconds,
             max_cycles=args.max_cycles,
             max_runtime_minutes=args.max_runtime_minutes,
+            stuck_after_minutes=getattr(args, "stuck_after_minutes", None),
         )
         _print_daemon_payload(payload, as_json=args.as_json)
         return 1 if payload.get("stop_reason") == "daemon-already-running" else 0
@@ -575,7 +622,9 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
 
     target_path = workspace.root_dir / target_rel
     target_state = "existing" if target_path.exists() else "missing"
-    use_search = _resolve_search(args.search_override, args.preset in {"full-cycle", "source-pack", "verify", "write-section"})
+    use_search = _resolve_search(
+        args.search_override, args.preset in {"full-cycle", "source-pack", "verify", "write-section"}
+    )
     review_path = derive_review_path(workspace, work, target_rel)
     sync_hint_path = _sync_path_for_target(work, args.preset, target_rel)
     related_context = _thesis_related_context(workspace, work, target_path, profile)
@@ -690,7 +739,9 @@ def launch_academic(root_dir: Path, args: Any) -> int:
 
     if args.workflow == "article":
         if bool(args.topic) == bool(args.brief):
-            raise WorkspaceConfigError("Для команды article нужно указать ровно один из аргументов: --topic или --brief.")
+            raise WorkspaceConfigError(
+                "Для команды article нужно указать ровно один из аргументов: --topic или --brief."
+            )
         if args.brief:
             target_resolution = resolve_target_for_action(
                 workspace,
@@ -902,7 +953,13 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             previous_state=load_article_bundle_state(bundle_state_path),
         )
         write_article_bundle_state(bundle_state_path, completed_bundle_state)
-    except Exception:
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
         failed_bundle_state = build_article_bundle_state(
             work_id=work.slug,
             article_slug=article_slug,
@@ -981,7 +1038,11 @@ def assemble_thesis(root_dir: Path, work_id: str | None) -> int:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
 
     work.thesis.full_draft_path.parent.mkdir(parents=True, exist_ok=True)
-    parts = [f"<!-- Generated by scripts/assemble_thesis.sh for {work.slug} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')} -->", ""]
+    gen_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+    parts = [
+        f"<!-- Generated by scripts/assemble_thesis.sh for {work.slug} on {gen_ts} -->",
+        "",
+    ]
     for section in work.thesis.section_order:
         if section.exists():
             parts.append(section.read_text(encoding="utf-8").rstrip())
@@ -1001,7 +1062,116 @@ def export_thesis_docx(root_dir: Path, work_id: str | None) -> int:
     work.thesis.export_docx_path.parent.mkdir(parents=True, exist_ok=True)
     _run_pandoc(work.thesis.full_draft_path, work.thesis.export_docx_path)
     print(f"Exported {work.thesis.export_docx_path}")
+    _run_thesis_standards_checks(work.thesis.full_draft_path, work.thesis.export_docx_path)
     return 0
+
+
+def one_shot_thesis(
+    root_dir: Path,
+    work_id: str | None,
+    *,
+    skip_docx: bool = False,
+    corpus_path: str | None = None,
+    work_type: str | None = None,
+) -> int:
+    """Run deterministic VKR gates and write a structured report."""
+    from .one_shot import OneShotConfig, run_one_shot, write_report
+
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    if not work.thesis:
+        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+
+    manuscript = work.thesis.full_draft_path
+    docx = None if skip_docx else work.thesis.export_docx_path
+    thesis_root = work.thesis.paths.root_dir
+    metadata = thesis_root / "metadata.toml"
+    frontmatter = thesis_root / "frontmatter"
+    corpus = _resolve_path(root_dir, corpus_path) if corpus_path else None
+
+    effective_work_type = work_type or getattr(work, "artifact_type", None)
+    config = OneShotConfig(
+        manuscript_md=manuscript,
+        docx_path=docx,
+        metadata_path=metadata if metadata.exists() else None,
+        frontmatter_destination=frontmatter if metadata.exists() else None,
+        corpus_path=corpus,
+        require_docx=not skip_docx,
+        work_type=effective_work_type,
+    )
+    report = run_one_shot(config)
+
+    reviews_dir = thesis_root / "reviews"
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    date_stamp = report.started_at.strftime("%Y-%m-%d")
+    md_path = reviews_dir / f"{date_stamp}-one-shot-report.md"
+    json_path = reviews_dir / f"{date_stamp}-one-shot-report.json"
+    write_report(report, markdown_path=md_path, json_path=json_path)
+
+    print(f"[one-shot] status: {report.status}")
+    for gate in report.gates:
+        marker = "PASS" if gate.passed else "FAIL"
+        print(f"  [{marker}] {gate.name}: {gate.summary}")
+    print(f"[one-shot] report: {md_path.relative_to(root_dir)}")
+    return 0 if report.status == "submission-ready" else 1
+
+
+def build_vkr_frontmatter(root_dir: Path, work_id: str | None) -> int:
+    """Render title-page/abstract/keywords/task-sheet from thesis/metadata.toml."""
+    from .vkr_artifacts import build_bundle, write_bundle
+
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    if not work.thesis:
+        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+
+    thesis_root = work.thesis.paths.root_dir
+    metadata_path = thesis_root / "metadata.toml"
+    destination = thesis_root / "frontmatter"
+    bundle = build_bundle(metadata_path)
+    if bundle.has_blockers:
+        print(f"[vkr] Невозможно собрать frontmatter: {len(bundle.issues)} блокер(ов):")
+        for issue in bundle.issues:
+            print(f"  - [{issue.code}] {issue.message}")
+        print(f"[vkr] Исправьте {metadata_path} и повторите.")
+        return 1
+    written = write_bundle(bundle, destination=destination)
+    print(f"[vkr] Записано {len(written)} файл(ов) в {destination}:")
+    for path in written:
+        print(f"  - {path.relative_to(root_dir)}")
+    return 0
+
+
+def _run_thesis_standards_checks(manuscript_md: Path, exported_docx: Path) -> None:
+    """Run GOST-linter and DOCX-conformance after thesis export.
+
+    Prints a short summary; does not raise. The orchestrator's repair kernel
+    will consume these blockers via the runtime artifact.
+    """
+    from .docx_conformance import check_docx
+    from .gost_linter import lint_bibliography
+
+    try:
+        manuscript_text = manuscript_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[standards] Не удалось прочитать manuscript: {exc}")
+        return
+
+    gost_report = lint_bibliography(manuscript_text)
+    if gost_report.has_blockers:
+        print(f"[standards] GOST bibliography: найдено {len(gost_report.issues)} замечаний:")
+        for issue in gost_report.issues[:10]:
+            print(f"  - #{issue.entry_index} [{issue.code}] {issue.message}")
+    else:
+        print("[standards] GOST bibliography: замечаний нет.")
+
+    docx_report = check_docx(exported_docx)
+    if docx_report.has_blockers:
+        print(f"[standards] DOCX conformance: найдено {len(docx_report.issues)} отклонений:")
+        for issue in docx_report.issues[:10]:
+            print(f"  - [{issue.code}] {issue.message}")
+    else:
+        print("[standards] DOCX conformance: все проверки пройдены.")
 
 
 def export_article_docx(root_dir: Path, raw_input: str, raw_output: str | None, work_id: str | None) -> int:
@@ -1051,16 +1221,41 @@ def _build_thesis_prompt(
 ) -> str:
     search_state = "enabled by launcher" if use_search else "disabled by launcher"
     nearby_context = _format_paths_block(related_context)
-    review_trace = f"- Preferred review artifact path: {review_path}" if review_path else "- No dedicated review artifact path was precomputed for this run."
-    sync_trace = f"- Preferred sync checkpoint path: {sync_hint_path}" if sync_hint_path else "- No sync checkpoint path was precomputed for this run."
+    review_trace = (
+        f"- Preferred review artifact path: {review_path}"
+        if review_path
+        else "- No dedicated review artifact path was precomputed for this run."
+    )
+    sync_trace = (
+        f"- Preferred sync checkpoint path: {sync_hint_path}"
+        if sync_hint_path
+        else "- No sync checkpoint path was precomputed for this run."
+    )
     profile_trace = _format_profile_trace(profile)
+    root = workspace.root_dir
+    slug = work.slug
     action_intro = {
-        "full-cycle": f"Use $thesis-workflow-orchestrator to handle this thesis task end-to-end in {workspace.root_dir}.",
-        "source-pack": f"Use $thesis-research-synthesizer and $thesis-source-verifier for this thesis source-package task in the active work `{work.slug}`.",
-        "verify": f"Use $thesis-source-verifier and $thesis-citation-checker for this verification pass in the active work `{work.slug}`.",
-        "write-section": f"Use $thesis-draft-writer, $thesis-source-verifier, and $thesis-citation-checker to draft or expand this thesis section in the active work `{work.slug}`.",
-        "review-section": f"Use $thesis-argument-critic and $thesis-citation-checker to review this thesis section in the active work `{work.slug}`.",
-        "style-pass": f"Use $thesis-style-editor for a final style refinement pass on this checked thesis text in the active work `{work.slug}`.",
+        "full-cycle": (f"Use $thesis-workflow-orchestrator to handle this thesis task end-to-end in {root}."),
+        "source-pack": (
+            "Use $thesis-research-synthesizer and $thesis-source-verifier for this thesis "
+            f"source-package task in the active work `{slug}`."
+        ),
+        "verify": (
+            "Use $thesis-source-verifier and $thesis-citation-checker for this verification pass "
+            f"in the active work `{slug}`."
+        ),
+        "write-section": (
+            "Use $thesis-draft-writer, $thesis-source-verifier, and $thesis-citation-checker to "
+            f"draft or expand this thesis section in the active work `{slug}`."
+        ),
+        "review-section": (
+            "Use $thesis-argument-critic and $thesis-citation-checker to review this thesis "
+            f"section in the active work `{slug}`."
+        ),
+        "style-pass": (
+            "Use $thesis-style-editor for a final style refinement pass on this checked thesis "
+            f"text in the active work `{slug}`."
+        ),
     }
     target_label = {
         "full-cycle": "Target artifact",
@@ -1078,7 +1273,7 @@ Active work:
 - Work title: {work.title}
 - Work root: {work.work_dir}
 - Work canon: {work.work_canon_path}
-- Work config: {work.work_dir / 'work.toml'}
+- Work config: {work.work_dir / "work.toml"}
 
 {target_label}: {target_path}
 Target path (relative): {target_rel}
@@ -1119,14 +1314,15 @@ def _build_article_prompt(
 ) -> str:
     search_state = "enabled by launcher" if use_search else "disabled by launcher"
     input_block = f"Input brief source: {input_brief_path}" if input_brief_path else f"Input topic: {topic}"
-    return f"""Use $academic-workflow-orchestrator to run a full legal-academic article workflow in {workspace.root_dir}.
+    head = f"Use $academic-workflow-orchestrator to run a full legal-academic article workflow in {workspace.root_dir}."
+    return f"""{head}
 
 Active work:
 - Work ID: {work.slug}
 - Work title: {work.title}
 - Work root: {work.work_dir}
 - Work canon: {work.work_canon_path}
-- Work config: {work.work_dir / 'work.toml'}
+- Work config: {work.work_dir / "work.toml"}
 
 Article lane:
 - Work only inside works/{work.slug}/articles/ and the work-specific output paths.
@@ -1174,7 +1370,11 @@ def _build_review_prompt(
     notes_content: str,
 ) -> str:
     search_state = "enabled by launcher" if use_search else "disabled by launcher"
-    return f"""Use $academic-submission-evaluator, $academic-counterargument-critic, and $academic-citation-checker to review this legal-academic article bundle in {workspace.root_dir}.
+    head = (
+        "Use $academic-submission-evaluator, $academic-counterargument-critic, and "
+        f"$academic-citation-checker to review this legal-academic article bundle in {workspace.root_dir}."
+    )
+    return f"""{head}
 
 Active work:
 - Work ID: {work.slug}
@@ -1222,7 +1422,12 @@ def _build_repair_prompt(
     notes_content: str,
 ) -> str:
     search_state = "enabled by launcher" if use_search else "disabled by launcher"
-    return f"""Use $academic-repair-orchestrator, $academic-source-verifier, $academic-citation-checker, $academic-submission-evaluator, and $academic-finalizer to repair this legal-academic article bundle in {workspace.root_dir}.
+    head = (
+        "Use $academic-repair-orchestrator, $academic-source-verifier, "
+        "$academic-citation-checker, $academic-submission-evaluator, and $academic-finalizer "
+        f"to repair this legal-academic article bundle in {workspace.root_dir}."
+    )
+    return f"""{head}
 
 Active work:
 - Work ID: {work.slug}
@@ -1270,7 +1475,11 @@ def _build_finalize_prompt(
     notes_content: str,
 ) -> str:
     search_state = "enabled by launcher" if use_search else "disabled by launcher"
-    return f"""Use $academic-finalizer, $academic-submission-evaluator, and $academic-citation-checker to finalize this legal-academic article bundle in {workspace.root_dir}.
+    head = (
+        "Use $academic-finalizer, $academic-submission-evaluator, and $academic-citation-checker "
+        f"to finalize this legal-academic article bundle in {workspace.root_dir}."
+    )
+    return f"""{head}
 
 Active work:
 - Work ID: {work.slug}
@@ -1492,10 +1701,30 @@ def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, mo
     chosen_model = model or os.environ.get("CODEX_MODEL")
     if chosen_model:
         cmd.extend(["-m", chosen_model])
-    subprocess.run(cmd + ["-"], input=prompt, text=True, check=True)
+    try:
+        subprocess.run(cmd + ["-"], input=prompt, text=True, check=True)
+    except FileNotFoundError:
+        print(
+            f"Ошибка: не найден исполняемый файл `{codex_bin}`. "
+            "Установите Codex CLI или задайте переменную окружения CODEX_BIN.",
+            file=sys.stderr,
+        )
+        raise
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"Ошибка: команда Codex завершилась с кодом {exc.returncode}. См. вывод процесса выше.",
+            file=sys.stderr,
+        )
+        raise
 
 
 def _run_pandoc(input_md: Path, output_docx: Path) -> None:
+    if shutil.which("pandoc") is None:
+        print(
+            "Ошибка: утилита pandoc не найдена в PATH. Установите Pandoc: https://pandoc.org",
+            file=sys.stderr,
+        )
+        raise FileNotFoundError("pandoc")
     subprocess.run(
         [
             "pandoc",
@@ -1576,32 +1805,23 @@ def _format_execution_contract_block(contract: ExecutionContract) -> str:
     if contract.required_context:
         lines.append("- Required context:")
         lines.extend(
-            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]"
-            for artifact in contract.required_context
+            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]" for artifact in contract.required_context
         )
     if contract.allowed_write_scopes:
         lines.append("- Allowed writes:")
-        lines.extend(
-            f"  - {item.name}: {item.path}"
-            for item in contract.allowed_write_scopes
-        )
+        lines.extend(f"  - {item.name}: {item.path}" for item in contract.allowed_write_scopes)
     if contract.required_outputs:
         lines.append("- Required outputs:")
         lines.extend(
-            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]"
-            for artifact in contract.required_outputs
+            f"  - {artifact.name}: {artifact.path} [{artifact.requirement}]" for artifact in contract.required_outputs
         )
     if contract.quality_gates:
         lines.append("- Quality gates:")
-        lines.extend(
-            f"  - {gate.gate_id}: {gate.description}"
-            for gate in contract.quality_gates
-        )
+        lines.extend(f"  - {gate.gate_id}: {gate.description}" for gate in contract.quality_gates)
     if contract.transitions:
         lines.append("- Transitions:")
         lines.extend(
-            f"  - {item.from_phase} -> {item.to_phase}: {item.completion_signal}"
-            for item in contract.transitions
+            f"  - {item.from_phase} -> {item.to_phase}: {item.completion_signal}" for item in contract.transitions
         )
     return "\n".join(lines)
 

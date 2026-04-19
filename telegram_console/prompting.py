@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-import re
 
 from .projects import ProjectRecord
 from .utils import shorten_text
@@ -101,8 +101,8 @@ class PromptBuilder:
     def build_turn_prompt(
         self,
         project: ProjectRecord,
-        work: WorkConfig | "ProjectChatState",
-        state: "ProjectChatState" | str,
+        work: WorkConfig | ProjectChatState,
+        state: ProjectChatState | str,
         user_text: str | None = None,
         *,
         context_mode: ContextMode,
@@ -136,7 +136,7 @@ class PromptBuilder:
         self,
         project: ProjectRecord,
         work: WorkConfig,
-        state: "ProjectChatState",
+        state: ProjectChatState,
         context_mode: ContextMode,
         current_focus: str,
     ) -> ProjectContextSnapshot:
@@ -268,12 +268,10 @@ class PromptBuilder:
 
         if snapshot.context_mode == "full":
             lines.extend(["", "Инвентарь проекта:"])
-            lines.append(
-                f"- Thesis sections: {_format_collection(snapshot.thesis_sections) if snapshot.thesis_sections else 'не найдены'}"
-            )
-            lines.append(
-                f"- Готовые article outputs: {_format_collection(snapshot.article_outputs) if snapshot.article_outputs else 'не найдены'}"
-            )
+            thesis_txt = _format_collection(snapshot.thesis_sections) if snapshot.thesis_sections else "не найдены"
+            lines.append(f"- Thesis sections: {thesis_txt}")
+            art_txt = _format_collection(snapshot.article_outputs) if snapshot.article_outputs else "не найдены"
+            lines.append(f"- Готовые article outputs: {art_txt}")
         else:
             lines.extend(["", "Краткий recap проекта:"])
 
@@ -284,8 +282,10 @@ class PromptBuilder:
                 f"- Что сейчас в фокусе: {snapshot.current_focus}",
                 "",
                 "Как работать:",
-                "- Не копируй длинные проектные документы в ответ. Если задача требует действий, сам открой нужные файлы внутри проекта.",
-                "- Для thesis/article соблюдай AGENTS.md, workspace.toml, work.toml, work-canon и master protocol как source of truth.",
+                "- Не копируй длинные проектные документы в ответ. Если задача требует действий, "
+                "сам открой нужные файлы внутри проекта.",
+                "- Для thesis/article соблюдай AGENTS.md, workspace.toml, work.toml, work-canon "
+                "и master protocol как source of truth.",
                 "- Не заявляй завершенность, если реально остались blockers.",
                 "",
                 "Definition of done:",

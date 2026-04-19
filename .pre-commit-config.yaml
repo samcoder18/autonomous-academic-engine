@@ -1,0 +1,10 @@
+# Optional: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [check, --fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        types_or: [python, pyi]

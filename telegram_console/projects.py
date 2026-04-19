@@ -1,19 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 import json
 import re
 import sys
 import tempfile
 import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from .orchestrator import RunRecord, WorkflowError, WorkflowOrchestrator
 from .runtime_status import RuntimeRecord, attachment_path, load_runtime_record
 from .state import RuntimeStore
-from .workspace import WorkConfig, WorkspaceConfig, WorkspaceConfigError, list_work_ids, load_work_config, load_workspace_config
-
+from .workspace import (
+    WorkConfig,
+    WorkspaceConfig,
+    WorkspaceConfigError,
+    list_work_ids,
+    load_work_config,
+    load_workspace_config,
+)
 
 PROJECT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 SUPPORTED_CAPABILITIES = ("thesis", "article")
@@ -697,9 +703,7 @@ class ProjectService:
         if not project.available:
             raise WorkflowError(f"Проект `{project_id}` сейчас недоступен.")
         if capability and not project.supports(capability):
-            raise WorkflowError(
-                f"Проект `{project.title}` не поддерживает сценарий `{capability}`."
-            )
+            raise WorkflowError(f"Проект `{project.title}` не поддерживает сценарий `{capability}`.")
         return project
 
     def _resolve_orchestrator_for_record(

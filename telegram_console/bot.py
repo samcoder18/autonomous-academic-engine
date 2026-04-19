@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import argparse
 import json
 import sys
 import traceback
+from pathlib import Path
+from typing import Any
 
 from .agent_chat import AgentBusyError, AgentChatError, AgentChatService, AgentTurnNotification
 from .config import TelegramConsoleConfig
 from .email_delivery import EmailDeliveryError, SmtpDocxSender
 from .launchd_service import LaunchdServiceError, LaunchdServiceManager
+from .ops_alerts import OpsAlertSink, configure_default_sink
 from .orchestrator import RunRecord, WorkflowError, action_title, lane_title
 from .projects import ProjectRecord, ProjectRegistrationResult, ProjectService
 from .runtime_status import load_runtime_record
 from .telegram_api import TelegramApiError, TelegramBotApi
 from .utils import shorten_text, split_message
 from .work_state import format_work_state_dashboard_lines
-
 
 MAIN_MENU = (
     ("📚 Проекты",),
@@ -42,8 +42,7 @@ def reply_keyboard(rows: tuple[tuple[str, ...], ...]) -> dict[str, Any]:
 def inline_keyboard(rows: list[list[tuple[str, str]]]) -> dict[str, Any]:
     return {
         "inline_keyboard": [
-            [{"text": text, "callback_data": callback_data} for text, callback_data in row]
-            for row in rows
+            [{"text": text, "callback_data": callback_data} for text, callback_data in row] for row in rows
         ]
     }
 
@@ -87,8 +86,16 @@ class TelegramConsoleBot:
                 self.store.set_last_update_id(update_id + 1)
                 try:
                     self.handle_update(update)
-                except Exception:
+                except Exception as exc:
                     print(traceback.format_exc(), file=sys.stderr)
+                    if not isinstance(
+                        exc,
+                        (TelegramApiError, KeyError, TypeError, ValueError, OSError),
+                    ):
+                        print(
+                            f"(unexpected exception in handle_update: {type(exc).__name__})",
+                            file=sys.stderr,
+                        )
                     self.safe_send(
                         self.config.allowed_chat_id,
                         "Ой, я споткнулась ⚠️\nПроверь `output/telegram/runtime/` и stderr процесса.",
@@ -312,8 +319,7 @@ class TelegramConsoleBot:
                     lines.append(f"— {problem}")
 
         buttons = [
-            [(self._project_button_label(project, current), f"project:use:{project.id}")]
-            for project in available
+            [(self._project_button_label(project, current), f"project:use:{project.id}")] for project in available
         ]
         if available:
             buttons.append([("📦 Экспорт активного проекта", "nav:export")])
@@ -354,7 +360,9 @@ class TelegramConsoleBot:
         buttons = [
             [
                 (
-                    self._work_button_label(project.id, work.slug, current_work.slug if current_work else None, work.title),
+                    self._work_button_label(
+                        project.id, work.slug, current_work.slug if current_work else None, work.title
+                    ),
                     f"work:use:{project.id}:{work.slug}",
                 )
             ]
@@ -613,7 +621,50 @@ def build_bot(root_dir: str | Path | None = None) -> TelegramConsoleBot:
     )
     api = TelegramBotApi(config.token)
     mailer = SmtpDocxSender(config.smtp_settings) if config.smtp_settings else None
+    _configure_ops_alerts_sink(api)
     return TelegramConsoleBot(config, api, projects, chat, mailer=mailer)
+
+
+def _configure_ops_alerts_sink(api: TelegramBotApi) -> None:
+    """Wire the Telegram API into the ops-alerts sink.
+
+    The ops channel is intentionally separate from user-facing notifications:
+    it honours ``OPS_ALERT_CHAT_ID`` (Telegram chat id) and
+    ``OPS_ALERT_LOG_PATH`` (file path) env vars. If neither is set, alerts
+    fall back to stderr — so local runs stay quiet.
+    """
+    import os
+
+    chat_id_raw = os.environ.get("OPS_ALERT_CHAT_ID")
+    chat_id: str | int | None
+    if chat_id_raw:
+        try:
+            chat_id = int(chat_id_raw)
+        except ValueError:
+            chat_id = chat_id_raw
+    else:
+        chat_id = None
+
+    log_path_raw = os.environ.get("OPS_ALERT_LOG_PATH")
+    log_path = Path(log_path_raw).expanduser() if log_path_raw else None
+
+    def _telegram_sender(target_chat_id: str | int, text: str) -> None:
+        try:
+            numeric_chat_id = int(target_chat_id)
+        except (TypeError, ValueError):
+            return
+        try:
+            api.send_message(numeric_chat_id, text)
+        except TelegramApiError:
+            # Best-effort delivery; ops_alerts already logs the failure.
+            return
+
+    sink = OpsAlertSink(
+        chat_id=chat_id,
+        log_path=log_path,
+        sender=_telegram_sender if chat_id else None,
+    )
+    configure_default_sink(sink)
 
 
 def handle_project_add(
@@ -827,7 +878,9 @@ def _format_runtime_lane_summary(record: Any) -> str:
     ]
     repair_decision = getattr(record, "repair_decision", None)
     if isinstance(repair_decision, dict):
-        parts.append(f"repair={repair_decision.get('action') or 'n/a'}@{getattr(record, 'repair_iteration', None) or 0}")
+        parts.append(
+            f"repair={repair_decision.get('action') or 'n/a'}@{getattr(record, 'repair_iteration', None) or 0}"
+        )
     gate_summary = _contract_gate_summary(getattr(record, "contract_gates", None))
     if gate_summary["total_count"]:
         parts.append(f"gates={gate_summary['block_count']}/{gate_summary['warn_count']}")
@@ -908,11 +961,13 @@ def _format_target_resolution_line(record: Any) -> str | None:
 def _format_summary_block_line(summary_block: dict[str, Any]) -> str:
     kind = summary_block.get("kind")
     if kind == "thesis-section-summary":
+        last_a = summary_block.get("last_run_action") or "n/a"
+        last_s = summary_block.get("last_run_status") or "n/a"
         return (
             "Lane summary: "
             f"thesis target={summary_block.get('target') or 'n/a'}"
             f" · review={'yes' if summary_block.get('review_present') else 'no'}"
-            f" · last_run={summary_block.get('last_run_action') or 'n/a'}/{summary_block.get('last_run_status') or 'n/a'}"
+            f" · last_run={last_a}/{last_s}"
             f" · blockers={summary_block.get('blocker_count') or 0}"
             f" · terminal_reason={summary_block.get('terminal_reason') or 'n/a'}"
             f" · next={summary_block.get('suggested_next_action') or 'n/a'}"

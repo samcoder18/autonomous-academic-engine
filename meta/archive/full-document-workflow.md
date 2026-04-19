@@ -1,14 +1,14 @@
 # Сборка полного документа
 
-Архивная памятка. Актуальные правила работы с рукописью находятся в [master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
+Архивная памятка. Актуальные правила работы с рукописью находятся в [master-protocol.md](meta/master-protocol.md).
 
 ## Короткий порядок
 
 1. Редактировать только нужную секцию в активной работе, то есть в `works/<slug>/thesis/manuscript/sections/`.
 2. Проверить, что заголовки и структура не расходятся с архитектурой главы.
-3. При необходимости оценить объем через [scripts/check_section_length.sh](/Users/albina/дипломная/scripts/check_section_length.sh).
-4. Пересобрать полный Markdown через [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh).
-5. При необходимости экспортировать `DOCX` через [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh).
+3. При необходимости оценить объем через [scripts/check_section_length.sh](scripts/check_section_length.sh).
+4. Пересобрать полный Markdown через [scripts/assemble_thesis.sh](scripts/assemble_thesis.sh).
+5. При необходимости экспортировать `DOCX` через [scripts/export_docx.sh](scripts/export_docx.sh).
 
 ## Напоминания
 

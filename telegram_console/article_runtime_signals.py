@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from .guarded_prose import extract_guarded_prose_blockers, load_guarded_prose_rules
 from .repair_kernel import Blocker
-
+from .verdict_parser import extract_structured_verdicts
 
 ARTICLE_STATUS_SEVERITY = {
     "submission-ready": 0,
@@ -70,11 +70,7 @@ FIELD_ALIASES = {
     },
 }
 
-FIELD_ALIAS_INDEX = {
-    alias: canonical
-    for canonical, aliases in FIELD_ALIASES.items()
-    for alias in aliases
-}
+FIELD_ALIAS_INDEX = {alias: canonical for canonical, aliases in FIELD_ALIASES.items() for alias in aliases}
 
 GUARDED_PROSE_RULES = load_guarded_prose_rules("article")
 
@@ -86,12 +82,24 @@ class ArticleArtifactSignals:
 
 
 def extract_article_artifact_signals(artifact_texts: dict[str, str]) -> ArticleArtifactSignals:
+    verdicts, verdict_errors = extract_structured_verdicts(artifact_texts)
+    article_verdicts = tuple(v for v in verdicts if v.lane == "article")
+
     statuses: list[str] = []
     blockers: list[Blocker] = []
 
-    for source_name, text in artifact_texts.items():
-        statuses.extend(_extract_source_statuses(source_name, text))
-        blockers.extend(_extract_source_blockers(source_name, text))
+    if article_verdicts:
+        for verdict in article_verdicts:
+            if verdict.status in ARTICLE_STATUS_SEVERITY:
+                statuses.append(verdict.status)
+            blockers.extend(verdict.blockers)
+    else:
+        for source_name, text in artifact_texts.items():
+            statuses.extend(_extract_source_statuses(source_name, text))
+            blockers.extend(_extract_source_blockers(source_name, text))
+
+    for error in verdict_errors:
+        blockers.append(error.to_blocker())
 
     return ArticleArtifactSignals(
         readiness_status=_merge_article_readiness_statuses(statuses),

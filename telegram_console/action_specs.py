@@ -165,15 +165,33 @@ COMMON_REPAIR_TERMINAL_REASONS = (
 )
 
 THESIS_QUALITY_GATES = (
-    QualityGate("lane-boundary", "Canonical thesis text must stay inside works/<slug>/thesis/.", THESIS_TERMINAL_STATUSES),
+    QualityGate(
+        "lane-boundary", "Canonical thesis text must stay inside works/<slug>/thesis/.", THESIS_TERMINAL_STATUSES
+    ),
     QualityGate("verified-support", "Strong claims must be supported or narrowed.", ("ready-with-caveats",)),
-    QualityGate("dynamic-material-refresh", "Dynamic legal material must be rechecked against primary sources.", THESIS_TERMINAL_STATUSES),
+    QualityGate(
+        "dynamic-material-refresh",
+        "Dynamic legal material must be rechecked against primary sources.",
+        THESIS_TERMINAL_STATUSES,
+    ),
 )
 ARTICLE_QUALITY_GATES = (
-    QualityGate("lane-boundary", "Article artifacts must stay inside works/<slug>/articles/.", ARTICLE_TERMINAL_STATUSES),
-    QualityGate("primary-support", "Submission-ready is blocked by unsupported strong claims.", ("submission-ready",)),
-    QualityGate("standards-consistency", "Raw/normalized standards conflicts must stay visible in final status.", ("submission-ready",)),
-    QualityGate("evaluator-verdict", "Final status must reflect evaluator blockers honestly.", ARTICLE_TERMINAL_STATUSES),
+    QualityGate(
+        "lane-boundary", "Article artifacts must stay inside works/<slug>/articles/.", ARTICLE_TERMINAL_STATUSES
+    ),
+    QualityGate(
+        "primary-support",
+        "Submission-ready is blocked by unsupported strong claims.",
+        ("submission-ready",),
+    ),
+    QualityGate(
+        "standards-consistency",
+        "Raw/normalized standards conflicts must stay visible in final status.",
+        ("submission-ready",),
+    ),
+    QualityGate(
+        "evaluator-verdict", "Final status must reflect evaluator blockers honestly.", ARTICLE_TERMINAL_STATUSES
+    ),
 )
 
 
@@ -185,14 +203,19 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         summary="Полный bounded thesis workflow с drafting, verification, critique и финальным checkpoint.",
         target_kind="thesis artifact",
         prompt_rules=(
-            "Open AGENTS.md, workspace.toml, the active work's work.toml, work-canon.md, and meta/master-protocol.md before editing.",
-            "Use the appropriate internal chain across structure, research, verification, drafting, citations, criticism, and style.",
+            "Open AGENTS.md, workspace.toml, the active work's work.toml, work-canon.md, "
+            "and meta/master-protocol.md before editing.",
+            "Use the appropriate internal chain across structure, research, verification, "
+            "drafting, citations, criticism, and style.",
             "Write canonical thesis text only inside the active work bundle under works/{work.slug}/thesis/.",
-            "For dynamic legal material, verify against up-to-date official or primary sources and use web search when needed.",
+            "For dynamic legal material, verify against up-to-date official or primary sources "
+            "and use web search when needed.",
             "If you safely skip a workflow step, record the reason in a sync artifact inside the active work.",
             "If you update a manuscript section, rebuild with scripts/assemble_thesis.sh --work {work.slug}.",
-            "If the task explicitly asks for Word output or reaches a polished section checkpoint, export DOCX with scripts/export_docx.sh --work {work.slug}.",
-            "Do not optimize for detector bypass. Optimize for independent analysis, reliable sourcing, and natural academic prose.",
+            "If the task explicitly asks for Word output or reaches a polished section "
+            "checkpoint, export DOCX with scripts/export_docx.sh --work {work.slug}.",
+            "Do not optimize for detector bypass. Optimize for independent analysis, "
+            "reliable sourcing, and natural academic prose.",
         ),
         deliverables=(
             "Make the changes directly in files.",
@@ -322,7 +345,8 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         deliverables=(
             "Update the section directly.",
             "Update the work-local sync/ if the section reaches a meaningful checkpoint.",
-            "End with a concise summary of what was written, which sources were relied on, and what remains unverified or incomplete.",
+            "End with a concise summary of what was written, which sources were relied on, "
+            "and what remains unverified or incomplete.",
         ),
         required_checkpoints=(
             "context-loaded",
@@ -357,7 +381,8 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
             "Review the section for logic gaps, overclaims, repetition, weak transitions, and citation issues.",
             "Create or update the review artifact using templates/chapter-review-sheet.md.",
             "Keep the primary output findings-first.",
-            "Do not rewrite the manuscript broadly; only make trivial citation-hygiene fixes if they are obvious and safe.",
+            "Do not rewrite the manuscript broadly; only make trivial citation-hygiene fixes "
+            "if they are obvious and safe.",
         ),
         deliverables=(
             "Update or create the dedicated review artifact.",
@@ -401,7 +426,8 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         ),
         deliverables=(
             "Update the target file directly.",
-            "End with a concise summary of stylistic improvements and any residual sections that still sound too generic.",
+            "End with a concise summary of stylistic improvements and any residual sections "
+            "that still sound too generic.",
         ),
         required_checkpoints=(
             "context-loaded",
@@ -431,19 +457,24 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         summary="Полный bounded article workflow от brief до final status с evaluator gates.",
         target_kind="article brief or topic",
         prompt_rules=(
-            "Open README.md, AGENTS.md, workspace.toml, the active work's work.toml, work-canon.md, meta/master-protocol.md, the active profile, and the article templates before editing.",
+            "Open README.md, AGENTS.md, workspace.toml, the active work's work.toml, "
+            "work-canon.md, meta/master-protocol.md, the active profile, and the article "
+            "templates before editing.",
             "Start with academic intake and normalize the request into the managed brief path.",
             "Use source acquisition, source verification, and evidence cartography before serious drafting.",
             "For law, case law, regulator guidance, and statistics, final authority must be official or primary.",
             "Secondary literature is interpretive support, not a substitute for primary verification.",
             "Proprietary legal databases and aggregators may be used only as navigational support.",
-            "Build or update the evidence pack and claim map so each significant claim has an evidence trace or an explicit analytical status.",
+            "Build or update the evidence pack and claim map so each significant claim has an "
+            "evidence trace or an explicit analytical status.",
             "Draft only from verified support or clearly marked analytical conclusions.",
             "Run citation checking, counterargument critique, and submission evaluation before finalization.",
             "If blockers remain, use bounded repair logic and do not overstate readiness.",
             "If strong primary gaps remain, downgrade to strong-draft-with-blockers.",
-            "Finish with final markdown, checklist, and DOCX export via scripts/export_academic_docx.sh --work {work.slug}.",
-            "If relevant official raw formatting standards are missing or conflicting, reflect that as a blocker in the checklist and do not overstate formal submission readiness.",
+            "Finish with final markdown, checklist, and DOCX export via "
+            "scripts/export_academic_docx.sh --work {work.slug}.",
+            "If relevant official raw formatting standards are missing or conflicting, reflect "
+            "that as a blocker in the checklist and do not overstate formal submission readiness.",
         ),
         deliverables=(
             "Update the managed article bundle directly.",
@@ -483,11 +514,14 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         target_kind="article draft or final markdown",
         prompt_rules=(
             "Treat this as an article-lane review scoped to the active work.",
-            "Review source integrity, primary support, dynamic materials, counterarguments, composition, citations, and checklist blockers.",
+            "Review source integrity, primary support, dynamic materials, counterarguments, "
+            "composition, citations, and checklist blockers.",
             "Use templates/article-review-sheet.md and update the managed review file.",
             "Verify dynamic legal material against current official or primary sources when needed.",
-            "Output a findings-first review with the verdict submission-ready, strong-draft, or strong-draft-with-blockers.",
-            "Do not broadly rewrite the target file; only make tiny safe citation or factual fixes if they are obvious and necessary.",
+            "Output a findings-first review with the verdict submission-ready, strong-draft, "
+            "or strong-draft-with-blockers.",
+            "Do not broadly rewrite the target file; only make tiny safe citation or factual "
+            "fixes if they are obvious and necessary.",
         ),
         deliverables=(
             "Update or create the managed review sheet.",
@@ -526,7 +560,8 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
             "Update the checklist with explicit blockers, especially primary-source and standards blockers.",
             "Export DOCX only when final markdown and checklist make export justified.",
             "Do not claim submission-ready if primary support, dynamic-material, or standards gates are unresolved.",
-            "If unresolved blockers remain, keep or downgrade the status to strong-draft or strong-draft-with-blockers.",
+            "If unresolved blockers remain, keep or downgrade the status to strong-draft or "
+            "strong-draft-with-blockers.",
         ),
         deliverables=(
             "Update final markdown only when a narrow finalizer adjustment is necessary.",
@@ -569,7 +604,8 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
             "Keep the repair inside article-lane artifacts only.",
             "Do not hide unresolved blockers behind nicer prose.",
             "Re-run evaluator logic before finalization.",
-            "If relevant raw formatting standards are still missing or conflicting, preserve that blocker in the checklist.",
+            "If relevant raw formatting standards are still missing or conflicting, preserve "
+            "that blocker in the checklist.",
             "Finish by updating the active draft or final markdown, the checklist, and DOCX export when justified.",
             "If blockers remain after reasonable repair, keep or downgrade the status to strong-draft-with-blockers.",
         ),
@@ -627,7 +663,9 @@ def execution_contract_from_payload(payload: dict[str, Any] | None) -> Execution
     target_kind = _optional_text(payload.get("target_kind"))
     target_validation = _optional_text(payload.get("target_validation"))
     repair_policy_payload = payload.get("repair_policy")
-    if not all((lane, action, title, summary, target_kind, target_validation)) or not isinstance(repair_policy_payload, dict):
+    if not all((lane, action, title, summary, target_kind, target_validation)) or not isinstance(
+        repair_policy_payload, dict
+    ):
         return None
     return ExecutionContract(
         lane=lane,
@@ -663,7 +701,9 @@ def build_thesis_execution_contract(
 ) -> ExecutionContract:
     spec = resolve_action_spec("thesis", action)
     assert work.thesis is not None
-    context = _contract_context(related_context[:8], required_names=("AGENTS", "workspace", "work config", "canon", "target"))
+    context = _contract_context(
+        related_context[:8], required_names=("AGENTS", "workspace", "work config", "canon", "target")
+    )
     allowed_writes = _thesis_allowed_writes(work, action, target_path, review_path, sync_hint_path)
     outputs = _thesis_required_outputs(work, action, target_path, review_path, sync_hint_path)
     metadata = (
@@ -938,7 +978,12 @@ def _thesis_required_outputs(
     ]
     if action in {"write-section", "style-pass", "full-cycle"}:
         outputs.append(
-            RequiredArtifact("assembled-manuscript", str(work.thesis.full_draft_path), "conditional", "Rebuilt after section changes.")
+            RequiredArtifact(
+                "assembled-manuscript",
+                str(work.thesis.full_draft_path),
+                "conditional",
+                "Rebuilt after section changes.",
+            )
         )
     if action == "review-section" and review_path:
         outputs.append(
@@ -946,7 +991,9 @@ def _thesis_required_outputs(
         )
     if sync_hint_path is not None:
         outputs.append(
-            RequiredArtifact("sync-checkpoint", str(sync_hint_path), "conditional", "Sync trace if assumptions or baseline changed.")
+            RequiredArtifact(
+                "sync-checkpoint", str(sync_hint_path), "conditional", "Sync trace if assumptions or baseline changed."
+            )
         )
     return tuple(outputs)
 
@@ -973,7 +1020,9 @@ def _article_allowed_writes(
         items.append(AllowedWriteScope("requested-target", str(target_path), "Explicit article target input."))
     if action == "review":
         return tuple(
-            item for item in _dedupe_allowed_writes(items) if item.name in {"article-root", "review", "requested-target", "checklist"}
+            item
+            for item in _dedupe_allowed_writes(items)
+            if item.name in {"article-root", "review", "requested-target", "checklist"}
         )
     if action == "finalize":
         return tuple(
@@ -988,23 +1037,38 @@ def _article_required_outputs(action: str, bundle: dict[str, Path]) -> tuple[Req
     if action == "article":
         return (
             RequiredArtifact("brief", str(bundle["brief"]), "required", "Normalized article brief."),
-            RequiredArtifact("evidence-pack", str(bundle["evidence_pack"]), "required", "Evidence pack with verified support."),
+            RequiredArtifact(
+                "evidence-pack", str(bundle["evidence_pack"]), "required", "Evidence pack with verified support."
+            ),
             RequiredArtifact("claim-map", str(bundle["claim_map"]), "required", "Coverage and claim map."),
             RequiredArtifact("draft", str(bundle["draft"]), "required", "Working article draft."),
             RequiredArtifact("review-sheet", str(bundle["review"]), "conditional", "Evaluator or critique sheet."),
-            RequiredArtifact("final-markdown", str(bundle["final_markdown"]), "conditional", "Final markdown when ready."),
-            RequiredArtifact("checklist", str(bundle["checklist"]), "conditional", "Submission checklist and blockers."),
+            RequiredArtifact(
+                "final-markdown", str(bundle["final_markdown"]), "conditional", "Final markdown when ready."
+            ),
+            RequiredArtifact(
+                "checklist", str(bundle["checklist"]), "conditional", "Submission checklist and blockers."
+            ),
             RequiredArtifact("docx", str(bundle["docx"]), "conditional", "DOCX export when justified."),
         )
     if action == "review":
         return (
             RequiredArtifact("review-sheet", str(bundle["review"]), "required", "Findings-first review output."),
-            RequiredArtifact("checklist", str(bundle["checklist"]), "conditional", "Checklist blockers if updated during review."),
+            RequiredArtifact(
+                "checklist", str(bundle["checklist"]), "conditional", "Checklist blockers if updated during review."
+            ),
         )
     if action == "finalize":
         return (
-            RequiredArtifact("final-markdown", str(bundle["final_markdown"]), "conditional", "Final markdown if updated during finalization."),
-            RequiredArtifact("checklist", str(bundle["checklist"]), "required", "Final checklist and visible blockers."),
+            RequiredArtifact(
+                "final-markdown",
+                str(bundle["final_markdown"]),
+                "conditional",
+                "Final markdown if updated during finalization.",
+            ),
+            RequiredArtifact(
+                "checklist", str(bundle["checklist"]), "required", "Final checklist and visible blockers."
+            ),
             RequiredArtifact("docx", str(bundle["docx"]), "conditional", "DOCX export when justified."),
         )
     return (

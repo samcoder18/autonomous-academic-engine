@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 BLOCKING_SUBMISSION_CATEGORIES = {"dynamic-material", "primary-support", "standards-consistency"}
 
@@ -100,7 +100,9 @@ def _effective_readiness_status(
     blocked_reasons: list[str],
     blocker_categories: set[str | None],
 ) -> str | None:
-    if readiness_status == "submission-ready" and (blocked_reasons or blocker_categories & BLOCKING_SUBMISSION_CATEGORIES):
+    if readiness_status == "submission-ready" and (
+        blocked_reasons or blocker_categories & BLOCKING_SUBMISSION_CATEGORIES
+    ):
         return "strong-draft-with-blockers"
     return readiness_status
 

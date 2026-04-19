@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legal-academic-workspace.local/schemas/verdict.schema.json",
+  "title": "Structured Academic Verdict",
+  "description": "Deterministic machine-readable verdict emitted by evaluator/critic/checker agents via fenced ```verdict …``` block. Parsed by telegram_console.verdict_parser and preferred over regex-based signal extraction when present.",
+  "type": "object",
+  "required": ["verdict_version", "lane", "kind", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict_version": {
+      "type": "string",
+      "enum": ["1"],
+      "description": "Schema version. Bump when breaking changes are introduced."
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["thesis", "article"]
+    },
+    "kind": {
+      "type": "string",
+      "description": "Agent kind emitting the verdict.",
+      "enum": [
+        "submission-evaluator",
+        "argument-critic",
+        "citation-checker",
+        "counterargument-critic",
+        "style-editor",
+        "structure-architect",
+        "source-verifier",
+        "evidence-cartographer",
+        "finalizer",
+        "repair-orchestrator",
+        "originality-checker",
+        "gost-linter",
+        "docx-conformance"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "description": "Overall status for this verdict. Mix of thesis and article vocabularies; extractors pick the one applicable to the lane.",
+      "enum": [
+        "submission-ready",
+        "strong-draft",
+        "strong-draft-with-blockers",
+        "ready-with-caveats",
+        "blocked-primary-support",
+        "blocked-runtime",
+        "blocked-standards",
+        "updated",
+        "reviewed",
+        "needs-repair"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "description": "Optional target identifier (section path, article slug, etc.)."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Short free-form rationale (<= 500 chars recommended)."
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/blocker" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Optional numeric indicators (e.g. similarity_percent, missing_primary_count).",
+      "additionalProperties": { "type": ["number", "integer", "string", "boolean"] }
+    }
+  },
+  "$defs": {
+    "blocker": {
+      "type": "object",
+      "required": ["category", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "Blocker taxonomy. Must align with repair_kernel categories.",
+          "enum": [
+            "artifact",
+            "citation",
+            "codex",
+            "docx-conformance",
+            "dynamic-material",
+            "external",
+            "gost-bibliography",
+            "logic",
+            "originality",
+            "primary-support",
+            "process",
+            "review",
+            "runtime",
+            "standards",
+            "standards-consistency",
+            "verdict",
+            "verification"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "message": { "type": "string" },
+        "repairable": { "type": "boolean", "default": true },
+        "blocks_statuses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}

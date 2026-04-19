@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from .action_specs import ExecutionContract
-
 
 RUNTIME_BLOCKER_CATEGORIES = {"artifact", "codex", "external", "process", "runtime"}
 PRIMARY_SUPPORT_CATEGORIES = {"citation", "dynamic-material", "primary-support", "verification"}

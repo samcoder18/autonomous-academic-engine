@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from subprocess import CompletedProcess
-from typing import Callable
 import html
 import os
 import re
 import subprocess
-
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from subprocess import CompletedProcess
 
 DEFAULT_SERVICE_LABEL = "com.albina.telegram-console"
 REQUIRED_ENV_KEYS = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID")
@@ -310,9 +309,7 @@ class LaunchdServiceManager:
     def _bootout_if_loaded(self) -> None:
         if not self.paths.installed_plist.exists():
             return
-        result = self.command_runner(
-            ["launchctl", "bootout", self._launch_domain(), str(self.paths.installed_plist)]
-        )
+        result = self.command_runner(["launchctl", "bootout", self._launch_domain(), str(self.paths.installed_plist)])
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         benign_failure = result.returncode in {0, 5, 36, 113}
