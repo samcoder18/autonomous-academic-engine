@@ -4448,6 +4448,49 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         self.assertTrue(multi_daemon_lock_path(self.root).exists())
         self.assertTrue(multi_daemon_state_path(self.root).exists())
 
+    def test_scheduler_exposes_risk_controls_for_quality_and_execution_limits(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+        schedule = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=[TEST_WORK_ID, "zeta-work"],
+            works_scope="all",
+            mode="autonomous-full",
+        )
+
+        controls = schedule["risk_controls"]
+        self.assertEqual(controls["quality_control_mode"], "delegated")
+        self.assertEqual(controls["scheduler_role"], "admission-control")
+        self.assertIn("source-quality", controls["does_not_judge_directly"])
+        self.assertIn("citation-quality", controls["does_not_judge_directly"])
+        self.assertIn("text-quality", controls["does_not_judge_directly"])
+        self.assertTrue(controls["manual_target_required"])
+        self.assertFalse(controls["automatic_submission_ready"])
+        self.assertTrue(controls["single_flight_global"])
+        self.assertEqual(controls["max_actions_per_tick"], 1)
+
+    def test_multi_work_tick_persists_risk_controls_in_state(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+
+        payload = run_multi_work_daemon_tick(
+            root_dir=self.root,
+            work_ids=[TEST_WORK_ID, "zeta-work"],
+            works_scope="all",
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        controls = payload["risk_controls"]
+        self.assertEqual(controls["quality_control_mode"], "delegated")
+        self.assertFalse(controls["automatic_submission_ready"])
+        self.assertTrue(controls["single_flight_global"])
+        self.assertEqual(controls["max_actions_per_tick"], 1)
+        self.assertEqual(read_multi_daemon_state(self.root)["risk_controls"]["scheduler_role"], "admission-control")
+
 
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:

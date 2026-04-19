@@ -720,6 +720,7 @@ def _schedule_payload(
     active_run: dict[str, Any] | None,
 ) -> dict[str, Any]:
     selected_decision = selected.get("decision") if isinstance(selected, dict) and isinstance(selected.get("decision"), dict) else None
+    risk_controls = _risk_controls()
     return {
         "kind": SCHEDULE_KIND,
         "version": "v1",
@@ -742,6 +743,7 @@ def _schedule_payload(
         "stop_reason": stop_reason,
         "active_run": active_run,
         "assessment_scope": _assessment_scope(),
+        "risk_controls": risk_controls,
         "readiness_claim": "none",
     }
 
@@ -884,6 +886,7 @@ def _write_multi_daemon_cycle_state(
         "blocked": schedule.get("blocked", []) if isinstance(schedule, dict) else [],
         "waiting": schedule.get("waiting", []) if isinstance(schedule, dict) else [],
         "assessment_scope": _assessment_scope(),
+        "risk_controls": _risk_controls(),
         "readiness_claim": "none",
     }
     write_multi_daemon_state(root_dir, payload)
@@ -928,6 +931,7 @@ def _normalize_multi_daemon_state(root_dir: str | Path, payload: dict[str, Any])
         "blocked": list(payload.get("blocked") or []) if isinstance(payload.get("blocked"), list) else [],
         "waiting": list(payload.get("waiting") or []) if isinstance(payload.get("waiting"), list) else [],
         "assessment_scope": _assessment_scope(),
+        "risk_controls": payload.get("risk_controls") if isinstance(payload.get("risk_controls"), dict) else _risk_controls(),
         "readiness_claim": "none",
     }
     return normalized
@@ -943,6 +947,40 @@ def _assessment_scope() -> dict[str, Any]:
             "standards-review",
             "human-verdict",
         ],
+    }
+
+
+def _risk_controls() -> dict[str, Any]:
+    return {
+        "quality_control_mode": "delegated",
+        "scheduler_role": "admission-control",
+        "quality_authorities": {
+            "sources": [
+                "source-verifier",
+                "academic-source-verifier",
+                "primary-support-blockers",
+            ],
+            "citations": [
+                "citation-checker",
+                "academic-citation-checker",
+                "contract-gates",
+            ],
+            "text": [
+                "argument-critic",
+                "academic-counterargument-critic",
+                "academic-submission-evaluator",
+            ],
+        },
+        "does_not_judge_directly": [
+            "source-quality",
+            "citation-quality",
+            "text-quality",
+        ],
+        "manual_target_required": True,
+        "automatic_submission_ready": False,
+        "single_flight_global": True,
+        "max_actions_per_tick": 1,
+        "readiness_claim": "none",
     }
 
 
