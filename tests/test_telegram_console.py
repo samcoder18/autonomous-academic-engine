@@ -29,6 +29,9 @@ from telegram_console.action_specs import (
     list_action_specs,
 )
 from telegram_console.contract_gates import evaluate_contract_gates
+from telegram_console.autonomous_policy import evaluate_autonomous_policy
+from telegram_console.autonomous_planner import build_autonomous_plan
+from telegram_console.finalization_engine import evaluate_article_finalization
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -1831,6 +1834,110 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(bundle_state["terminal_reason"], "ready-with-caveats")
         self.assertEqual(bundle_state["blockers"], [])
 
+    def test_article_finalize_runtime_records_deterministic_finalization_check(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        workspace = load_workspace_config(self.root)
+        work = load_work_config(workspace, TEST_WORK_ID)
+        profile = resolve_standard_profile(self.root, workspace, work, lane="article", requested_profile_id=None)
+        bundle = article_bundle_paths(work, "finalize-runtime-demo")
+        write_file(bundle["brief"], "# Finalize brief\n")
+        write_file(bundle["draft"], "# Finalize draft\n")
+        write_file(bundle["review"], "# Review sheet\n")
+        write_file(bundle["final_markdown"], "# Final markdown\n")
+        write_file(
+            bundle["checklist"],
+            textwrap.dedent(
+                """\
+                # Submission Checklist
+
+                - Status: `strong-draft`
+                - What still blocks formal submission: none
+                """
+            ),
+        )
+        contract = build_article_execution_contract(
+            work=work,
+            profile=profile,
+            action="finalize",
+            related_context=[self.root / "AGENTS.md", self.root / "workspace.toml", work.work_canon_path],
+            bundle=bundle,
+            topic=None,
+            input_brief_path=None,
+            target_path=bundle["final_markdown"],
+            target_rel=relative_to_workspace(workspace, bundle["final_markdown"]),
+        )
+        timestamp = "20260418-102100"
+        output_file = work.article.paths.output_runs_dir / f"{timestamp}-finalize-finalize-runtime-demo.md"
+        manifest_file = work.article.paths.output_runs_dir / f"{timestamp}-finalize-finalize-runtime-demo.meta.json"
+        write_file(output_file, "Finalizer completed. No submission-ready claim.\n")
+        manifest_payload = {
+            "timestamp": timestamp,
+            "command": "finalize",
+            "work_id": work.slug,
+            "work_title": work.title,
+            "profile_id": profile.resolved_profile_id,
+            "requested_profile_id": profile.requested_profile_id,
+            "resolved_profile_id": profile.resolved_profile_id,
+            "fallback_profile_id": profile.fallback_profile_id,
+            "profile_raw_dir": str(profile.raw_dir),
+            "profile_conflict_flag": profile.conflict_flag,
+            "profile_status": profile.profile_status,
+            "search_enabled": True,
+            "topic": None,
+            "input_brief": None,
+            "target_path": relative_to_workspace(workspace, bundle["final_markdown"]),
+            "root_dir": str(self.root),
+            "output_file": str(output_file),
+            "bundle": {
+                "slug": "finalize-runtime-demo",
+                "brief": str(bundle["brief"]),
+                "evidence_pack": str(bundle["evidence_pack"]),
+                "claim_map": str(bundle["claim_map"]),
+                "draft": str(bundle["draft"]),
+                "review": str(bundle["review"]),
+                "final_markdown": str(bundle["final_markdown"]),
+                "checklist": str(bundle["checklist"]),
+                "docx": str(bundle["docx"]),
+                "state_manifest": str(article_bundle_manifest_path(work, "finalize-runtime-demo")),
+            },
+            "related_context": [str(self.root / "AGENTS.md")],
+            "execution_contract": contract.to_dict(),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        manifest_file.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        run_dir = self.orchestrator.store.runs_dir / "article-finalize-runtime"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "run_id": "default:20260418-article-finalize",
+            "lane": "article",
+            "action": "finalize",
+            "started_at": "2026-04-18T10:21:00+00:00",
+            "project_id": "default",
+            "project_title": self.root.name,
+            "project_root": str(self.root),
+            "work_id": work.slug,
+            "work_title": work.title,
+            "target": relative_to_workspace(workspace, bundle["final_markdown"]),
+        }
+        result = {
+            "status": "success",
+            "returncode": 0,
+            "started_at": request["started_at"],
+            "finished_at": "2026-04-18T10:22:00+00:00",
+            "log_path": str(run_dir / "launcher.log"),
+        }
+
+        self.orchestrator._finalize_runtime_run(run_dir, request, result)
+
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["finalization_check"]["status"], "pass")
+        self.assertEqual(status["finalization_check"]["finalization_status"], "export-ready")
+        self.assertEqual(status["finalization_check"]["readiness_claim"], "none")
+        self.assertTrue(any(item["name"] == "finalization-check-evaluated" for item in status["checkpoints"]))
+
     def test_thesis_verify_finalization_enriches_runtime_status_with_repair_metadata(self) -> None:
         write_sample_standards_registry(self.root)
         write_sample_normalized_profiles(self.root)
@@ -3507,6 +3614,222 @@ class ContractGateEvaluatorTests(unittest.TestCase):
         self.assertTrue(all(item["status"] in {"pass", "not-applicable"} for item in gates))
 
 
+class AutonomousControlPlaneTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        self.orchestrator = WorkflowOrchestrator(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def work_state(self) -> dict[str, object]:
+        return self.orchestrator.get_artifact_status("work")
+
+    def test_policy_blocks_active_run(self) -> None:
+        state = self.work_state()
+        state["runtime"]["active_run"] = {
+            "run_id": "default:active",
+            "lane": "article",
+            "action": "review",
+        }
+
+        decision = evaluate_autonomous_policy(
+            work_state=state,
+            action={"command": "launch-academic review works/demo-work/articles/drafts/demo.md", "intent": "review", "lane": "article"},
+            mode="autonomous-safe",
+        ).to_dict()
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertIn("active-run", decision["blocking_categories"])
+        self.assertEqual(decision["readiness_claim"], "none")
+
+    def test_policy_blocks_export_when_standards_blocker_exists(self) -> None:
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        state = self.work_state()
+
+        decision = evaluate_autonomous_policy(
+            work_state=state,
+            action={"command": "export-article-docx works/demo-work/articles/final/demo.md", "intent": "export", "lane": "article"},
+            mode="autonomous-full",
+        ).to_dict()
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertIn("standards-consistency", decision["blocking_categories"])
+        self.assertIsNone(decision["safe_command"])
+
+    def test_policy_blocks_export_when_contract_gate_blocks_export(self) -> None:
+        state = self.work_state()
+        state["known_blockers"] = [
+            {
+                "category": "contract-gate",
+                "code": "article-required-output-checklist",
+                "message": "Checklist missing.",
+                "lane": "article",
+                "details": {
+                    "gate_id": "required-output:checklist",
+                    "blocks_export": True,
+                    "blocks_submission_ready": True,
+                },
+            }
+        ]
+
+        decision = evaluate_autonomous_policy(
+            work_state=state,
+            action={"command": "export-article-docx works/demo-work/articles/final/demo.md", "intent": "export", "lane": "article"},
+            mode="autonomous-full",
+        ).to_dict()
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertIn("required-output:checklist", decision["blocking_gate_ids"])
+
+    def test_policy_allows_safe_review_in_autonomous_safe_mode(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        state = self.work_state()
+        action = state["suggested_next_action"]
+
+        decision = evaluate_autonomous_policy(work_state=state, action=action, mode="autonomous-safe").to_dict()
+
+        self.assertEqual(decision["decision"], "allowed")
+        self.assertEqual(decision["intent"], "review")
+        self.assertIn("launch-academic review", decision["safe_command"])
+
+    def test_policy_requires_confirmation_for_drafting_export_and_finalize(self) -> None:
+        state = self.work_state()
+        for action in (
+            {"command": "launch-thesis write-section works/demo-work/thesis/manuscript/sections/01-introduction.md", "intent": "draft", "lane": "thesis"},
+            {"command": "export-thesis-docx", "intent": "export", "lane": "thesis"},
+            {"command": "launch-academic finalize works/demo-work/articles/final/demo.md", "intent": "finalize-checklist", "lane": "article"},
+        ):
+            decision = evaluate_autonomous_policy(work_state=state, action=action, mode="autonomous-safe").to_dict()
+            self.assertEqual(decision["decision"], "requires-confirmation")
+            self.assertEqual(decision["readiness_claim"], "none")
+
+    def test_policy_blocks_legacy_root_target_for_autonomous_run(self) -> None:
+        state = self.work_state()
+
+        decision = evaluate_autonomous_policy(
+            work_state=state,
+            action={"command": "launch-thesis verify manuscript/sections/01-introduction.md", "intent": "verify", "lane": "thesis"},
+            mode="autonomous-safe",
+            target_resolution={"warning_code": "legacy-root-target"},
+        ).to_dict()
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertIn("noncanonical-target", decision["blocking_categories"])
+
+    def test_planner_uses_unblocked_continuation_when_standards_block_export(self) -> None:
+        rewrite_work_profiles(self.root, article_profile="journal-jrp")
+        state = self.work_state()
+
+        plan = build_autonomous_plan(work_state=state, mode="autonomous-safe", max_steps=3).to_dict()
+
+        self.assertEqual(plan["mode"], "autonomous-safe")
+        self.assertEqual(plan["readiness_claim"], "none")
+        self.assertTrue(plan["steps"])
+        self.assertEqual(plan["steps"][0]["policy"]["decision"], "allowed")
+        self.assertIn("launch-academic review", plan["steps"][0]["command"])
+
+    def test_autonomous_full_allows_export_after_deterministic_finalization_check(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        state = self.work_state()
+
+        plan = build_autonomous_plan(work_state=state, mode="autonomous-full", max_steps=1).to_dict()
+
+        self.assertEqual(plan["status"], "ready")
+        self.assertTrue(plan["steps"])
+        first_step = plan["steps"][0]
+        self.assertEqual(first_step["action_id"], "export-article-docx")
+        self.assertEqual(first_step["policy"]["decision"], "allowed")
+        self.assertEqual(first_step["finalization_check"]["status"], "pass")
+        self.assertEqual(first_step["policy"]["readiness_claim"], "none")
+
+
+class FinalizationEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        self.workspace = load_workspace_config(self.root)
+        self.work = load_work_config(self.workspace, TEST_WORK_ID)
+        self.bundle = article_bundle_paths(self.work, "final-check")
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_finalization_blocks_missing_final_markdown(self) -> None:
+        result = evaluate_article_finalization(bundle=self.bundle, readiness_status="strong-draft", blockers=[], contract_gates=[]).to_dict()
+
+        self.assertEqual(result["status"], "block")
+        self.assertIn("final-markdown-missing", result["blocked_reasons"])
+        self.assertEqual(result["readiness_claim"], "none")
+
+    def test_finalization_blocks_submission_ready_when_gates_or_primary_blockers_exist(self) -> None:
+        write_file(self.bundle["final_markdown"], "# Final\n")
+        write_file(self.bundle["checklist"], "# Checklist\n")
+        write_file(self.bundle["review"], "# Review\n")
+
+        result = evaluate_article_finalization(
+            bundle=self.bundle,
+            readiness_status="submission-ready",
+            blockers=[
+                {
+                    "category": "primary-support",
+                    "code": "primary-gap",
+                    "message": "Need primary source.",
+                }
+            ],
+            contract_gates=[
+                {
+                    "gate_id": "standards-raw",
+                    "status": "block",
+                    "reason": "Raw standards missing.",
+                    "blocks_submission_ready": True,
+                }
+            ],
+        ).to_dict()
+
+        self.assertEqual(result["status"], "block")
+        self.assertIn("primary-support-blockers", result["blocked_reasons"])
+        self.assertIn("gate:standards-raw", result["blocked_reasons"])
+        self.assertEqual(result["effective_readiness_status"], "strong-draft-with-blockers")
+
+    def test_clean_finalization_is_export_ready_without_overclaim(self) -> None:
+        write_file(self.bundle["final_markdown"], "# Final\n")
+        write_file(self.bundle["checklist"], "# Checklist\n")
+        write_file(self.bundle["review"], "# Review\n")
+
+        result = evaluate_article_finalization(
+            bundle=self.bundle,
+            readiness_status="strong-draft",
+            blockers=[],
+            contract_gates=[
+                {
+                    "gate_id": "standards-raw",
+                    "status": "pass",
+                    "reason": "Raw standards available.",
+                }
+            ],
+        ).to_dict()
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["finalization_status"], "export-ready")
+        self.assertIn("docx", result["allowed_exports"])
+        self.assertEqual(result["readiness_claim"], "none")
+
+
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -4386,6 +4709,114 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(latest["contract_gate_summary"]["block_count"], 1)
             self.assertTrue(any(item["category"] == "contract-gate" for item in payload["known_blockers"]))
             self.assertEqual(payload["suggested_next_action"]["action_id"], "article-repair")
+
+    def test_autonomous_plan_cli_prints_policy_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["autonomous", "plan", "--mode", "autonomous-safe"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Autonomous plan:", stdout.getvalue())
+            self.assertIn("launch-academic review", stdout.getvalue())
+            self.assertIn("decision=allowed", stdout.getvalue())
+            self.assertNotIn("submission-ready", stdout.getvalue())
+
+    def test_autonomous_run_dry_run_writes_state_without_launching(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "run", "--mode", "autonomous-safe", "--max-steps", "2", "--dry-run"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Autonomous run: dry-run", stdout.getvalue())
+            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            self.assertTrue(state_path.exists())
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "dry-run")
+            self.assertEqual(payload["mode"], "autonomous-safe")
+            self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_autonomous_run_execute_stops_when_plan_has_no_allowed_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            orchestrator = WorkflowOrchestrator(root)
+            orchestrator.store.set_active_run(
+                {
+                    "run_id": "default:active",
+                    "run_dir": str(root / "output" / "telegram" / "runs" / "active"),
+                    "pid": os.getpid(),
+                    "lane": "article",
+                    "action": "review",
+                    "started_at": "2026-04-18T10:22:00+00:00",
+                    "project_root": str(root),
+                    "work_id": TEST_WORK_ID,
+                    "target": TEST_ARTICLE_DRAFT.as_posix(),
+                }
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "run", "--mode", "autonomous-safe", "--execute"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Autonomous run: stopped", stdout.getvalue())
+            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "stopped")
+            self.assertEqual(payload["stop_reason"], "A workflow run is already active for this work.")
+            self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_autonomous_full_run_executes_export_after_finalization_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_file(root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "run", "--mode", "autonomous-full", "--max-steps", "1", "--execute"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Autonomous run: completed", stdout.getvalue())
+            docx_path = root / "output" / "docx" / "demo-work" / "articles" / "demo.docx"
+            self.assertTrue(docx_path.exists())
+            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["readiness_claim"], "none")
+            self.assertEqual(payload["executed_steps"][0]["status"], "completed")
+            self.assertIn("export-article-docx", payload["executed_steps"][0]["command"])
 
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

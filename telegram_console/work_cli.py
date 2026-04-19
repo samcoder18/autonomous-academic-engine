@@ -16,6 +16,9 @@ from .action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
 )
+from .autonomous_planner import build_autonomous_plan, format_autonomous_plan
+from .autonomous_policy import AUTONOMOUS_MODES
+from .autonomous_runner import read_autonomous_state, run_autonomous_plan, stop_autonomous_run
 from .article_bundle_state import (
     article_bundle_manifest_path,
     build_article_bundle_state,
@@ -112,6 +115,32 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    autonomous = subparsers.add_parser("autonomous")
+    autonomous_subparsers = autonomous.add_subparsers(dest="autonomous_command", required=True)
+    for autonomous_command in ("plan", "explain"):
+        autonomous_parser = autonomous_subparsers.add_parser(autonomous_command)
+        autonomous_parser.add_argument("--work", dest="work_id")
+        autonomous_parser.add_argument("--mode", choices=AUTONOMOUS_MODES, default="autonomous-safe")
+        autonomous_parser.add_argument("--max-steps", type=int, default=3)
+        autonomous_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    autonomous_run_parser = autonomous_subparsers.add_parser("run")
+    autonomous_run_parser.add_argument("--work", dest="work_id")
+    autonomous_run_parser.add_argument("--mode", choices=AUTONOMOUS_MODES, default="autonomous-safe")
+    autonomous_run_parser.add_argument("--max-steps", type=int, default=3)
+    autonomous_run_parser.add_argument("--dry-run", action="store_true")
+    autonomous_run_parser.add_argument("--execute", action="store_true")
+    autonomous_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    autonomous_status_parser = autonomous_subparsers.add_parser("status")
+    autonomous_status_parser.add_argument("--work", dest="work_id")
+    autonomous_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    autonomous_stop_parser = autonomous_subparsers.add_parser("stop")
+    autonomous_stop_parser.add_argument("--work", dest="work_id")
+    autonomous_stop_parser.add_argument("--reason", default="operator-stop")
+    autonomous_stop_parser.add_argument("--json", action="store_true", dest="as_json")
+
     args = parser.parse_args(argv)
     root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(__file__).resolve().parents[1]
 
@@ -134,10 +163,96 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "autonomous":
+            return autonomous_cli(root_path, args)
     except WorkspaceConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 1
+
+
+def autonomous_cli(root_dir: Path, args: Any) -> int:
+    if args.autonomous_command in {"plan", "explain"}:
+        return autonomous_plan(root_dir, args.work_id, args.mode, args.max_steps, as_json=args.as_json)
+    if args.autonomous_command == "run":
+        return autonomous_run(
+            root_dir,
+            args.work_id,
+            args.mode,
+            args.max_steps,
+            dry_run=args.dry_run,
+            execute=args.execute,
+            as_json=args.as_json,
+        )
+    if args.autonomous_command == "status":
+        return autonomous_status(root_dir, args.work_id, as_json=args.as_json)
+    if args.autonomous_command == "stop":
+        return autonomous_stop(root_dir, args.work_id, args.reason, as_json=args.as_json)
+    return 1
+
+
+def autonomous_plan(root_dir: Path, work_id: str | None, mode: str, max_steps: int, *, as_json: bool = False) -> int:
+    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
+    plan = build_autonomous_plan(work_state=state, mode=mode, max_steps=max_steps)
+    if as_json:
+        print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(format_autonomous_plan(plan))
+    return 0
+
+
+def autonomous_run(
+    root_dir: Path,
+    work_id: str | None,
+    mode: str,
+    max_steps: int,
+    *,
+    dry_run: bool,
+    execute: bool,
+    as_json: bool = False,
+) -> int:
+    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
+    plan = build_autonomous_plan(work_state=state, mode=mode, max_steps=max_steps)
+    run_state = run_autonomous_plan(root_dir=root_dir, plan=plan, dry_run=dry_run or not execute, execute=execute)
+    if as_json:
+        print(json.dumps(run_state, ensure_ascii=False, indent=2))
+    else:
+        print(f"Autonomous run: {run_state.get('status')}")
+        print(f"Mode: {run_state.get('mode')}")
+        print(f"Readiness claim: {run_state.get('readiness_claim')}")
+        if run_state.get("stop_reason"):
+            print(f"Stop reason: {run_state.get('stop_reason')}")
+    return 0
+
+
+def autonomous_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -> int:
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    state = read_autonomous_state(root_dir, work.slug)
+    if as_json:
+        print(json.dumps(state or {}, ensure_ascii=False, indent=2))
+        return 0
+    if not state:
+        print(f"Autonomous status: no state for {work.slug}")
+        return 0
+    print(f"Autonomous status: {state.get('status')}")
+    print(f"Mode: {state.get('mode')}")
+    print(f"Readiness claim: {state.get('readiness_claim')}")
+    if state.get("stop_reason"):
+        print(f"Stop reason: {state.get('stop_reason')}")
+    return 0
+
+
+def autonomous_stop(root_dir: Path, work_id: str | None, reason: str, *, as_json: bool = False) -> int:
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    state = stop_autonomous_run(root_dir, work.slug, reason=reason)
+    if as_json:
+        print(json.dumps(state, ensure_ascii=False, indent=2))
+    else:
+        print(f"Autonomous run: {state.get('status')}")
+        print(f"Stop reason: {state.get('stop_reason')}")
+    return 0
 
 
 def launch_thesis(root_dir: Path, args: Any) -> int:

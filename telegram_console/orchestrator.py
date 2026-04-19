@@ -13,6 +13,7 @@ from .action_specs import execution_contract_from_payload
 from .article_bundle_state import article_bundle_manifest_path, build_article_bundle_state, load_article_bundle_state
 from .article_runtime_signals import extract_article_artifact_signals
 from .contract_gates import evaluate_contract_gates
+from .finalization_engine import evaluate_article_finalization
 from .repair_kernel import Blocker, build_repair_decision, determine_terminal_reason
 from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .thesis_repair_planner import build_thesis_repair_plan
@@ -1401,6 +1402,20 @@ class WorkflowOrchestrator:
                         ),
                     )
                 )
+            finalization_check = runtime_enrichment.get("finalization_check")
+            if isinstance(finalization_check, dict):
+                checkpoints.append(
+                    build_checkpoint(
+                        "finalization-check-evaluated",
+                        status=final_status,
+                        stage=final_stage,
+                        timestamp=finished_at or utc_now(),
+                        message=(
+                            f"{finalization_check.get('status') or 'n/a'}: "
+                            f"{finalization_check.get('finalization_status') or 'n/a'}"
+                        ),
+                    )
+                )
         attachments = build_attachments(
             {
                 "status": status_path,
@@ -1438,6 +1453,7 @@ class WorkflowOrchestrator:
                 terminal_reason=_optional_text(runtime_enrichment.get("terminal_reason")) if runtime_enrichment else None,
                 thesis_repair_plan=runtime_enrichment.get("thesis_repair_plan") if runtime_enrichment else None,
                 contract_gates=runtime_enrichment.get("contract_gates") if runtime_enrichment else None,
+                finalization_check=runtime_enrichment.get("finalization_check") if runtime_enrichment else None,
                 target_resolution=target_resolution if isinstance(target_resolution, dict) else None,
                 checkpoints=checkpoints,
                 attachments=attachments,
@@ -1486,6 +1502,14 @@ class WorkflowOrchestrator:
         current_iteration = self._article_repair_iteration(record.action, previous_state)
         contract = execution_contract_from_payload(manifest.get("execution_contract"))
         contract_gates = self._contract_gate_payloads(contract=contract, work=work, lane="article", manifest=manifest)
+        finalization_check = None
+        if record.action == "finalize":
+            finalization_check = evaluate_article_finalization(
+                bundle=bundle,
+                readiness_status=effective_status,
+                blockers=[item.to_dict() for item in blockers],
+                contract_gates=contract_gates,
+            ).to_dict()
         repair_decision = self._article_repair_decision(
             contract=contract,
             blockers=blockers,
@@ -1530,6 +1554,8 @@ class WorkflowOrchestrator:
             summary = f"{summary} · blockers={blocker_count}"
         if terminal_reason:
             summary = f"{summary} · terminal_reason={terminal_reason}"
+        if isinstance(finalization_check, dict):
+            summary = f"{summary} · finalization={finalization_check.get('finalization_status')}"
         return {
             "article_slug": article_slug,
             "current_phase": updated_state.current_phase,
@@ -1539,6 +1565,7 @@ class WorkflowOrchestrator:
             "repair_iteration": current_iteration,
             "terminal_reason": terminal_reason,
             "contract_gates": contract_gates,
+            "finalization_check": finalization_check,
             "bundle_state_manifest": str(state_path),
             "summary_block": summary_block,
             "summary": summary,

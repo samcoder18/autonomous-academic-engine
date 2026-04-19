@@ -623,6 +623,9 @@ def _compact_runtime_state(records: Iterable[Any], active_run: dict[str, Any] | 
                 else None,
                 "contract_gates": contract_gates,
                 "contract_gate_summary": contract_gate_summary,
+                "finalization_check": payload.get("finalization_check")
+                if isinstance(payload.get("finalization_check"), dict)
+                else None,
             }
         )
         for raw_blocker in record_blockers:

@@ -40,6 +40,7 @@ class RuntimeRecord:
     terminal_reason: str | None = None
     thesis_repair_plan: dict[str, Any] | None = None
     contract_gates: tuple[dict[str, Any], ...] = ()
+    finalization_check: dict[str, Any] | None = None
     target_resolution: dict[str, Any] | None = None
     checkpoints: tuple[dict[str, Any], ...] = ()
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -76,6 +77,7 @@ class RuntimeRecord:
             "terminal_reason": self.terminal_reason,
             "thesis_repair_plan": self.thesis_repair_plan,
             "contract_gates": list(self.contract_gates),
+            "finalization_check": self.finalization_check,
             "target_resolution": self.target_resolution,
             "checkpoints": list(self.checkpoints),
             "attachments": self.attachments,
@@ -164,6 +166,7 @@ def build_runtime_status(
     terminal_reason: str | None = None,
     thesis_repair_plan: dict[str, Any] | None = None,
     contract_gates: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    finalization_check: dict[str, Any] | None = None,
     target_resolution: dict[str, Any] | None = None,
     checkpoints: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     attachments: dict[str, dict[str, Any]] | None = None,
@@ -192,6 +195,7 @@ def build_runtime_status(
         "terminal_reason": terminal_reason,
         "thesis_repair_plan": thesis_repair_plan,
         "contract_gates": list(contract_gates or []),
+        "finalization_check": finalization_check,
         "target_resolution": target_resolution,
         "checkpoints": list(checkpoints or []),
         "attachments": attachments or {},
@@ -288,6 +292,7 @@ def record_from_payload(
         terminal_reason=_optional_text(payload.get("terminal_reason")),
         thesis_repair_plan=payload.get("thesis_repair_plan") if isinstance(payload.get("thesis_repair_plan"), dict) else None,
         contract_gates=tuple(item for item in contract_gates if isinstance(item, dict)),
+        finalization_check=payload.get("finalization_check") if isinstance(payload.get("finalization_check"), dict) else None,
         target_resolution=payload.get("target_resolution") if isinstance(payload.get("target_resolution"), dict) else None,
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},
