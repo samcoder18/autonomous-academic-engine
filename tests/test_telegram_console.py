@@ -32,6 +32,22 @@ from telegram_console.contract_gates import evaluate_contract_gates
 from telegram_console.autonomous_policy import evaluate_autonomous_policy
 from telegram_console.autonomous_planner import build_autonomous_plan
 from telegram_console.finalization_engine import evaluate_article_finalization
+from telegram_console.autonomous_daemon import (
+    acquire_daemon_lock,
+    daemon_lock_path,
+    daemon_state_path,
+    daemon_stop_path,
+    evaluate_daemon_action,
+    heartbeat_daemon_lock,
+    read_daemon_state,
+    read_daemon_stop_request,
+    release_daemon_lock,
+    request_daemon_stop,
+    run_daemon_tick,
+    start_daemon_process,
+    write_daemon_lock,
+    write_daemon_state,
+)
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -3830,6 +3846,297 @@ class FinalizationEngineTests(unittest.TestCase):
         self.assertEqual(result["readiness_claim"], "none")
 
 
+class AutonomousDaemonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        build_fake_repo(self.root)
+        write_sample_standards_registry(self.root)
+        write_sample_normalized_profiles(self.root)
+        self.orchestrator = WorkflowOrchestrator(self.root)
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def work_state(self, work_id: str = TEST_WORK_ID) -> dict[str, object]:
+        return self.orchestrator.get_artifact_status("work", work_id=work_id)
+
+    def test_daemon_state_round_trip_preserves_signals_only_scope(self) -> None:
+        path = write_daemon_state(
+            self.root,
+            TEST_WORK_ID,
+            {
+                "status": "running",
+                "mode": "autonomous-full",
+                "work_id": TEST_WORK_ID,
+            },
+        )
+
+        self.assertEqual(path, daemon_state_path(self.root, TEST_WORK_ID))
+        payload = read_daemon_state(self.root, TEST_WORK_ID)
+        self.assertEqual(payload["kind"], "autonomous-daemon-state")
+        self.assertEqual(payload["version"], "v1")
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["assessment_scope"]["depth"], "signals-only")
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_lock_rejects_active_lock_and_recovers_stale_lock(self) -> None:
+        first = acquire_daemon_lock(self.root, TEST_WORK_ID, mode="autonomous-full", pid=os.getpid())
+        self.assertTrue(first["acquired"])
+        self.assertTrue(daemon_lock_path(self.root, TEST_WORK_ID).exists())
+
+        blocked = acquire_daemon_lock(self.root, TEST_WORK_ID, mode="autonomous-full", pid=os.getpid() + 100000)
+        self.assertFalse(blocked["acquired"])
+        self.assertEqual(blocked["stop_reason"], "daemon-already-running")
+
+        release_daemon_lock(self.root, TEST_WORK_ID)
+        write_daemon_lock(
+            self.root,
+            TEST_WORK_ID,
+            {
+                "kind": "autonomous-daemon-lock",
+                "version": "v1",
+                "work_id": TEST_WORK_ID,
+                "mode": "autonomous-full",
+                "root_dir": str(self.root),
+                "pid": 999999,
+                "started_at": "2026-04-18T10:00:00+00:00",
+                "heartbeat_at": "2026-04-18T10:00:00+00:00",
+            },
+        )
+
+        recovered = acquire_daemon_lock(self.root, TEST_WORK_ID, mode="autonomous-full", pid=os.getpid())
+        self.assertTrue(recovered["acquired"])
+        self.assertTrue(recovered["recovered_stale_lock"])
+        heartbeat = heartbeat_daemon_lock(self.root, TEST_WORK_ID, pid=os.getpid())
+        self.assertEqual(heartbeat["pid"], os.getpid())
+
+    def test_daemon_stop_request_round_trip(self) -> None:
+        path = request_daemon_stop(self.root, TEST_WORK_ID, reason="operator-stop")
+
+        self.assertEqual(path, daemon_stop_path(self.root, TEST_WORK_ID))
+        payload = read_daemon_stop_request(self.root, TEST_WORK_ID)
+        self.assertEqual(payload["kind"], "autonomous-daemon-stop-request")
+        self.assertEqual(payload["reason"], "operator-stop")
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_policy_rejects_placeholder_command(self) -> None:
+        decision = evaluate_daemon_action(
+            work_state=self.work_state(),
+            action={
+                "command": "launch-thesis write-section <section>",
+                "intent": "draft",
+                "lane": "thesis",
+                "target": "<section>",
+            },
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertEqual(decision["stop_reason"], "manual-target-required")
+        self.assertEqual(decision["readiness_claim"], "none")
+
+    def test_daemon_policy_allows_concrete_finalize_without_weakening_p7(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        state = self.work_state()
+        action = {
+            "action_id": "article-finalize",
+            "command": f"launch-academic finalize {TEST_ARTICLE_FINAL.as_posix()}",
+            "intent": "finalize-checklist",
+            "lane": "article",
+            "target": TEST_ARTICLE_FINAL.as_posix(),
+        }
+
+        p7_decision = evaluate_autonomous_policy(work_state=state, action=action, mode="autonomous-full").to_dict()
+        daemon_decision = evaluate_daemon_action(work_state=state, action=action, mode="autonomous-full")
+
+        self.assertEqual(p7_decision["decision"], "requires-confirmation")
+        self.assertEqual(daemon_decision["decision"], "allowed")
+        self.assertEqual(daemon_decision["readiness_claim"], "none")
+
+    def test_daemon_policy_requires_repair_metadata(self) -> None:
+        state = self.work_state()
+
+        decision = evaluate_daemon_action(
+            work_state=state,
+            action={
+                "action_id": "article-repair",
+                "command": f"launch-academic repair {TEST_ARTICLE_DRAFT.as_posix()}",
+                "intent": "repair",
+                "lane": "article",
+                "target": TEST_ARTICLE_DRAFT.as_posix(),
+            },
+            mode="autonomous-full",
+        )
+
+        self.assertEqual(decision["decision"], "blocked")
+        self.assertEqual(decision["stop_reason"], "repair-plan-required")
+
+    def test_daemon_policy_allows_repair_with_runtime_repair_decision(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        write_runtime_status_fixture(
+            self.orchestrator.store.runs_dir / "article-repair-eligible-runtime",
+            record_id="default:20260418-article-review",
+            entity_kind="workflow-run",
+            project_id="default",
+            project_title=self.root.name,
+            project_root=self.root,
+            work_id=TEST_WORK_ID,
+            work_title="Demo work",
+            lane="article",
+            action="review",
+            summary="Article review found a repairable blocker.",
+            blockers=[
+                {
+                    "category": "primary-support",
+                    "code": "unsupported-claim",
+                    "message": "Need primary support.",
+                    "repairable": True,
+                }
+            ],
+            repair_decision={
+                "action": "repair",
+                "reason": "repairable-blockers-available",
+                "repair_iteration": 1,
+            },
+        )
+        state = self.work_state()
+        action = state["suggested_next_action"]
+
+        decision = evaluate_daemon_action(work_state=state, action=action, mode="autonomous-full")
+
+        self.assertEqual(action["action_id"], "article-repair")
+        self.assertEqual(decision["decision"], "allowed")
+        self.assertIn("launch-academic repair", decision["safe_command"])
+
+    def test_daemon_tick_waits_when_active_run_exists(self) -> None:
+        self.orchestrator.store.set_active_run(
+            {
+                "run_id": "default:active",
+                "run_dir": str(self.orchestrator.store.runs_dir / "active"),
+                "pid": os.getpid(),
+                "lane": "article",
+                "action": "review",
+                "started_at": "2026-04-18T10:22:00+00:00",
+                "project_root": str(self.root),
+                "work_id": TEST_WORK_ID,
+                "target": TEST_ARTICLE_DRAFT.as_posix(),
+            }
+        )
+
+        payload = run_daemon_tick(
+            root_dir=self.root,
+            work_id=TEST_WORK_ID,
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(payload["status"], "waiting")
+        self.assertEqual(payload["stop_reason"], "active-run")
+        self.assertEqual(payload["last_decision"]["decision"], "blocked")
+        self.assertIn("active-run", payload["last_decision"]["blocking_categories"])
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_tick_stops_on_placeholder_without_inventing_target(self) -> None:
+        add_empty_work_scaffold(self.root)
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+
+        payload = run_daemon_tick(
+            root_dir=self.root,
+            work_id="empty-work",
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["stop_reason"], "manual-target-required")
+        self.assertEqual(payload["last_command"], "launch-thesis write-section <section> or launch-academic article --topic <topic>")
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_tick_launches_one_concrete_review_run(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+
+        payload = run_daemon_tick(
+            root_dir=self.root,
+            work_id=TEST_WORK_ID,
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(payload["status"], "waiting")
+        self.assertEqual(payload["stop_reason"], "step-started")
+        self.assertIn("launch-academic review", payload["last_command"])
+        self.assertEqual(payload["last_result"]["status"], "started-run")
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_tick_executes_export_after_finalization_check(self) -> None:
+        write_raw_manifest(self.root, "thesis-v1")
+        write_raw_manifest(self.root, "ru-law-article-v1")
+        write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+
+        payload = run_daemon_tick(
+            root_dir=self.root,
+            work_id=TEST_WORK_ID,
+            mode="autonomous-full",
+            max_cycles=5,
+            poll_seconds=0,
+            max_runtime_minutes=10,
+            pid=os.getpid(),
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["stop_reason"], "terminal-export")
+        self.assertIn("export-article-docx", payload["last_command"])
+        self.assertEqual(payload["last_result"]["status"], "completed")
+        self.assertTrue((self.root / "output" / "docx" / TEST_WORK_ID / "articles" / "demo.docx").exists())
+        self.assertEqual(payload["readiness_claim"], "none")
+
+    def test_daemon_start_writes_lock_and_rejects_duplicate(self) -> None:
+        class FakeProcess:
+            pid = 4321
+
+        with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with patch("telegram_console.autonomous_daemon._pid_is_alive", return_value=True):
+                first = start_daemon_process(
+                    root_dir=self.root,
+                    work_id=TEST_WORK_ID,
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                )
+                second = start_daemon_process(
+                    root_dir=self.root,
+                    work_id=TEST_WORK_ID,
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                )
+
+        self.assertEqual(first["status"], "running")
+        self.assertEqual(first["pid"], 4321)
+        self.assertEqual(second["status"], "blocked")
+        self.assertEqual(second["stop_reason"], "daemon-already-running")
+        self.assertEqual(popen.call_count, 1)
+        lock = json.loads(daemon_lock_path(self.root, TEST_WORK_ID).read_text(encoding="utf-8"))
+        self.assertEqual(lock["pid"], 4321)
+        self.assertEqual(lock["work_id"], TEST_WORK_ID)
+
+
 class RepairKernelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -4817,6 +5124,159 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["readiness_claim"], "none")
             self.assertEqual(payload["executed_steps"][0]["status"], "completed")
             self.assertIn("export-article-docx", payload["executed_steps"][0]["command"])
+
+    def test_autonomous_daemon_tick_json_writes_machine_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "autonomous",
+                        "daemon",
+                        "tick",
+                        "--work",
+                        TEST_WORK_ID,
+                        "--mode",
+                        "autonomous-full",
+                        "--poll-seconds",
+                        "0",
+                        "--max-cycles",
+                        "5",
+                        "--max-runtime-minutes",
+                        "10",
+                        "--json",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "autonomous-daemon-state")
+            self.assertEqual(payload["work_id"], TEST_WORK_ID)
+            self.assertEqual(payload["readiness_claim"], "none")
+            self.assertEqual(payload["assessment_scope"]["depth"], "signals-only")
+            self.assertTrue((root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.daemon.json").exists())
+
+    def test_autonomous_daemon_start_status_and_stop_are_json_first(self) -> None:
+        class FakeProcess:
+            pid = 5432
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        [
+                            "autonomous",
+                            "daemon",
+                            "start",
+                            "--work",
+                            TEST_WORK_ID,
+                            "--mode",
+                            "autonomous-full",
+                            "--poll-seconds",
+                            "0",
+                            "--max-cycles",
+                            "5",
+                            "--max-runtime-minutes",
+                            "10",
+                            "--json",
+                        ],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            start_payload = json.loads(stdout.getvalue())
+            self.assertEqual(start_payload["status"], "running")
+            self.assertEqual(start_payload["pid"], 5432)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "daemon", "status", "--work", TEST_WORK_ID, "--json"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            status_payload = json.loads(stdout.getvalue())
+            self.assertEqual(status_payload["status"], "running")
+            self.assertEqual(status_payload["readiness_claim"], "none")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["autonomous", "daemon", "stop", "--work", TEST_WORK_ID, "--reason", "operator-stop", "--json"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            stop_payload = json.loads(stdout.getvalue())
+            self.assertEqual(stop_payload["kind"], "autonomous-daemon-stop-request")
+            self.assertEqual(stop_payload["reason"], "operator-stop")
+            self.assertEqual(stop_payload["readiness_claim"], "none")
+
+    def test_autonomous_daemon_start_refuses_duplicate_with_json_error(self) -> None:
+        class FakeProcess:
+            pid = 6543
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    work_cli_module.main(
+                        [
+                            "autonomous",
+                            "daemon",
+                            "start",
+                            "--work",
+                            TEST_WORK_ID,
+                            "--mode",
+                            "autonomous-full",
+                            "--json",
+                        ],
+                        root_dir=root,
+                    )
+
+                with patch("telegram_console.autonomous_daemon._pid_is_alive", return_value=True):
+                    stdout = StringIO()
+                    stderr = StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = work_cli_module.main(
+                            [
+                                "autonomous",
+                                "daemon",
+                                "start",
+                                "--work",
+                                TEST_WORK_ID,
+                                "--mode",
+                                "autonomous-full",
+                                "--json",
+                            ],
+                            root_dir=root,
+                        )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["stop_reason"], "daemon-already-running")
+            self.assertEqual(payload["readiness_claim"], "none")
 
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -112,7 +112,7 @@ def stop_autonomous_run(root_dir: str | Path, work_id: str, *, reason: str = "op
     return payload
 
 
-def _execute_allowed_command(orchestrator: WorkflowOrchestrator, command: str) -> dict[str, Any]:
+def execute_autonomous_command(orchestrator: WorkflowOrchestrator, command: str) -> dict[str, Any]:
     args = shlex.split(command)
     if not args:
         return {"status": "skipped", "reason": "empty-command"}
@@ -134,3 +134,7 @@ def _execute_allowed_command(orchestrator: WorkflowOrchestrator, command: str) -
         active = orchestrator.start_run("article", args[1], args[2])
         return {"status": "started-run", "command": command, "run_id": active.get("run_id")}
     return {"status": "skipped", "reason": "unsupported-command", "command": command}
+
+
+def _execute_allowed_command(orchestrator: WorkflowOrchestrator, command: str) -> dict[str, Any]:
+    return execute_autonomous_command(orchestrator, command)
