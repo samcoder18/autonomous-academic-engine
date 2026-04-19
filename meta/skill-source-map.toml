@@ -1,0 +1,115 @@
+version = 1
+
+[skills."thesis-workflow-orchestrator"]
+lane = "thesis"
+agent_path = "agents/thesis-workflow-orchestrator.md"
+expected_external_skill_id = "thesis-workflow-orchestrator"
+expected_source_of_truth_path = "agents/thesis-workflow-orchestrator.md"
+
+[skills."thesis-structure-architect"]
+lane = "thesis"
+agent_path = "agents/structure-architect.md"
+expected_external_skill_id = "thesis-structure-architect"
+expected_source_of_truth_path = "agents/structure-architect.md"
+
+[skills."thesis-research-synthesizer"]
+lane = "thesis"
+agent_path = "agents/research-synthesizer.md"
+expected_external_skill_id = "thesis-research-synthesizer"
+expected_source_of_truth_path = "agents/research-synthesizer.md"
+
+[skills."thesis-source-verifier"]
+lane = "thesis"
+agent_path = "agents/source-verifier.md"
+expected_external_skill_id = "thesis-source-verifier"
+expected_source_of_truth_path = "agents/source-verifier.md"
+
+[skills."thesis-draft-writer"]
+lane = "thesis"
+agent_path = "agents/draft-writer.md"
+expected_external_skill_id = "thesis-draft-writer"
+expected_source_of_truth_path = "agents/draft-writer.md"
+
+[skills."thesis-citation-checker"]
+lane = "thesis"
+agent_path = "agents/citation-checker.md"
+expected_external_skill_id = "thesis-citation-checker"
+expected_source_of_truth_path = "agents/citation-checker.md"
+
+[skills."thesis-argument-critic"]
+lane = "thesis"
+agent_path = "agents/argument-critic.md"
+expected_external_skill_id = "thesis-argument-critic"
+expected_source_of_truth_path = "agents/argument-critic.md"
+
+[skills."thesis-style-editor"]
+lane = "thesis"
+agent_path = "agents/style-editor.md"
+expected_external_skill_id = "thesis-style-editor"
+expected_source_of_truth_path = "agents/style-editor.md"
+
+[skills."academic-workflow-orchestrator"]
+lane = "article"
+agent_path = "agents/academic-workflow-orchestrator.md"
+expected_external_skill_id = "academic-workflow-orchestrator"
+expected_source_of_truth_path = "agents/academic-workflow-orchestrator.md"
+
+[skills."academic-intake"]
+lane = "article"
+agent_path = "agents/academic-intake.md"
+expected_external_skill_id = "academic-intake"
+expected_source_of_truth_path = "agents/academic-intake.md"
+
+[skills."academic-source-acquirer"]
+lane = "article"
+agent_path = "agents/academic-source-acquirer.md"
+expected_external_skill_id = "academic-source-acquirer"
+expected_source_of_truth_path = "agents/academic-source-acquirer.md"
+
+[skills."academic-source-verifier"]
+lane = "article"
+agent_path = "agents/academic-source-verifier.md"
+expected_external_skill_id = "academic-source-verifier"
+expected_source_of_truth_path = "agents/academic-source-verifier.md"
+
+[skills."academic-evidence-cartographer"]
+lane = "article"
+agent_path = "agents/academic-evidence-cartographer.md"
+expected_external_skill_id = "academic-evidence-cartographer"
+expected_source_of_truth_path = "agents/academic-evidence-cartographer.md"
+
+[skills."academic-draft-writer"]
+lane = "article"
+agent_path = "agents/academic-draft-writer.md"
+expected_external_skill_id = "academic-draft-writer"
+expected_source_of_truth_path = "agents/academic-draft-writer.md"
+
+[skills."academic-citation-checker"]
+lane = "article"
+agent_path = "agents/academic-citation-checker.md"
+expected_external_skill_id = "academic-citation-checker"
+expected_source_of_truth_path = "agents/academic-citation-checker.md"
+
+[skills."academic-counterargument-critic"]
+lane = "article"
+agent_path = "agents/academic-counterargument-critic.md"
+expected_external_skill_id = "academic-counterargument-critic"
+expected_source_of_truth_path = "agents/academic-counterargument-critic.md"
+
+[skills."academic-submission-evaluator"]
+lane = "article"
+agent_path = "agents/academic-submission-evaluator.md"
+expected_external_skill_id = "academic-submission-evaluator"
+expected_source_of_truth_path = "agents/academic-submission-evaluator.md"
+
+[skills."academic-repair-orchestrator"]
+lane = "article"
+agent_path = "agents/academic-repair-orchestrator.md"
+expected_external_skill_id = "academic-repair-orchestrator"
+expected_source_of_truth_path = "agents/academic-repair-orchestrator.md"
+
+[skills."academic-finalizer"]
+lane = "article"
+agent_path = "agents/academic-finalizer.md"
+expected_external_skill_id = "academic-finalizer"
+expected_source_of_truth_path = "agents/academic-finalizer.md"

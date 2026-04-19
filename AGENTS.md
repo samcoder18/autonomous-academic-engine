@@ -44,6 +44,8 @@ CLI и Telegram runtime могут переключать `active work`.
 ## Формальные skills Codex
 
 Для более формального и автономного запуска эта логика вынесена в skills Codex.
+Repo-first mapping между skills и role docs хранится в [meta/skill-source-map.toml](/Users/albina/дипломная/meta/skill-source-map.toml).
+`agents/*.md` остаются source of truth для reusable role behavior; внешний `SKILL.md` должен явно ссылаться на соответствующий repo-side источник.
 
 ### Thesis skills
 

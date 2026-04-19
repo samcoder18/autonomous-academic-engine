@@ -62,6 +62,11 @@ from telegram_console.autonomous_launchd import (
     DEFAULT_AUTONOMOUS_DAEMON_LABEL,
     AutonomousDaemonLaunchdManager,
 )
+from telegram_console.skill_source_map import (
+    audit_skill_source_map,
+    load_skill_source_map,
+    skills_declared_in_agents,
+)
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -2509,6 +2514,45 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
         self.assertIn("## Output paths", readme_text)
         self.assertIn("meta/master-protocol.md", readme_text)
         self.assertNotIn("## Как работать", readme_text)
+
+
+class SkillSourceMapAuditTests(unittest.TestCase):
+    def test_skill_source_manifest_covers_skills_declared_in_agents(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        declared_skills = set(skills_declared_in_agents(repo_root))
+        manifest_skills = set(load_skill_source_map(repo_root))
+
+        self.assertEqual(declared_skills, manifest_skills)
+
+    def test_skill_source_manifest_entries_reference_existing_agent_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        report = audit_skill_source_map(repo_root)
+
+        self.assertTrue(report.ok, msg=[issue.message for issue in report.issues])
+
+    def test_external_skill_source_check_runs_only_for_present_skill_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tempdir:
+            external_root = Path(tempdir)
+            present_skill = external_root / "thesis-research-synthesizer" / "SKILL.md"
+            write_file(
+                present_skill,
+                "# Thesis Research Synthesizer\n\nNo source mapping yet.\n",
+            )
+
+            report = audit_skill_source_map(repo_root, external_skills_root=external_root)
+
+        issue_codes = {(issue.skill_name, issue.code) for issue in report.issues}
+        self.assertIn(
+            ("thesis-research-synthesizer", "external-source-of-truth-missing"),
+            issue_codes,
+        )
+        self.assertNotIn(
+            ("academic-intake", "external-source-of-truth-missing"),
+            issue_codes,
+        )
 
 
 class WorkspaceTargetResolutionTests(unittest.TestCase):
