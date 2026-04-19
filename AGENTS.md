@@ -83,6 +83,7 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 - `python3 -m telegram_console.work_cli one-shot-thesis` - запускает автономные machine-driven гейты (frontmatter, ГОСТ, DOCX, originality, work-type) и пишет отчёт в `works/<slug>/thesis/reviews/`. Регламент описан в §11 [master-protocol.md](meta/master-protocol.md).
 - `python3 -m telegram_console.work_cli autonomous daemon run [--stuck-after-minutes N]` - запускает long-running автономный цикл с ops-alerts и resource-guards. Операционный канал описан в §11.1 [master-protocol.md](meta/master-protocol.md).
 - `python3 -m telegram_console.work_cli work-status [--json]` - показывает индекс сигналов и следующий безопасный шаг по активной работе.
+- `python3 -m telegram_console.work_cli work init <slug> --artifact-type <type> --title "..." [--topic "..."] [--lanes thesis,article] [--set-default]` - создает новый `works/<slug>/` bundle (`work.toml`, `work-canon.md`, обязательные подпапки lane) и регистрирует его в `workspace.toml`. Новые works полностью изолированы от существующих.
 
 ## Навигация
 

@@ -20,25 +20,49 @@ Reusable workspace для подготовки юридических акаде
 git clone https://github.com/sam111-crypto/VKR.git
 cd VKR
 pip install -e ".[dev]"
-python3 -m unittest discover -s tests -q   # 331 теста, ~11 секунд, offline
+python3 -m unittest discover -s tests -q   # offline, детерминированный
 ```
 
-Запустить machine-driven гейты для активной работы (`biometrics-vkr` по умолчанию):
+Создать новую работу (статью / ВКР / диссертацию) и сразу начать по ней работать:
+
+```bash
+# Статья
+python3 -m telegram_console.work_cli work init smart-contracts-article \
+  --artifact-type article \
+  --title "Правовая природа смарт-контрактов" \
+  --topic "Смарт-контракты в ГК РФ"
+
+# ВКР (бакалавриат) и сразу сделать её активной
+python3 -m telegram_console.work_cli work init my-vkr-2026 \
+  --artifact-type vkr-bachelor \
+  --title "ВКР 2026" \
+  --topic "Тема ВКР" \
+  --set-default
+
+# Кандидатская диссертация с обеими lanes
+python3 -m telegram_console.work_cli work init phd-law \
+  --artifact-type dissertation-candidate \
+  --title "Кандидатская диссертация" \
+  --topic "Тема диссертации" \
+  --lanes thesis,article
+```
+
+Запустить machine-driven гейты по активной работе:
 
 ```bash
 python3 -m telegram_console.work_cli one-shot-thesis --skip-docx
+```
+
+Посмотреть следующий безопасный шаг:
+
+```bash
+python3 -m telegram_console.work_cli work-status
 ```
 
 Сгенерировать фронтматтер ВКР из `works/<slug>/thesis/metadata.toml`:
 
 ```bash
 python3 -m telegram_console.work_cli build-vkr-frontmatter
-```
-
-Посмотреть следующий безопасный шаг для активной работы:
-
-```bash
-python3 -m telegram_console.work_cli work-status
 ```
 
 ## Установка и зависимости
@@ -130,6 +154,13 @@ bash scripts/codex_academic.sh finalize works/biometrics-vkr/articles/final/exam
 bash scripts/assemble_thesis.sh --work biometrics-vkr
 bash scripts/export_docx.sh --work biometrics-vkr
 bash scripts/export_academic_docx.sh --work biometrics-vkr
+
+# Bootstrap a new work bundle
+python3 -m telegram_console.work_cli work init <slug> \
+  --artifact-type {article|vkr|vkr-bachelor|vkr-specialist|master-thesis|dissertation-candidate|dissertation-doctor} \
+  --title "Название" [--topic "Тема"] [--language ru] \
+  [--lanes thesis,article] [--thesis-profile <id>] [--article-profile <id>] \
+  [--set-default] [--json]
 
 # Status + standards
 python3 -m telegram_console.work_cli work-status [--json]

@@ -57,6 +57,12 @@ from .standards import (
     resolve_status_profile,
     sync_standard_profile,
 )
+from .work_bootstrap import (
+    ALL_ARTIFACT_TYPES,
+    WorkBootstrapError,
+    WorkBootstrapRequest,
+    bootstrap_work,
+)
 from .work_state import format_work_state_summary
 from .workspace import (
     TargetResolution,
@@ -164,6 +170,35 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser = subparsers.add_parser("work-status")
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    work_parser = subparsers.add_parser("work")
+    work_subparsers = work_parser.add_subparsers(dest="work_command", required=True)
+
+    work_init_parser = work_subparsers.add_parser("init")
+    work_init_parser.add_argument("slug")
+    work_init_parser.add_argument(
+        "--artifact-type",
+        required=True,
+        choices=sorted(ALL_ARTIFACT_TYPES),
+        dest="artifact_type",
+    )
+    work_init_parser.add_argument("--title", required=True)
+    work_init_parser.add_argument("--topic", default="")
+    work_init_parser.add_argument("--language", default="ru")
+    work_init_parser.add_argument(
+        "--lanes",
+        default=None,
+        help="Comma-separated lanes (e.g. 'thesis' or 'thesis,article'). Defaults by artifact_type.",
+    )
+    work_init_parser.add_argument("--thesis-profile", dest="thesis_profile", default=None)
+    work_init_parser.add_argument("--article-profile", dest="article_profile", default=None)
+    work_init_parser.add_argument(
+        "--set-default",
+        dest="set_default",
+        action="store_true",
+        help="Replace default_work in workspace.toml with the new slug.",
+    )
+    work_init_parser.add_argument("--json", action="store_true", dest="as_json")
 
     skill_source_parser = subparsers.add_parser("skill-source-map")
     skill_source_subparsers = skill_source_parser.add_subparsers(dest="skill_source_command", required=True)
@@ -280,6 +315,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "work":
+            return work_cli(root_path, args)
         if args.command == "skill-source-map":
             return skill_source_map_cli(root_path, args)
         if args.command == "autonomous":
@@ -310,6 +347,68 @@ def autonomous_cli(root_dir: Path, args: Any) -> int:
     if args.autonomous_command == "daemon":
         return autonomous_daemon_cli(root_dir, args)
     return 1
+
+
+def work_cli(root_dir: Path, args: Any) -> int:
+    if args.work_command == "init":
+        return work_init(root_dir, args)
+    return 1
+
+
+def work_init(root_dir: Path, args: Any) -> int:
+    lanes: tuple[str, ...] | None = None
+    if args.lanes:
+        lanes_raw = [lane.strip() for lane in str(args.lanes).split(",") if lane.strip()]
+        if not lanes_raw:
+            print("--lanes must not be empty when provided", file=sys.stderr)
+            return 2
+        lanes = tuple(lanes_raw)
+
+    topic = args.topic.strip() if args.topic else args.title
+    request = WorkBootstrapRequest(
+        slug=args.slug,
+        title=args.title,
+        topic=topic,
+        artifact_type=args.artifact_type,
+        language=args.language,
+        lanes=lanes,
+        thesis_profile=args.thesis_profile,
+        article_profile=args.article_profile,
+        set_default=bool(args.set_default),
+    )
+
+    try:
+        result = bootstrap_work(root_dir, request)
+    except WorkBootstrapError as exc:
+        print(f"work init failed: {exc}", file=sys.stderr)
+        return 2
+
+    payload = {
+        "kind": "work-init",
+        "version": "v1",
+        "slug": result.slug,
+        "work_dir": str(result.work_dir),
+        "work_toml": str(result.work_toml),
+        "work_canon": str(result.work_canon),
+        "workspace_toml": str(result.workspace_toml),
+        "set_default": result.set_default,
+        "default_work": result.default_work_after,
+        "created_dirs": [str(directory) for directory in result.created_dirs],
+    }
+    if getattr(args, "as_json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        rel = result.work_dir.relative_to(root_dir) if result.work_dir.is_absolute() else result.work_dir
+        print(f"Created work `{result.slug}` at {rel}")
+        print(f"  work.toml: {result.work_toml.relative_to(root_dir)}")
+        print(f"  work-canon.md: {result.work_canon.relative_to(root_dir)}")
+        print(f"  registered in: {result.workspace_toml.relative_to(root_dir)}")
+        if result.set_default:
+            print(f"  default_work switched to `{result.default_work_after}`")
+        else:
+            print(f"  default_work remains `{result.default_work_after}`")
+        print("Next step: заполнить work-canon.md и положить источники / бриф в соответствующую lane.")
+    return 0
 
 
 def skill_source_map_cli(root_dir: Path, args: Any) -> int:
