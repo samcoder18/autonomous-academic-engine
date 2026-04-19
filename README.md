@@ -42,6 +42,7 @@
 
 - `works/<slug>/thesis/chapters/`
 - `works/<slug>/thesis/sources/`
+- `works/<slug>/thesis/ledgers/`
 - `works/<slug>/thesis/manuscript/sections/`
 - `works/<slug>/thesis/reviews/`
 - `works/<slug>/thesis/sync/`
@@ -55,21 +56,12 @@
 - `works/<slug>/articles/reviews/`
 - `works/<slug>/articles/final/`
 
-## Как работать
+## Операционные ориентиры
 
-### Thesis lane
-
-1. Свериться с [workspace.toml](/Users/albina/дипломная/workspace.toml), [AGENTS.md](/Users/albina/дипломная/AGENTS.md) и [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
-2. Открыть `works/<slug>/work.toml` и `works/<slug>/work-canon.md`.
-3. Писать thesis-текст только в `works/<slug>/thesis/manuscript/sections/`.
-4. После заметных изменений секции пересобирать manuscript через `scripts/assemble_thesis.sh --work <slug>`.
-5. Для Word-версии использовать `scripts/export_docx.sh --work <slug>`.
-
-### Article lane
-
-1. Открыть `works/<slug>/work.toml` и profile в `meta/standards/normalized/`.
-2. Вести article bundle только внутри `works/<slug>/articles/`.
-3. Финализировать статью и DOCX через `scripts/codex_academic.sh` и `scripts/export_academic_docx.sh --work <slug>`.
+- Детальный workflow-reglament для thesis lane и article lane живет только в [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
+- Индекс ролей, launcher links и hard rules живут в [AGENTS.md](/Users/albina/дипломная/AGENTS.md).
+- Канонический thesis-текст редактируется только в `works/<slug>/thesis/manuscript/sections/`.
+- Article bundle ведется только в `works/<slug>/articles/`.
 
 ## Launcher
 

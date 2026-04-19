@@ -2481,6 +2481,36 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
         self.assertIn("related_ledger_path", template_text)
 
 
+class DocumentationOwnershipContractTests(unittest.TestCase):
+    def test_master_protocol_keeps_detailed_thesis_flow_with_ledger_step(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        protocol_text = (repo_root / "meta" / "master-protocol.md").read_text(encoding="utf-8")
+
+        self.assertIn("Базовая цепочка для thesis lane", protocol_text)
+        self.assertIn("Evidence ledger как claim-level handoff", protocol_text)
+        self.assertIn("source package -> evidence ledger -> verification", protocol_text)
+
+    def test_agents_is_index_and_points_process_back_to_master_protocol(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        agents_text = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+
+        self.assertIn("## Агентные роли", agents_text)
+        self.assertIn("## Launcher", agents_text)
+        self.assertIn("## Жесткие правила", agents_text)
+        self.assertIn("meta/master-protocol.md", agents_text)
+        self.assertNotIn("## Базовый порядок работы", agents_text)
+
+    def test_readme_stays_operational_and_links_detailed_process_to_master_protocol(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        readme_text = (repo_root / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("## Установка и зависимости", readme_text)
+        self.assertIn("## Launcher", readme_text)
+        self.assertIn("## Output paths", readme_text)
+        self.assertIn("meta/master-protocol.md", readme_text)
+        self.assertNotIn("## Как работать", readme_text)
+
+
 class WorkspaceTargetResolutionTests(unittest.TestCase):
     def test_resolve_target_for_action_marks_thesis_legacy_root_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

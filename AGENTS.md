@@ -78,32 +78,10 @@ CLI и Telegram runtime могут переключать `active work`.
 - [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh) - экспортирует thesis DOCX выбранной работы.
 - [scripts/export_academic_docx.sh](/Users/albina/дипломная/scripts/export_academic_docx.sh) - экспортирует article DOCX выбранной работы.
 
-## Базовый порядок работы
+## Процесс
 
-### Thesis lane
-
-1. Открыть `workspace.toml` и выбрать `active work`.
-2. Свериться с `works/<slug>/work.toml` и `works/<slug>/work-canon.md`.
-3. Построить структуру фрагмента.
-4. Собрать и сжать пакет источников.
-5. Проверить источники и актуальность норм.
-6. Написать черновик только по проверенным опорам.
-7. Проверить ссылки, аргументацию и стиль.
-8. При необходимости пересобрать manuscript и экспортировать DOCX.
-
-### Article lane
-
-1. Выбрать `active work`.
-2. Открыть `works/<slug>/work.toml` и relevant publication profile.
-3. Нормализовать тему в article brief.
-4. Собрать и верифицировать evidence-pack.
-5. Построить claim map и coverage map.
-6. Написать draft только по verified evidence.
-7. Прогнать citation pass, counterargument critique и evaluator.
-8. При необходимости провести ограниченный repair loop.
-9. Собрать final markdown, checklist и DOCX без ложного заявления формальной готовности.
-
-Пропуск шага допустим только когда это явно безопасно и зафиксировано в рабочем следе соответствующего lane.
+- Детальный процесс для thesis lane и article lane хранится только в [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
+- При изменении регламента обновляй master protocol как единственный процессный source of truth, а здесь оставляй только роли, launcher index и hard rules.
 
 ## Жесткие правила
 
