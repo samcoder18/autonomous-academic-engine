@@ -2590,6 +2590,84 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
         self.assertIn("false attribution", verifier_text.casefold())
         self.assertIn("support_scope", verifier_text)
 
+    def test_master_protocol_declares_source_taxonomy_triangulation_and_gap_rules(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        protocol_text = (repo_root / "meta" / "master-protocol.md").read_text(encoding="utf-8")
+
+        for taxonomy_label in (
+            "primary-normative",
+            "official-guidance",
+            "court-decision",
+            "empirical",
+            "secondary-doctrine",
+            "news",
+            "commentary",
+        ):
+            self.assertIn(taxonomy_label, protocol_text)
+        self.assertIn("triangulation", protocol_text.casefold())
+        self.assertIn("stats metadata", protocol_text.casefold())
+        self.assertIn("foreign-law", protocol_text.casefold())
+        self.assertIn("research gaps", protocol_text.casefold())
+
+    def test_research_docs_require_taxonomy_triangulation_and_gap_tracking(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        research_text = (repo_root / "agents" / "research-synthesizer.md").read_text(encoding="utf-8")
+        acquirer_text = (repo_root / "agents" / "academic-source-acquirer.md").read_text(encoding="utf-8")
+        cartographer_text = (repo_root / "agents" / "academic-evidence-cartographer.md").read_text(encoding="utf-8")
+
+        self.assertIn("primary-normative", research_text)
+        self.assertIn("triangulation", research_text.casefold())
+        self.assertIn("research gaps", research_text.casefold())
+
+        self.assertIn("official-guidance", acquirer_text)
+        self.assertIn("stats metadata", acquirer_text.casefold())
+        self.assertIn("foreign-law", acquirer_text.casefold())
+
+        self.assertIn("claim passport", cartographer_text.casefold())
+        self.assertIn("coverage", cartographer_text.casefold())
+        self.assertIn("research gaps", cartographer_text.casefold())
+
+    def test_drafting_and_style_docs_keep_verified_evidence_boundaries(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        thesis_draft = (repo_root / "agents" / "draft-writer.md").read_text(encoding="utf-8")
+        article_draft = (repo_root / "agents" / "academic-draft-writer.md").read_text(encoding="utf-8")
+        style_editor = (repo_root / "agents" / "style-editor.md").read_text(encoding="utf-8")
+
+        self.assertIn("verified evidence envelope", thesis_draft.casefold())
+        self.assertIn("verified evidence envelope", article_draft.casefold())
+        self.assertIn("only form", style_editor.casefold())
+        self.assertIn("substantive strengthening", style_editor.casefold())
+
+    def test_critic_and_citation_docs_keep_role_boundaries(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        argument_critic = (repo_root / "agents" / "argument-critic.md").read_text(encoding="utf-8")
+        counterargument_critic = (repo_root / "agents" / "academic-counterargument-critic.md").read_text(encoding="utf-8")
+        citation_checker = (repo_root / "agents" / "citation-checker.md").read_text(encoding="utf-8")
+        academic_citation_checker = (repo_root / "agents" / "academic-citation-checker.md").read_text(encoding="utf-8")
+
+        self.assertIn("not replace verifier", argument_critic.casefold())
+        self.assertIn("skeleton pass", argument_critic.casefold())
+        self.assertIn("local paragraph pass", argument_critic.casefold())
+        self.assertIn("not replace verifier", counterargument_critic.casefold())
+        self.assertIn("false attribution", citation_checker.casefold())
+        self.assertIn("false attribution", academic_citation_checker.casefold())
+
+    def test_new_prose_support_templates_exist_and_declare_scope(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        glossary_path = repo_root / "templates" / "work-glossary.md"
+        micro_review_path = repo_root / "templates" / "paragraph-micro-review.md"
+
+        self.assertTrue(glossary_path.exists())
+        self.assertTrue(micro_review_path.exists())
+
+        glossary_text = glossary_path.read_text(encoding="utf-8")
+        micro_review_text = micro_review_path.read_text(encoding="utf-8")
+
+        self.assertIn("term", glossary_text.casefold())
+        self.assertIn("preferred usage", glossary_text.casefold())
+        self.assertIn("paragraph", micro_review_text.casefold())
+        self.assertIn("generic prose pattern", micro_review_text.casefold())
+
 
 class SkillSourceMapAuditTests(unittest.TestCase):
     def test_skill_source_manifest_covers_skills_declared_in_agents(self) -> None:

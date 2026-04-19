@@ -75,13 +75,18 @@
 - Источники собираются пакетами, а не всем массивом сразу.
 - Для новой главы оптимален пакет 6-12 профильных источников; шире - только при явной необходимости.
 - Для каждого источника фиксируются роль, полезные тезисы, пределы использования и дата проверки.
+- Базовая source taxonomy для thesis и article lane: `primary-normative`, `official-guidance`, `court-decision`, `empirical`, `secondary-doctrine`, `news`, `commentary`.
 - Для thesis lane после source package и до drafting желательно вести evidence ledger с `claim_id`, типом утверждения, статусом проверки, ссылкой на элемент source package и датой проверки первички.
 - Для норм, судебной практики, статистики и других динамичных данных приоритет всегда за первичными и официальными источниками.
 - Для article lane это правило действует как жесткий default: официальный и первичный источник является финальной authority для права, практики, регуляторики и статистики.
+- До сильного синтеза нужна triangulation: как минимум сопоставление первички с еще одним релевантным слоем, если тезис не исчерпывается одним источником.
+- Для статистики обязательно фиксируются minimum stats metadata: период, территория, метод или провайдер, дата выгрузки, предел интерпретации.
+- Для foreign-law и comparative claims нужен foreign-law official-text rule: опора на официальный текст нормы, решения или guidance, а не только на secondary summary.
 - Если доступен первоисточник, нельзя ограничиваться пересказом или обзором.
 - Неофициальные правовые базы и агрегаторы допустимы только как навигация к первоисточнику.
 - Любое сильное утверждение должно быть либо проверено, либо явно помечено как аналитический вывод.
 - Нельзя придумывать страницы, цитаты, реквизиты и "удобные" формулировки, которых нет в источнике.
+- Research gaps фиксируются явно и не замещаются filler prose или широкими общими абзацами.
 
 ## 6. Стандарт качества текста
 
@@ -90,6 +95,10 @@
 - Проект не предназначен для обхода антиплагиата, ИИ-детекторов и иных проверок на самостоятельность.
 - Если абзац звучит как универсальный шаблон, его нужно переписать в более предметной юридической логике.
 - Красивый стиль не может заменять доказательность и корректную ссылку.
+- Draft writer работает только внутри verified evidence envelope.
+- Style editor меняет только форму; substantive strengthening возвращается в draft/verifier loop.
+- Critic помогает увидеть логические и композиционные проблемы, но не подменяет verification.
+- Citation checking отдельно проверяет false attribution risk.
 - Для article lane финальный verdict должен прямо различать `submission-ready`, `strong-draft` и `strong-draft-with-blockers`.
 - Если primary support недостаточен, результат обязан быть понижен в статусе, а не отредактирован до видимости готовности.
 
@@ -97,6 +106,7 @@
 
 - Основной рабочий текст редактируется только в `works/<slug>/thesis/manuscript/sections/`.
 - Перед drafting сильные тезисы по возможности проходят через `source package -> evidence ledger -> verification`.
+- Для больших thesis sections (`> 8 manuscript pages` или `5+ subsections`) критика идет в два прохода: `skeleton pass`, затем `local paragraph pass`.
 - Сноски оформляются как Markdown-сноски в конце соответствующей секции.
 - После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](/Users/albina/дипломная/scripts/assemble_thesis.sh) с `--work`.
 - Для Word-версии со сносками используется [scripts/export_docx.sh](/Users/albina/дипломная/scripts/export_docx.sh) с `--work`.
@@ -116,6 +126,7 @@
 ## 9. Листы проверки и синхронизации
 
 - Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](/Users/albina/дипломная/templates/chapter-review-sheet.md).
+- Для больших thesis sections можно дополнительно вести section-scoped `*-glossary.md` и `*-micro-review.md` в `works/<slug>/thesis/reviews/`.
 - После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](/Users/albina/дипломная/templates/chat-sync.md).
 - Если этап агентной цепочки был безопасно пропущен, причина этого фиксируется именно в sync-следе работы.
 - Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](/Users/albina/дипломная/templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
