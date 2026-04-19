@@ -60,6 +60,10 @@
   - knowledge_date:
   - verification_result:
   - false_attribution_check:
+  - period:
+  - territory:
+  - method:
+  - provider:
 
 ### Источник 2
 
@@ -84,6 +88,10 @@
   - knowledge_date:
   - verification_result:
   - false_attribution_check:
+  - period:
+  - territory:
+  - method:
+  - provider:
 
 ## 5. Итог по пакету
 

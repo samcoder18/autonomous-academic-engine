@@ -5,9 +5,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .contract_gates import blocking_gate_blockers
+from .quality_advisories import QUALITY_ADVISORY_DOES_NOT_REPLACE
 
 
 WORK_STATE_VERSION = "v1"
+QUALITY_STATUS_SEVERITY = {
+    "missing": 0,
+    "clear": 1,
+    "limited": 2,
+    "needs-attention": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -369,8 +376,8 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
     if isinstance(quality_advisories, dict):
         thesis_quality = quality_advisories.get("thesis") if isinstance(quality_advisories.get("thesis"), dict) else {}
         article_quality = quality_advisories.get("article") if isinstance(quality_advisories.get("article"), dict) else {}
-        thesis_status = _optional_text((thesis_quality.get("verification_advisory") or {}).get("status"))
-        article_status = _optional_text((article_quality.get("verification_advisory") or {}).get("status"))
+        thesis_status = _lane_quality_summary_status(thesis_quality)
+        article_status = _lane_quality_summary_status(article_quality)
         if thesis_status or article_status:
             lines.append(
                 "Quality advisory: "
@@ -611,11 +618,13 @@ def _compact_quality_advisories(root_dir: Path, advisories: dict[str, Any] | Non
             "version": "v1",
             "advisory_only": True,
             "readiness_claim": "none",
-            "does_not_replace": [],
+            "does_not_replace": list(QUALITY_ADVISORY_DOES_NOT_REPLACE),
             "thesis": _compact_lane_quality_advisory(root_dir, None),
             "article": _compact_lane_quality_advisory(root_dir, None),
         }
     result = dict(advisories)
+    if not isinstance(result.get("does_not_replace"), list) or not result.get("does_not_replace"):
+        result["does_not_replace"] = list(QUALITY_ADVISORY_DOES_NOT_REPLACE)
     result["thesis"] = _compact_lane_quality_advisory(root_dir, advisories.get("thesis"))
     result["article"] = _compact_lane_quality_advisory(root_dir, advisories.get("article"))
     return result
@@ -644,6 +653,17 @@ def _compact_lane_quality_advisory(root_dir: Path, payload: Any) -> dict[str, An
         compact_advisory["issues"] = issues
         result[key] = compact_advisory
     return result
+
+
+def _lane_quality_summary_status(payload: dict[str, Any]) -> str:
+    statuses = [
+        _optional_text(((payload.get(key) if isinstance(payload.get(key), dict) else {}).get("status")))
+        for key in ("verification_advisory", "source_mix_advisory", "prose_advisory")
+    ]
+    available = [status for status in statuses if status]
+    if not available:
+        return "missing"
+    return max(available, key=lambda status: QUALITY_STATUS_SEVERITY.get(status, -1))
 
 
 def _compact_standards_state(profiles: dict[str, Any]) -> dict[str, Any]:

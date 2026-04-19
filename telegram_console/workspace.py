@@ -469,6 +469,41 @@ def article_bundle_paths(work: WorkConfig, slug: str) -> dict[str, Path]:
     }
 
 
+def discover_article_slugs(work: WorkConfig) -> list[str]:
+    if not work.article:
+        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает article lane.")
+    slugs: set[str] = set()
+    folders = (
+        work.article.briefs_dir,
+        work.article.evidence_dir,
+        work.article.claim_maps_dir,
+        work.article.drafts_dir,
+        work.article.reviews_dir,
+        work.article.final_dir,
+        work.article.paths.output_docx_dir,
+        work.article.paths.root_dir / "runs",
+    )
+    for folder in folders:
+        if not folder.exists():
+            continue
+        for path in folder.glob("*"):
+            if path.name.startswith(".") or path.name == "README.md":
+                continue
+            if path.suffix == ".json" and path.name.endswith(".bundle.json"):
+                slugs.add(path.name[: -len(".bundle.json")])
+                continue
+            if path.suffix == ".docx":
+                slugs.add(path.stem)
+                continue
+            if path.suffix != ".md":
+                continue
+            stem = path.stem
+            if stem.endswith("-checklist"):
+                stem = stem[: -len("-checklist")]
+            slugs.add(stem)
+    return sorted(slugs)
+
+
 def relative_to_workspace(workspace: WorkspaceConfig, path: Path) -> str:
     return path.resolve().relative_to(workspace.root_dir).as_posix()
 

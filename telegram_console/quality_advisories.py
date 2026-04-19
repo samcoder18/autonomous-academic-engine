@@ -5,7 +5,7 @@ from typing import Iterable
 import re
 
 from .guarded_prose import extract_guarded_prose_matches, load_guarded_prose_rules
-from .workspace import WorkConfig
+from .workspace import WorkConfig, article_bundle_paths, discover_article_slugs
 
 
 LEGACY_LEDGER_FIELDS = {
@@ -81,8 +81,12 @@ CLAIM_FIELD_ALIASES = {
     "false_attribution_check": "false_attribution_check",
     "source ids": "source_ids",
     "source id": "source_id",
+    "supported claim ids": "supported_claim_ids",
+    "supported claim id": "supported_claim_ids",
     "source class": "source_class",
     "source role": "source_role",
+    "url or repository": "source_url",
+    "source url": "source_url",
     "period": "period",
     "territory": "territory",
     "method": "method",
@@ -105,6 +109,52 @@ PROSE_RULE_FLAG_MAP = {
     "guarded-prose-generic-prose-pattern": "generic_prose_pattern",
     "guarded-prose-empty-emphasis": "empty_emphasis",
 }
+QUALITY_ADVISORY_DOES_NOT_REPLACE = [
+    "source-verification",
+    "citation-checking",
+    "contract-gates",
+    "finalization-engine",
+]
+NON_FOREIGN_JURISDICTIONS = {
+    "",
+    "ru",
+    "russia",
+    "россия",
+    "national",
+    "comparative",
+    "domestic",
+    "local",
+    "general",
+    "mixed",
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "unspecified",
+}
+FOREIGN_JURISDICTION_CODES = {
+    "eu",
+    "eea",
+    "us",
+    "usa",
+    "uk",
+    "gb",
+    "kz",
+    "by",
+    "ua",
+    "de",
+    "fr",
+    "it",
+    "es",
+    "pl",
+    "cn",
+    "jp",
+    "in",
+    "br",
+    "ca",
+    "au",
+    "tr",
+}
 
 
 def build_quality_advisories(work: WorkConfig) -> dict[str, object]:
@@ -113,12 +163,7 @@ def build_quality_advisories(work: WorkConfig) -> dict[str, object]:
         "version": "v1",
         "advisory_only": True,
         "readiness_claim": "none",
-        "does_not_replace": [
-            "source-verification",
-            "citation-checking",
-            "contract-gates",
-            "finalization-engine",
-        ],
+        "does_not_replace": list(QUALITY_ADVISORY_DOES_NOT_REPLACE),
         "thesis": _build_thesis_quality_advisory(work),
         "article": _build_article_quality_advisory(work),
     }
@@ -173,11 +218,13 @@ def _build_thesis_quality_advisory(work: WorkConfig) -> dict[str, object]:
             prose_texts.append(("paragraph-micro-review", text))
             micro_review_records.extend(_parse_markdown_records(text, artifact_path=path))
 
-    coverage = "missing"
-    if has_expanded_ledger and verification_log_records:
-        coverage = "full"
-    elif ledger_records or has_log_file:
-        coverage = "limited"
+    coverage = _thesis_quality_coverage(
+        ledger_records=ledger_records,
+        verification_log_records=verification_log_records,
+        has_expanded_ledger=has_expanded_ledger,
+        has_legacy_ledger=has_legacy_ledger,
+        has_log_file=has_log_file,
+    )
 
     verification_advisory = _build_verification_advisory(
         records=[*ledger_records, *verification_log_records],
@@ -207,35 +254,18 @@ def _build_article_quality_advisory(work: WorkConfig) -> dict[str, object]:
 
     sources: list[str] = []
     claim_records: list[dict[str, str]] = []
-    evidence_seen = False
-    claim_map_seen = False
+    bundle_coverages: list[str] = []
+    for slug in discover_article_slugs(work):
+        bundle = article_bundle_paths(work, slug)
+        bundle_payload = _article_bundle_quality_payload(bundle, slug=slug)
+        if bundle_payload is None:
+            continue
+        for source_name in bundle_payload["sources"]:
+            _append_source(sources, source_name)
+        bundle_coverages.append(bundle_payload["coverage"])
+        claim_records.extend(bundle_payload["claim_records"])
 
-    if work.article.evidence_dir.exists():
-        for path in sorted(work.article.evidence_dir.glob("*.md")):
-            evidence_seen = True
-            _append_source(sources, "evidence-pack")
-            text = path.read_text(encoding="utf-8")
-            records = _parse_markdown_records(text, artifact_path=path)
-            for record in records:
-                if _has_claim_passport_shape(record):
-                    claim_records.append(record)
-
-    if work.article.claim_maps_dir.exists():
-        for path in sorted(work.article.claim_maps_dir.glob("*.md")):
-            claim_map_seen = True
-            _append_source(sources, "claim-map")
-            text = path.read_text(encoding="utf-8")
-            records = _parse_markdown_records(text, artifact_path=path)
-            for record in records:
-                if _has_claim_passport_shape(record):
-                    claim_records.append(record)
-
-    coverage = "missing"
-    record_sources = {record.get("artifact_path") for record in claim_records if record.get("artifact_path")}
-    if evidence_seen and claim_map_seen and len(record_sources) >= 2:
-        coverage = "full"
-    elif evidence_seen or claim_map_seen:
-        coverage = "limited"
+    coverage = _aggregate_bundle_coverages(bundle_coverages)
 
     return {
         "coverage": coverage,
@@ -244,6 +274,167 @@ def _build_article_quality_advisory(work: WorkConfig) -> dict[str, object]:
         "source_mix_advisory": _build_source_mix_advisory(records=claim_records, base_status=coverage),
         "prose_advisory": _build_advisory_payload("missing", []),
     }
+
+
+def _thesis_quality_coverage(
+    *,
+    ledger_records: list[dict[str, str]],
+    verification_log_records: list[dict[str, str]],
+    has_expanded_ledger: bool,
+    has_legacy_ledger: bool,
+    has_log_file: bool,
+) -> str:
+    if not ledger_records and not has_log_file:
+        return "missing"
+    if not has_expanded_ledger:
+        return "limited" if ledger_records or has_log_file else "missing"
+    if has_legacy_ledger or not has_log_file or not verification_log_records:
+        return "limited"
+
+    ledger_claim_ids = _structured_claim_ids(record for record in ledger_records if record.get("record_format") == "expanded")
+    verification_claim_ids = _structured_claim_ids(verification_log_records)
+    if not ledger_claim_ids or ledger_claim_ids != verification_claim_ids:
+        return "limited"
+    return "full"
+
+
+def _article_bundle_quality_payload(bundle: dict[str, Path], *, slug: str) -> dict[str, object] | None:
+    evidence_path = bundle["evidence_pack"]
+    claim_map_path = bundle["claim_map"]
+    evidence_present = evidence_path.exists()
+    claim_map_present = claim_map_path.exists()
+    if not evidence_present and not claim_map_present:
+        return None
+
+    sources: list[str] = []
+    evidence_claim_records: list[dict[str, str]] = []
+    claim_map_records: list[dict[str, str]] = []
+
+    if evidence_present:
+        _append_source(sources, "evidence-pack")
+        evidence_records = _parse_artifact_records(evidence_path)
+        source_register_records = [record for record in evidence_records if _is_source_register_record(record)]
+        evidence_claim_records = [record for record in evidence_records if _has_claim_passport_shape(record)]
+        evidence_claim_records = _merge_source_register_metadata(
+            claim_records=evidence_claim_records,
+            source_records=source_register_records,
+        )
+
+    if claim_map_present:
+        _append_source(sources, "claim-map")
+        claim_map_records = [record for record in _parse_artifact_records(claim_map_path) if _has_claim_passport_shape(record)]
+
+    coverage = "limited"
+    if evidence_present and claim_map_present and evidence_claim_records and claim_map_records:
+        coverage = "full"
+
+    return {
+        "slug": slug,
+        "sources": sources,
+        "coverage": coverage,
+        "claim_records": _merge_claim_records([*evidence_claim_records, *claim_map_records]),
+    }
+
+
+def _aggregate_bundle_coverages(bundle_coverages: Iterable[str]) -> str:
+    coverages = [coverage for coverage in bundle_coverages if coverage]
+    if not coverages:
+        return "missing"
+    if any(coverage == "limited" for coverage in coverages):
+        return "limited"
+    if all(coverage == "full" for coverage in coverages):
+        return "full"
+    return "limited"
+
+
+def _parse_artifact_records(path: Path) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for record in _parse_markdown_records(path.read_text(encoding="utf-8"), artifact_path=path):
+        records.append(
+            _normalize_claim_record(
+                record,
+                artifact_path=path,
+                record_format=record.get("record_format") or "expanded",
+            )
+        )
+    return records
+
+
+def _structured_claim_ids(records: Iterable[dict[str, str]]) -> set[str]:
+    return {
+        claim_id
+        for claim_id in (_normalize_inline_value(record.get("claim_id", "")) for record in records)
+        if claim_id
+    }
+
+
+def _merge_claim_records(records: Iterable[dict[str, str]]) -> list[dict[str, str]]:
+    merged: dict[str, dict[str, str]] = {}
+    anonymous: list[dict[str, str]] = []
+    for record in records:
+        claim_id = _normalize_inline_value(record.get("claim_id", ""))
+        if not claim_id:
+            anonymous.append(dict(record))
+            continue
+        current = merged.get(claim_id)
+        if current is None:
+            merged[claim_id] = dict(record)
+            continue
+        for key, value in record.items():
+            if value and not current.get(key):
+                current[key] = value
+    return [*merged.values(), *anonymous]
+
+
+def _merge_source_register_metadata(
+    *,
+    claim_records: Iterable[dict[str, str]],
+    source_records: Iterable[dict[str, str]],
+) -> list[dict[str, str]]:
+    sources_by_id: dict[str, dict[str, str]] = {}
+    sources_by_claim: dict[str, list[dict[str, str]]] = {}
+    for source_record in source_records:
+        source_id = _normalized_text(source_record.get("source_id"))
+        if source_id:
+            sources_by_id[source_id] = source_record
+        for claim_id in _split_multi_value(source_record.get("supported_claim_ids")):
+            sources_by_claim.setdefault(claim_id, []).append(source_record)
+
+    merged_records: list[dict[str, str]] = []
+    for claim_record in claim_records:
+        merged = dict(claim_record)
+        related_sources: list[dict[str, str]] = []
+        for source_id in _split_multi_value(claim_record.get("source_ids")):
+            source = sources_by_id.get(_normalized_text(source_id))
+            if source and source not in related_sources:
+                related_sources.append(source)
+        claim_id = _normalize_inline_value(claim_record.get("claim_id", ""))
+        for source in sources_by_claim.get(claim_id, []):
+            if source not in related_sources:
+                related_sources.append(source)
+        for field in STATS_METADATA_FIELDS:
+            if merged.get(field):
+                continue
+            for source in related_sources:
+                value = source.get(field)
+                if value:
+                    merged[field] = value
+                    break
+        merged_records.append(merged)
+    return merged_records
+
+
+def _is_source_register_record(record: dict[str, str]) -> bool:
+    return any(
+        record.get(field)
+        for field in (
+            "source_id",
+            "supported_claim_ids",
+            "source_class",
+            "source_role",
+            "source_url",
+        )
+    )
 
 
 def _build_verification_advisory(
@@ -351,6 +542,11 @@ def _build_prose_advisory(
 
 def _build_advisory_payload(base_status: str, issues: list[dict[str, str]]) -> dict[str, object]:
     deduped = _dedupe_issues(issues)
+    flags: list[str] = []
+    for item in deduped:
+        flag = str(item.get("flag") or "")
+        if flag and flag not in flags:
+            flags.append(flag)
     if base_status == "missing":
         status = "missing"
     elif deduped:
@@ -362,7 +558,7 @@ def _build_advisory_payload(base_status: str, issues: list[dict[str, str]]) -> d
     return {
         "status": status,
         "issue_count": len(deduped),
-        "flags": [item["flag"] for item in deduped],
+        "flags": flags,
         "issues": deduped,
     }
 
@@ -489,10 +685,12 @@ def _dedupe_issues(issues: Iterable[dict[str, str]]) -> list[dict[str, str]]:
     deduped: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for item in issues:
+        claim_marker = str(item.get("claim_id") or "")
+        artifact_marker = str(item.get("artifact_path") or item.get("source") or item.get("field") or "")
         key = (
             str(item.get("flag") or ""),
-            str(item.get("claim_id") or ""),
-            str(item.get("artifact_path") or ""),
+            claim_marker or artifact_marker,
+            str(item.get("message") or ""),
         )
         if key in seen:
             continue
@@ -528,6 +726,13 @@ def _normalize_inline_value(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned)
 
 
+def _split_multi_value(value: str | None) -> list[str]:
+    cleaned = _normalize_inline_value(value or "")
+    if not cleaned:
+        return []
+    return [item.strip() for item in re.split(r"[;,]", cleaned) if item.strip()]
+
+
 def _normalized_text(value: str | None) -> str:
     return _normalize_inline_value(value or "").casefold()
 
@@ -538,7 +743,14 @@ def _looks_truthy(value: str | None) -> bool:
 
 
 def _is_foreign_jurisdiction(value: str) -> bool:
-    normalized = value.casefold()
-    return bool(normalized) and normalized not in {"ru", "russia", "россия"} and (
-        "foreign" in normalized or "eu" in normalized or "us" in normalized or "uk" in normalized or normalized not in {"ru", "russia", "россия"}
-    )
+    normalized = _normalized_text(value)
+    if normalized in NON_FOREIGN_JURISDICTIONS:
+        return False
+    tokens = {token for token in re.split(r"[^a-zа-я0-9]+", normalized) if token}
+    if "foreign" in tokens or "foreign" in normalized or "зарубеж" in normalized:
+        return True
+    if tokens & {"eu", "eea", "european", "европейский", "евросоюз"}:
+        return True
+    if tokens & FOREIGN_JURISDICTION_CODES:
+        return True
+    return normalized in FOREIGN_JURISDICTION_CODES

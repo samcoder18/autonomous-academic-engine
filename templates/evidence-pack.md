@@ -32,6 +32,10 @@
 - Supported claim IDs:
 - Source role:
 - Support strength: `direct` / `partial` / `context only`
+- period:
+- territory:
+- method:
+- provider:
 - Safe for drafting: `yes` / `no`
 - Limitations:
 
@@ -47,6 +51,10 @@
 - Supported claim IDs:
 - Source role:
 - Support strength: `direct` / `partial` / `context only`
+- period:
+- territory:
+- method:
+- provider:
 - Safe for drafting: `yes` / `no`
 - Limitations:
 
@@ -67,6 +75,10 @@
 - support_scope:
 - draft_use:
 - false_attribution_check:
+- period:
+- territory:
+- method:
+- provider:
 - Notes:
 
 ### Claim Passport 2
@@ -84,6 +96,10 @@
 - support_scope:
 - draft_use:
 - false_attribution_check:
+- period:
+- territory:
+- method:
+- provider:
 - Notes:
 
 ## 5. Coverage Summary

@@ -22,6 +22,10 @@
 - statement_precision:
 - knowledge_date:
 - verification_result:
+- period:
+- territory:
+- method:
+- provider:
 - Counterargument to address:
 - Limits or caveats:
 - false_attribution_check:
@@ -41,6 +45,10 @@
 - statement_precision:
 - knowledge_date:
 - verification_result:
+- period:
+- territory:
+- method:
+- provider:
 - Counterargument to address:
 - Limits or caveats:
 - false_attribution_check:

@@ -88,6 +88,7 @@ from telegram_console import run_wrapper as run_wrapper_module
 from telegram_console.standards import load_standards_registry, resolve_standard_profile
 from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
 from telegram_console import work_cli as work_cli_module
+from telegram_console.work_state import build_work_state
 from telegram_console.workspace import (
     article_bundle_paths,
     legacy_target_entries,
@@ -2509,6 +2510,10 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "knowledge_date",
             "verification_result",
             "false_attribution_check",
+            "period",
+            "territory",
+            "method",
+            "provider",
         ):
             self.assertIn(field_name, template_text)
 
@@ -2523,6 +2528,10 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "knowledge_date",
             "verification_result",
             "false_attribution_check",
+            "period",
+            "territory",
+            "method",
+            "provider",
         ):
             self.assertIn(field_name, template_text)
 
@@ -3091,7 +3100,320 @@ class QualityAdvisoryTests(unittest.TestCase):
         self.assertIn("ledger_advisory", payload["thesis"])
         self.assertIn("quality_advisories", payload)
         self.assertEqual(payload["quality_advisories"]["kind"], "quality-advisories")
+        self.assertIn("contract-gates", payload["quality_advisories"]["does_not_replace"])
         self.assertEqual(payload["known_blocker_count"], 0)
+
+    def test_build_work_state_quality_advisory_fallback_stays_informational_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            payload = build_work_state(
+                root_dir=root,
+                work_id="demo-work",
+                work_title="Demo Work",
+                active_lanes=("thesis", "article"),
+                thesis_overview=None,
+                thesis_ledger_advisory=None,
+                article_overview=None,
+                quality_advisories=None,
+                standards_profiles={},
+                runtime_records=[],
+            )
+
+        self.assertEqual(payload["quality_advisories"]["readiness_claim"], "none")
+        self.assertTrue(payload["quality_advisories"]["advisory_only"])
+        self.assertIn("contract-gates", payload["quality_advisories"]["does_not_replace"])
+        self.assertEqual(payload["quality_advisories"]["thesis"]["coverage"], "missing")
+        self.assertEqual(payload["known_blocker_count"], 0)
+
+    def test_build_quality_advisories_marks_multi_bundle_article_coverage_limited_when_claim_map_is_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ### Claim Passport 1
+                    - Claim ID: D-1
+                    - Claim text: Demo empirical claim.
+                    - basis_type: empirical
+                    - primary_identifier: Dataset D
+                    - official_primary_link: https://example.test/d
+                    - jurisdiction: RU
+                    - knowledge_date: 2026-04-19
+                    - verification_result: supported in official text
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Claim Map
+
+                    ### Claim 1
+                    - Claim ID: D-1
+                    - basis_type: empirical
+                    - jurisdiction: RU
+                    - verification_result: supported in official text
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "briefs" / "second.md",
+                "# Second brief\n",
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "second.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ### Claim Passport 1
+                    - Claim ID: S-1
+                    - Claim text: Second bundle claim.
+                    - basis_type: empirical
+                    - primary_identifier: Dataset S
+                    - official_primary_link: https://example.test/s
+                    - jurisdiction: RU
+                    - knowledge_date: 2026-04-19
+                    - verification_result: partial support only
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "second.md",
+                "# Claim Map\n\n### Claim 1\n- Claim ID: S-1\n",
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertEqual(advisories["article"]["coverage"], "limited")
+
+    def test_build_quality_advisories_marks_thesis_coverage_limited_when_verification_log_claims_do_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md",
+                textwrap.dedent(
+                    """\
+                    # Verification log
+
+                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-999 | Art. 99 | https://example.test/other | RU | exact | 2026-04-19 | supported in official text | verified | passed | mismatch |
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertEqual(advisories["thesis"]["coverage"], "limited")
+        self.assertEqual(advisories["thesis"]["verification_advisory"]["status"], "limited")
+
+    def test_build_quality_advisories_uses_stats_metadata_from_claim_passport_or_source_register(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ## 3. Source Register
+
+                    ### Source 1
+
+                    - Source ID: S1
+                    - Supported claim IDs: A-1
+                    - period: 2025
+                    - territory: RU
+                    - method: official statistics
+                    - provider: Rosstat
+
+                    ## 4. Claim Passport Register
+
+                    ### Claim Passport 1
+
+                    - Claim ID: A-1
+                    - Claim text: Empirical claim with source metadata.
+                    - basis_type: empirical
+                    - Source IDs: S1
+                    - primary_identifier: Dataset 1
+                    - official_primary_link: https://example.test/dataset
+                    - jurisdiction: RU
+                    - statement_precision: exact
+                    - knowledge_date: 2026-04-19
+                    - verification_result: supported in official text
+                    - verification_status: verified
+                    - support_scope: direct
+                    - draft_use: safe
+                    - false_attribution_check: passed
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Claim Map
+
+                    ### Claim 1
+                    - Claim ID: A-1
+                    - basis_type: empirical
+                    - jurisdiction: RU
+                    - verification_result: supported in official text
+                    - period: 2025
+                    - territory: RU
+                    - method: official statistics
+                    - provider: Rosstat
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertNotIn("stats_missing_metadata", advisories["article"]["source_mix_advisory"]["flags"])
+
+    def test_build_quality_advisories_does_not_treat_generic_non_ru_labels_as_foreign_law(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ### Claim Passport 1
+                    - Claim ID: A-1
+                    - Claim text: Secondary comparative note.
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: comparative
+                    - verification_result: secondary summary only
+
+                    ### Claim Passport 2
+                    - Claim ID: A-2
+                    - Claim text: Another generic note.
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: national
+                    - verification_result: secondary summary only
+
+                    ### Claim Passport 3
+                    - Claim ID: A-3
+                    - Claim text: Explicit foreign-law note.
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: KZ
+                    - verification_result: secondary summary only
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Claim Map
+
+                    ### Claim 1
+                    - Claim ID: A-1
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: comparative
+                    - verification_result: secondary summary only
+
+                    ### Claim 2
+                    - Claim ID: A-2
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: national
+                    - verification_result: secondary summary only
+
+                    ### Claim 3
+                    - Claim ID: A-3
+                    - basis_type: secondary-doctrine
+                    - jurisdiction: KZ
+                    - verification_result: secondary summary only
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        self.assertEqual(advisories["article"]["source_mix_advisory"]["flags"].count("foreign_law_secondary_only"), 1)
+
+    def test_work_status_quality_summary_uses_worst_advisory_status_per_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-ledger.md",
+                textwrap.dedent(
+                    """\
+                    # Ledger
+
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "ledgers" / "01-introduction-verification-log.md",
+                textwrap.dedent(
+                    """\
+                    # Verification log
+
+                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | passed | ok |
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "thesis" / "reviews" / "01-introduction-micro-review.md",
+                textwrap.dedent(
+                    """\
+                    # Micro review
+
+                    ### Paragraph 1
+                    - paragraph: 1
+                    - generic prose pattern: yes
+                    """
+                ),
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["work-status"], root_dir=root)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("Quality advisory: thesis=full/needs-attention", stdout.getvalue())
 
 
 class WorkspaceTargetResolutionTests(unittest.TestCase):

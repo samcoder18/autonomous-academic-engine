@@ -36,6 +36,7 @@ from .workspace import (
     WorkConfig,
     WorkspaceConfigError,
     article_bundle_paths,
+    discover_article_slugs,
     derive_review_path,
     list_targets_for_action,
     load_work_config,
@@ -162,38 +163,10 @@ class WorkflowOrchestrator:
 
     def list_article_slugs(self, *, work_id: str | None = None) -> list[str]:
         work = self._work(work_id)
-        if not work.article:
-            raise WorkflowError(f"Work `{work.slug}` не поддерживает article lane.")
-        slugs: set[str] = set()
-        folders = (
-            work.article.briefs_dir,
-            work.article.evidence_dir,
-            work.article.claim_maps_dir,
-            work.article.drafts_dir,
-            work.article.reviews_dir,
-            work.article.final_dir,
-            work.article.paths.output_docx_dir,
-            work.article.paths.root_dir / "runs",
-        )
-        for folder in folders:
-            if not folder.exists():
-                continue
-            for path in folder.glob("*"):
-                if path.name.startswith(".") or path.name == "README.md":
-                    continue
-                if path.suffix == ".json" and path.name.endswith(".bundle.json"):
-                    slugs.add(path.name[: -len(".bundle.json")])
-                    continue
-                if path.suffix == ".docx":
-                    slugs.add(path.stem)
-                    continue
-                if path.suffix != ".md":
-                    continue
-                stem = path.stem
-                if stem.endswith("-checklist"):
-                    stem = stem[: -len("-checklist")]
-                slugs.add(stem)
-        return sorted(slugs)
+        try:
+            return discover_article_slugs(work)
+        except WorkspaceConfigError as exc:
+            raise WorkflowError(str(exc)) from exc
 
     def list_thesis_sections(self, *, work_id: str | None = None) -> list[str]:
         work = self._work(work_id)
