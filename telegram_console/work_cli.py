@@ -27,6 +27,11 @@ from .autonomous_daemon import (
     run_daemon_tick,
     start_daemon_process,
 )
+from .autonomous_launchd import (
+    DEFAULT_AUTONOMOUS_DAEMON_LABEL,
+    AutonomousDaemonLaunchdError,
+    AutonomousDaemonLaunchdManager,
+)
 from .autonomous_scheduler import (
     multi_daemon_status_payload,
     read_multi_daemon_stop_request,
@@ -181,6 +186,19 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     daemon_stop_parser.add_argument("--reason", default="operator-stop")
     daemon_stop_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    daemon_launchd_parser = daemon_subparsers.add_parser("launchd")
+    daemon_launchd_subparsers = daemon_launchd_parser.add_subparsers(dest="daemon_launchd_command", required=True)
+    for launchd_command in ("install", "start", "restart", "status", "stop", "uninstall"):
+        launchd_parser = daemon_launchd_subparsers.add_parser(launchd_command)
+        launchd_parser.add_argument("--works", dest="works_scope", default="all")
+        launchd_parser.add_argument("--label")
+        launchd_parser.add_argument("--json", action="store_true", dest="as_json")
+        if launchd_command == "install":
+            launchd_parser.add_argument("--mode", choices=AUTONOMOUS_MODES, default="autonomous-full")
+            launchd_parser.add_argument("--poll-seconds", type=int, default=30)
+            launchd_parser.add_argument("--max-cycles", type=int, default=50)
+            launchd_parser.add_argument("--max-runtime-minutes", type=int, default=240)
+
     args = parser.parse_args(argv)
     root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(__file__).resolve().parents[1]
 
@@ -298,6 +316,8 @@ def autonomous_stop(root_dir: Path, work_id: str | None, reason: str, *, as_json
 
 
 def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
+    if args.daemon_command == "launchd":
+        return autonomous_daemon_launchd_cli(root_dir, args)
     if _optional_text(getattr(args, "works_scope", None)):
         return autonomous_multi_daemon_cli(root_dir, args)
     work_id = _resolve_daemon_work_id(root_dir, args.work_id)
@@ -344,6 +364,49 @@ def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
         _print_daemon_payload(payload, as_json=args.as_json)
         return 0
     return 1
+
+
+def autonomous_daemon_launchd_cli(root_dir: Path, args: Any) -> int:
+    works_scope = _optional_text(getattr(args, "works_scope", None)) or "all"
+    _resolve_daemon_work_ids(root_dir, works_scope)
+    manager = AutonomousDaemonLaunchdManager(
+        root_dir,
+        label=_optional_text(getattr(args, "label", None)) or DEFAULT_AUTONOMOUS_DAEMON_LABEL,
+    )
+    try:
+        if args.daemon_launchd_command == "install":
+            result = manager.install(
+                works_scope=works_scope,
+                mode=args.mode,
+                poll_seconds=args.poll_seconds,
+                max_cycles=args.max_cycles,
+                max_runtime_minutes=args.max_runtime_minutes,
+            )
+            if args.as_json:
+                print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(manager.format_result(result))
+            return 0
+        if args.daemon_launchd_command == "start":
+            status = manager.start(works_scope=works_scope)
+        elif args.daemon_launchd_command == "restart":
+            status = manager.restart(works_scope=works_scope)
+        elif args.daemon_launchd_command == "status":
+            status = manager.status(works_scope=works_scope)
+        elif args.daemon_launchd_command == "stop":
+            status = manager.stop(works_scope=works_scope)
+        elif args.daemon_launchd_command == "uninstall":
+            status = manager.uninstall(works_scope=works_scope)
+        else:
+            return 1
+    except AutonomousDaemonLaunchdError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.as_json:
+        print(json.dumps(status.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(manager.format_status(status))
+    return 0
 
 
 def autonomous_multi_daemon_cli(root_dir: Path, args: Any) -> int:

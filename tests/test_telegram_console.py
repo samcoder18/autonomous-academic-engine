@@ -58,6 +58,10 @@ from telegram_console.autonomous_scheduler import (
     run_multi_work_daemon_tick,
     start_multi_work_daemon_process,
 )
+from telegram_console.autonomous_launchd import (
+    DEFAULT_AUTONOMOUS_DAEMON_LABEL,
+    AutonomousDaemonLaunchdManager,
+)
 from telegram_console.repair_kernel import (
     Blocker,
     build_repair_plan,
@@ -5822,6 +5826,68 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["stop_reason"], "daemon-already-running")
             self.assertEqual(payload["readiness_claim"], "none")
 
+    def test_autonomous_daemon_launchd_install_status_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            home_dir = root / "home"
+            fake_launchctl = FakeLaunchctl()
+            manager = AutonomousDaemonLaunchdManager(
+                root,
+                home_dir=home_dir,
+                command_runner=fake_launchctl,
+                python_executable="/usr/bin/python3",
+            )
+
+            with patch("telegram_console.work_cli.AutonomousDaemonLaunchdManager", return_value=manager):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        [
+                            "autonomous",
+                            "daemon",
+                            "launchd",
+                            "install",
+                            "--works",
+                            "all",
+                            "--mode",
+                            "autonomous-full",
+                            "--poll-seconds",
+                            "15",
+                            "--max-cycles",
+                            "25",
+                            "--max-runtime-minutes",
+                            "120",
+                            "--json",
+                        ],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            install_payload = json.loads(stdout.getvalue())
+            self.assertEqual(install_payload["kind"], "autonomous-daemon-launchd-result")
+            self.assertEqual(install_payload["status"]["works_scope"], "all")
+            self.assertTrue(install_payload["status"]["installed"])
+            self.assertTrue(manager.paths.installed_plist.exists())
+
+            with patch("telegram_console.work_cli.AutonomousDaemonLaunchdManager", return_value=manager):
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(
+                        ["autonomous", "daemon", "launchd", "status", "--works", "all", "--json"],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            status_payload = json.loads(stdout.getvalue())
+            self.assertEqual(status_payload["kind"], "autonomous-daemon-launchd-status")
+            self.assertTrue(status_payload["loaded"])
+            self.assertEqual(status_payload["works_scope"], "all")
+
     def test_project_add_command_creates_registry_and_prints_result(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             workspace = Path(tempdir)
@@ -6233,6 +6299,64 @@ class LaunchdServiceManagerTests(unittest.TestCase):
         self.assertFalse(manager.paths.installed_plist.exists())
         self.assertTrue(env_file.exists())
         self.assertFalse(status.installed)
+
+
+class AutonomousDaemonLaunchdManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tempdir.name) / "workspace"
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        build_fake_repo(self.workspace)
+        self.home_dir = Path(self.tempdir.name) / "home"
+        self.fake_launchctl = FakeLaunchctl()
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def build_manager(self) -> AutonomousDaemonLaunchdManager:
+        return AutonomousDaemonLaunchdManager(
+            self.workspace,
+            home_dir=self.home_dir,
+            command_runner=self.fake_launchctl,
+            python_executable="/usr/bin/python3",
+        )
+
+    def test_install_renders_multi_work_daemon_plist_and_bootstraps(self) -> None:
+        manager = self.build_manager()
+
+        result = manager.install(
+            works_scope="all",
+            mode="autonomous-full",
+            poll_seconds=15,
+            max_cycles=25,
+            max_runtime_minutes=120,
+        )
+
+        self.assertTrue(result.installed)
+        self.assertEqual(result.status.label, DEFAULT_AUTONOMOUS_DAEMON_LABEL)
+        self.assertTrue(manager.paths.installed_plist.exists())
+        plist_text = manager.paths.installed_plist.read_text(encoding="utf-8")
+        self.assertIn("telegram_console.work_cli", plist_text)
+        self.assertIn("autonomous", plist_text)
+        self.assertIn("daemon", plist_text)
+        self.assertIn("--works", plist_text)
+        self.assertIn("all", plist_text)
+        self.assertIn("autonomous-full", plist_text)
+        self.assertIn(str(self.workspace), plist_text)
+        joined = [" ".join(command) for command in self.fake_launchctl.commands]
+        self.assertTrue(any("launchctl bootstrap" in item for item in joined))
+        self.assertTrue(any("launchctl kickstart -k" in item for item in joined))
+
+    def test_status_reports_loaded_multi_work_daemon_agent(self) -> None:
+        manager = self.build_manager()
+        manager.install(works_scope="all")
+
+        status = manager.status()
+
+        self.assertTrue(status.installed)
+        self.assertTrue(status.loaded)
+        self.assertEqual(status.pid, self.fake_launchctl.pid)
+        self.assertEqual(status.works_scope, "all")
 
 
 class TelegramApiTests(unittest.TestCase):
