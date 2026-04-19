@@ -53,6 +53,7 @@ from telegram_console.autonomous_scheduler import (
     multi_daemon_lock_path,
     multi_daemon_state_path,
     multi_daemon_stop_path,
+    read_multi_daemon_state,
     resolve_works_scope,
     run_multi_work_daemon_tick,
     start_multi_work_daemon_process,
@@ -4326,6 +4327,32 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         self.assertEqual(blocked_candidate["status"], "blocked")
         self.assertIn("standards-consistency", blocked_candidate["known_blocker_categories"])
 
+    def test_scheduler_round_robin_cursor_rotates_ready_works(self) -> None:
+        add_demo_work_clone(self.root, "zeta-work")
+        self.write_default_raw_manifests()
+        workspace = load_workspace_config(self.root)
+        work_ids = resolve_works_scope(workspace, "all")
+
+        first = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=work_ids,
+            works_scope="all",
+            mode="autonomous-full",
+        )
+        second = build_multi_work_schedule(
+            root_dir=self.root,
+            work_ids=work_ids,
+            works_scope="all",
+            mode="autonomous-full",
+            round_robin_cursor=first["selected_work_id"],
+        )
+
+        self.assertEqual(first["selected_work_id"], TEST_WORK_ID)
+        self.assertEqual(first["round_robin"]["next_cursor_work_id"], TEST_WORK_ID)
+        self.assertEqual(second["selected_work_id"], "zeta-work")
+        self.assertEqual(second["round_robin"]["cursor_work_id"], TEST_WORK_ID)
+        self.assertEqual(second["round_robin"]["next_cursor_work_id"], "zeta-work")
+
     def test_multi_work_tick_launches_one_action_and_next_tick_waits(self) -> None:
         add_demo_work_clone(self.root, "zeta-work")
         self.write_default_raw_manifests()
@@ -4346,6 +4373,8 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         self.assertEqual(first["selected_work_id"], TEST_WORK_ID)
         self.assertEqual(first["last_result"]["status"], "started-run")
         self.assertTrue(multi_daemon_state_path(self.root).exists())
+        self.assertEqual(first["round_robin_cursor"], TEST_WORK_ID)
+        self.assertEqual(read_multi_daemon_state(self.root)["round_robin_cursor"], TEST_WORK_ID)
 
         second = run_multi_work_daemon_tick(
             root_dir=self.root,
@@ -5598,6 +5627,81 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["last_schedule"]["kind"], "autonomous-daemon-schedule")
             self.assertEqual(payload["readiness_claim"], "none")
             self.assertTrue((root / "output" / "telegram" / "runtime" / "autonomous" / "multi-work.daemon.json").exists())
+
+    def test_autonomous_daemon_tick_works_active_and_comma_list_are_public_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            add_demo_work_clone(root, "zeta-work")
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "autonomous",
+                        "daemon",
+                        "tick",
+                        "--works",
+                        "active",
+                        "--mode",
+                        "autonomous-full",
+                        "--poll-seconds",
+                        "0",
+                        "--max-cycles",
+                        "5",
+                        "--max-runtime-minutes",
+                        "10",
+                        "--json",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            active_payload = json.loads(stdout.getvalue())
+            self.assertEqual(active_payload["works_scope"], "active")
+            self.assertEqual(active_payload["work_ids"], [TEST_WORK_ID])
+            self.assertEqual(active_payload["work_count"], 1)
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            add_demo_work_clone(root, "zeta-work")
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "autonomous",
+                        "daemon",
+                        "tick",
+                        "--works",
+                        "zeta-work,demo-work",
+                        "--mode",
+                        "autonomous-full",
+                        "--poll-seconds",
+                        "0",
+                        "--max-cycles",
+                        "5",
+                        "--max-runtime-minutes",
+                        "10",
+                        "--json",
+                    ],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            list_payload = json.loads(stdout.getvalue())
+            self.assertEqual(list_payload["works_scope"], "zeta-work,demo-work")
+            self.assertEqual(list_payload["work_ids"], ["zeta-work", TEST_WORK_ID])
+            self.assertEqual(list_payload["work_count"], 2)
 
     def test_autonomous_daemon_start_status_and_stop_works_all_are_json_first(self) -> None:
         class FakeProcess:

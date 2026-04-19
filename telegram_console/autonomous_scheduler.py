@@ -58,9 +58,11 @@ def build_multi_work_schedule(
     mode: str,
     works_scope: str = "custom",
     orchestrator: WorkflowOrchestrator | None = None,
+    round_robin_cursor: str | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root_dir).resolve()
     unique_work_ids = _unique_work_ids(work_ids)
+    rotated_work_ids = _rotated_work_ids(unique_work_ids, round_robin_cursor)
     runner = orchestrator or WorkflowOrchestrator(root_path)
     runner.sync_active_run()
     active_run = runner.store.get_active_run()
@@ -70,6 +72,8 @@ def build_multi_work_schedule(
             mode=mode,
             works_scope=works_scope,
             work_ids=unique_work_ids,
+            rotated_work_ids=rotated_work_ids,
+            round_robin_cursor=round_robin_cursor,
             candidates=candidates,
             selected=None,
             status="waiting",
@@ -82,7 +86,7 @@ def build_multi_work_schedule(
         for work_id in unique_work_ids
     ]
     ready = [candidate for candidate in candidates if candidate.get("status") == "ready"]
-    selected = sorted(ready, key=_candidate_sort_key)[0] if ready else None
+    selected = sorted(ready, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids))[0] if ready else None
     if selected is not None:
         status = "ready"
         stop_reason = None
@@ -96,7 +100,9 @@ def build_multi_work_schedule(
         mode=mode,
         works_scope=works_scope,
         work_ids=unique_work_ids,
-        candidates=sorted(candidates, key=_candidate_sort_key),
+        rotated_work_ids=rotated_work_ids,
+        round_robin_cursor=round_robin_cursor,
+        candidates=sorted(candidates, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids)),
         selected=selected,
         status=status,
         stop_reason=stop_reason,
@@ -328,12 +334,14 @@ def run_multi_work_daemon_tick(
             )
 
         orchestrator = WorkflowOrchestrator(root_dir)
+        previous = read_multi_daemon_state(root_dir) or {}
         schedule = build_multi_work_schedule(
             root_dir=root_dir,
             work_ids=list(work_ids),
             mode=mode,
             works_scope=works_scope,
             orchestrator=orchestrator,
+            round_robin_cursor=_optional_text(previous.get("round_robin_cursor")),
         )
         selected_work_id = _optional_text(schedule.get("selected_work_id"))
         selected_command = _optional_text(schedule.get("selected_command"))
@@ -703,6 +711,8 @@ def _schedule_payload(
     mode: str,
     works_scope: str,
     work_ids: list[str],
+    rotated_work_ids: list[str],
+    round_robin_cursor: str | None,
     candidates: list[dict[str, Any]],
     selected: dict[str, Any] | None,
     status: str,
@@ -722,6 +732,11 @@ def _schedule_payload(
         "selected_work_id": selected.get("work_id") if selected else None,
         "selected_command": selected.get("command") if selected else None,
         "selected_decision": selected_decision,
+        "round_robin": {
+            "cursor_work_id": _optional_text(round_robin_cursor),
+            "ordered_work_ids": rotated_work_ids,
+            "next_cursor_work_id": selected.get("work_id") if selected else _optional_text(round_robin_cursor),
+        },
         "blocked": [item["work_id"] for item in candidates if item.get("status") == "blocked"],
         "waiting": [item["work_id"] for item in candidates if item.get("status") == "waiting"],
         "stop_reason": stop_reason,
@@ -825,6 +840,8 @@ def _write_multi_daemon_cycle_state(
     selected_work_id = _optional_text(schedule.get("selected_work_id")) if isinstance(schedule, dict) else None
     selected_command = _optional_text(schedule.get("selected_command")) if isinstance(schedule, dict) else None
     selected_decision = schedule.get("selected_decision") if isinstance(schedule, dict) and isinstance(schedule.get("selected_decision"), dict) else None
+    round_robin = schedule.get("round_robin") if isinstance(schedule, dict) and isinstance(schedule.get("round_robin"), dict) else {}
+    round_robin_cursor = _optional_text(round_robin.get("next_cursor_work_id")) or _optional_text(previous.get("round_robin_cursor"))
     trace_item = {
         "cycle": cycle_count,
         "timestamp": now,
@@ -859,6 +876,7 @@ def _write_multi_daemon_cycle_state(
         "selected_work_id": selected_work_id,
         "selected_command": selected_command,
         "selected_decision": selected_decision,
+        "round_robin_cursor": round_robin_cursor,
         "last_schedule": schedule,
         "last_result": result,
         "cycle_trace": trace,
@@ -902,6 +920,7 @@ def _normalize_multi_daemon_state(root_dir: str | Path, payload: dict[str, Any])
         "selected_command": _optional_text(payload.get("selected_command"))
         or (_optional_text(schedule.get("selected_command")) if isinstance(schedule, dict) else None),
         "selected_decision": selected_decision,
+        "round_robin_cursor": _optional_text(payload.get("round_robin_cursor")),
         "last_schedule": schedule,
         "last_result": payload.get("last_result") if isinstance(payload.get("last_result"), dict) else None,
         "cycle_trace": (payload.get("cycle_trace") if isinstance(payload.get("cycle_trace"), list) else [])[-SCHEDULER_TRACE_LIMIT:],
@@ -990,9 +1009,14 @@ def _known_blocker_categories(work_state: dict[str, Any]) -> list[str]:
     return sorted(categories)
 
 
-def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+def _candidate_sort_key(candidate: dict[str, Any], *, rotated_work_ids: list[str] | None = None) -> tuple[int, int, int, str]:
     status_rank = {"ready": 0, "waiting": 1, "blocked": 2}.get(str(candidate.get("status") or ""), 9)
-    return (status_rank, _optional_int(candidate.get("priority")) or 9999, str(candidate.get("work_id") or ""))
+    work_id = str(candidate.get("work_id") or "")
+    if rotated_work_ids and work_id in rotated_work_ids:
+        work_rank = rotated_work_ids.index(work_id)
+    else:
+        work_rank = 9999
+    return (status_rank, _optional_int(candidate.get("priority")) or 9999, work_rank, work_id)
 
 
 def _unique_work_ids(work_ids: list[str] | tuple[str, ...]) -> list[str]:
@@ -1002,6 +1026,16 @@ def _unique_work_ids(work_ids: list[str] | tuple[str, ...]) -> list[str]:
         if work_id and work_id not in result:
             result.append(work_id)
     return result
+
+
+def _rotated_work_ids(work_ids: list[str], cursor: str | None) -> list[str]:
+    if not work_ids:
+        return []
+    cursor_text = _optional_text(cursor)
+    if cursor_text not in work_ids:
+        return list(work_ids)
+    index = work_ids.index(str(cursor_text))
+    return [*work_ids[index + 1 :], *work_ids[: index + 1]]
 
 
 def _multi_daemon_lock_is_stale(lock: dict[str, Any], *, stale_after_seconds: int) -> bool:
