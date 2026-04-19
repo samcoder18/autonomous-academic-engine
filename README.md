@@ -3,6 +3,21 @@
 Это reusable workspace для подготовки юридических академических текстов.
 Он поддерживает несколько `work bundle` внутри одного репозитория и разделяет reusable engine от канона конкретной работы.
 
+## Установка и зависимости
+
+- **Python** 3.11 или новее (`tomllib` в стандартной библиотеке).
+- Установка editable-пакета (опционально, для явного `PYTHONPATH` и инструментов разработки):
+
+  ```bash
+  pip install -e ".[dev]"
+  ```
+
+  Иначе достаточно добавить корень репозитория в `PYTHONPATH`, как делают скрипты в `scripts/`.
+- **Pandoc** — внешняя утилита для экспорта DOCX (`export_docx.sh`, `export_academic_docx.sh`), не ставится через pip.
+- Рантайм Telegram читает секреты из переменных окружения (см. `telegram_console/config.py`); файл `.env` не коммитится.
+
+История перехода на модель `works/<slug>/`: [meta/migration-history.md](meta/migration-history.md).
+
 ## Основные уровни
 
 - `workspace.toml` - корневая конфигурация workspace, `default_work`, output paths и список работ.
@@ -76,8 +91,12 @@
 ## Output paths
 
 - Run trace: `output/runs/<work>/<lane>/`
-- DOCX: `output/docx/<work>/`
+- DOCX: `output/docx/<work>/` (генерируются локально; в git не версионируются, см. [output/README.md](output/README.md))
 - Telegram runtime: `output/telegram/runtime/`
+
+## Legacy-пути и пустые каталоги в корне
+
+Launcher резолвит старые относительные пути (`manuscript/sections/...`, корневой `articles/...`) в `default_work` из `workspace.toml`. Пустые каталоги `chapters/`, `manuscript/`, `sources/` и т.п. в корне могут появляться локально как заглушки — это не канон; канонический контент лежит только в `works/<slug>/`. В свежем клоне этих папок может не быть (git не хранит пустые директории).
 
 ## Standards intake
 

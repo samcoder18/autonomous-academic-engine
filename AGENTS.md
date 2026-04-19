@@ -5,6 +5,7 @@
 
 ## Источники истины
 
+- Производные артефакты сборки (`output/docx/*.docx`, при необходимости трассы в `output/runs/`) не являются источником истины для текста работы и по умолчанию не версионируются в git; канонический текст живёт в Markdown под `works/<slug>/`. Подробнее: [output/README.md](/Users/albina/дипломная/output/README.md).
 - Машинно-читаемая конфигурация workspace хранится в [workspace.toml](/Users/albina/дипломная/workspace.toml).
 - Рабочий регламент для всех lane хранится только в [meta/master-protocol.md](/Users/albina/дипломная/meta/master-protocol.md).
 - Канон конкретной работы хранится только в `works/<slug>/work-canon.md`.

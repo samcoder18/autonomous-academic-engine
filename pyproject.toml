@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legal-academic-workspace"
+version = "0.1.0"
+description = "Юридически-академический workspace: telegram_console, launchers и work-aware оркестрация."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.8",
+]
+
+[tool.setuptools]
+packages = ["telegram_console"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["telegram_console", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

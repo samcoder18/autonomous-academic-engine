@@ -5,5 +5,12 @@
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
+.eggs/
+.ruff_cache/
+
+# Собранные DOCX — производные артефакты (источник истины — Markdown в works/)
+output/docx/**/*.docx
+
 output/telegram/projects.json
 output/telegram/runtime/
