@@ -105,7 +105,7 @@ CI currently does **not** run `ruff format --check`.
 
 Active work from [workspace.toml](../workspace.toml): `biometrics-vkr`.
 
-Work config from [works/biometrics-vkr/work.toml](../works/biometrics-vkr/work.toml):
+Work config from historical `works/biometrics-vkr/work.toml` (bundle removed from the active workspace on 2026-04-21):
 
 - active lanes: `thesis`, `article`
 - artifact type: `vkr`

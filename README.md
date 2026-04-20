@@ -238,7 +238,7 @@ python3 scripts/telegram_console.py project add \
 ```bash
 pip install -e ".[dev]"
 export PYTHONPATH=.
-python3 -m unittest discover -s tests -q   # 385 тестов, offline, детерминированный
+python3 -m unittest discover -s tests -q   # offline, детерминированный
 ruff check telegram_console/ tests/
 ruff format --check telegram_console/ tests/
 ```

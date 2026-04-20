@@ -7,14 +7,14 @@
 
 ## 1. Источники истины
 
-- [workspace.toml](workspace.toml) хранит корневую конфигурацию workspace.
+- [workspace.toml](../workspace.toml) хранит корневую конфигурацию workspace.
 - `works/<slug>/work.toml` хранит конфигурацию конкретной работы.
 - `works/<slug>/work-canon.md` хранит только утвержденные решения конкретной работы.
 - `works/<slug>/thesis/manuscript/sections/` хранит канонический thesis-текст конкретной работы.
 - `works/<slug>/thesis/ledgers/` хранит claim-level evidence ledger для thesis lane, если он создан.
 - `works/<slug>/articles/` хранит article bundle и финальный article text конкретной работы.
-- [meta/standards](meta/standards) хранит raw и normalized publication standards.
-- [templates/](templates) задает минимальные reusable формы для повторяемых задач.
+- [meta/standards](standards) хранит raw и normalized publication standards.
+- [templates/](../templates) задает минимальные reusable формы для повторяемых задач.
 
 Если решение не зафиксировано в каноне активной работы, оно не считается окончательным.
 
@@ -33,7 +33,7 @@
 
 ## 3. Агентная цепочка
 
-Порядок ролей описан в [AGENTS.md](AGENTS.md) и реализуется через специализированные файлы в [agents/](agents).
+Порядок ролей описан в [AGENTS.md](../AGENTS.md) и реализуется через специализированные файлы в [agents/](../agents).
 
 Базовая цепочка для thesis lane:
 
@@ -108,9 +108,9 @@
 - Перед drafting сильные тезисы по возможности проходят через `source package -> evidence ledger -> verification`.
 - Для больших thesis sections (`> 8 manuscript pages` или `5+ subsections`) критика идет в два прохода: `skeleton pass`, затем `local paragraph pass`.
 - Сноски оформляются как Markdown-сноски в конце соответствующей секции.
-- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](scripts/assemble_thesis.sh) с `--work`.
-- Для Word-версии со сносками используется [scripts/export_docx.sh](scripts/export_docx.sh) с `--work`.
-- Проверку ориентировочного объема удобно делать через [scripts/check_section_length.sh](scripts/check_section_length.sh).
+- После заметных изменений секции нужно пересобрать полный документ через [scripts/assemble_thesis.sh](../scripts/assemble_thesis.sh) с `--work`.
+- Для Word-версии со сносками используется [scripts/export_docx.sh](../scripts/export_docx.sh) с `--work`.
+- Проверку ориентировочного объема удобно делать через [scripts/check_section_length.sh](../scripts/check_section_length.sh).
 
 ## 8. Правила работы с article bundle
 
@@ -120,16 +120,16 @@
 - Draft хранится в `works/<slug>/articles/drafts/`.
 - Findings-first review хранится в `works/<slug>/articles/reviews/`.
 - Финальный Markdown и checklist хранятся в `works/<slug>/articles/final/`.
-- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](scripts/export_academic_docx.sh) с `--work`.
+- DOCX статьи экспортируется через [scripts/export_academic_docx.sh](../scripts/export_academic_docx.sh) с `--work`.
 - Finalizer не должен утверждать полную формальную готовность, если relevant raw standard отсутствует или конфликтует с normalized profile.
 
 ## 9. Листы проверки и синхронизации
 
-- Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](templates/chapter-review-sheet.md).
+- Для review-задач и крупных критических проходов создается или обновляется лист проверки в work-local `thesis/reviews/` по [templates/chapter-review-sheet.md](../templates/chapter-review-sheet.md).
 - Для больших thesis sections можно дополнительно вести section-scoped `*-glossary.md` и `*-micro-review.md` в `works/<slug>/thesis/reviews/`.
-- После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](templates/chat-sync.md).
+- После каждого значимого рабочего цикла обновляется короткая синхронизация в work-local `thesis/sync/` по [templates/chat-sync.md](../templates/chat-sync.md).
 - Если этап агентной цепочки был безопасно пропущен, причина этого фиксируется именно в sync-следе работы.
-- Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
+- Для article lane findings-first review создается или обновляется в `works/<slug>/articles/reviews/` по [templates/article-review-sheet.md](../templates/article-review-sheet.md), а итоговый status и blockers - в checklist.
 
 ## 10. Минимальный результат рабочего цикла
 

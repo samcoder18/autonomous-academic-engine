@@ -1,6 +1,6 @@
 # Работа со сносками
 
-Архивная памятка. Полные правила - в [master-protocol.md](meta/master-protocol.md).
+Архивная памятка. Полные правила - в [master-protocol.md](../master-protocol.md).
 
 ## Базовый синтаксис
 
