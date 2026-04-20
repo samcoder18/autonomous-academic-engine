@@ -14,6 +14,7 @@ verification-first волны на clean snapshot.
 ## Snapshot
 
 - Базовый commit перед closeout-правками: `7fde8785104bf5a12db0cf114095c88dce2aa5f6`
+- Финальный closeout commit: `0d60d9c64cf0406f1c557ce6458804da5df10638`
 - Ветка: `master`
 - Guardrail из §11.1 [master-protocol.md](master-protocol.md) соблюдён:
   verification wave выполнялась на clean git snapshot.
