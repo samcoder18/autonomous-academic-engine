@@ -293,7 +293,7 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             launchd_parser.add_argument("--max-runtime-minutes", type=int, default=240)
 
     args = parser.parse_args(argv)
-    root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(__file__).resolve().parents[1]
+    root_path = Path(root_dir).expanduser().resolve() if root_dir is not None else Path.cwd().resolve()
 
     try:
         if args.command == "launch-thesis":

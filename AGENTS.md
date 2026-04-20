@@ -98,6 +98,7 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 - [meta/candidate-polish-audit-2026-04-20.md](meta/candidate-polish-audit-2026-04-20.md) - audit-отчёт по candidate contour перед doctor-phase.
 - [meta/candidate-polish-backlog-2026-04-20.md](meta/candidate-polish-backlog-2026-04-20.md) - backlog с разделением на `must-fix before doctor`, `candidate-safe defer`, `doctor-phase only`.
 - [meta/final-quality-audit-2026-04-20.md](meta/final-quality-audit-2026-04-20.md) - итоговый repo-wide quality audit, findings и conservative repair summary.
+- [meta/repo-clean-snapshot-closeout-2026-04-21.md](meta/repo-clean-snapshot-closeout-2026-04-21.md) - актуальный clean-snapshot closeout для repo/platform layer.
 
 ## Процесс
 

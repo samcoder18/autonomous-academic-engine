@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -21,6 +22,29 @@ from tests.test_telegram_console import (
 
 
 class WorkCliRuntimeTests(unittest.TestCase):
+    def test_cli_defaults_to_current_working_directory_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            previous_cwd = Path.cwd()
+            stdout = StringIO()
+            stderr = StringIO()
+            try:
+                os.chdir(root)
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = work_cli_module.main(["work-status", "--json"])
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "work-state")
+            self.assertEqual(payload["work_id"], TEST_WORK_ID)
+
     def test_work_status_cli_prints_compact_next_safe_action(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
