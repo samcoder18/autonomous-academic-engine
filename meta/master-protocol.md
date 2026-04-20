@@ -160,7 +160,13 @@
 - статус `submission-ready` разрешён только если все применимые гейты PASS и `work-type-structure` сошёлся с выбранным профилем (`article`, `vkr-bachelor`, `vkr-specialist`, `master-thesis`, `dissertation-candidate`, `dissertation-doctor`);
 - origin-text originality-gate обязан использовать локальный corpus (`telegram_console.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
 
-### 11.1 Операционный канал daemon'а
+### 11.1 Repo-level release claims
+
+- Сильный repo-level claim вида `release-quality`, `fully final` или эквивалентной формулировки допускается только на clean git snapshot: без незакоммиченных repo-tracked изменений в рабочем дереве.
+- Перед таким claim обязан быть полностью зелёный deterministic verification matrix workspace: `python3 -m unittest discover -s tests -q`, `ruff check telegram_console/ tests/`, `ruff format --check telegram_console/ tests/`, `python3 -m telegram_console.work_cli skill-source-map audit --json`.
+- Если аудит или verification matrix были выполнены на dirty tree, это допустимо как engineering evidence и промежуточный closeout, но не как финальный безусловный release-quality verdict.
+
+### 11.2 Операционный канал daemon'а
 
 - Долгоживущие компоненты (`autonomous_daemon.run_daemon_foreground`, Telegram bot) эмитят структурированные ops-alerts через [`telegram_console.ops_alerts`](../telegram_console/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
 - Конфигурация доставки: `OPS_ALERT_CHAT_ID` (Telegram-чат для ops-событий, **не** совпадающий с пользовательским чатом проекта) и `OPS_ALERT_LOG_PATH` (файл для offline-tee). Если ни одно не выставлено, алерты идут в stderr и в Python `logging` — local-run остаётся тихим, но событие не теряется.

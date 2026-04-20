@@ -101,6 +101,14 @@ blockers` вердикт для VKR, статьи, магистерской и (
 - Фронтматтер: `title-page`, `abstract-ru`, `abstract-en`,
   `keywords`, `task-sheet` —
   [`telegram_console/vkr_artifacts.py`](../telegram_console/vkr_artifacts.py).
+- Dissertation contour: `author-abstract`, `defense-checklist`,
+  `historiography-map`, `novelty-contribution-map`,
+  `dissertation-claim-map`, `counterargument-review`,
+  `dissertation-review`, `publication-evidence`,
+  `publication-claim-matrix` — через
+  [`telegram_console/dissertation_artifacts.py`](../telegram_console/dissertation_artifacts.py),
+  [`telegram_console/dissertation_contour.py`](../telegram_console/dissertation_contour.py)
+  и `one-shot-dissertation`.
 - Work-type профили (`article`, `vkr-bachelor`, `vkr-specialist`,
   `master-thesis`, `dissertation-candidate`, `dissertation-doctor`) —
   [`telegram_console/work_type.py`](../telegram_console/work_type.py).
@@ -108,12 +116,15 @@ blockers` вердикт для VKR, статьи, магистерской и (
 
 ### Unknowns
 
-- Автореферат для кандидатской/докторской **не** генерируется
-  автоматически (требуется живая структура под диссовет).
 - Список работ ВАК/Scopus/WoS заявителя — ручной сбор; система
-  может только проверить формальные поля.
-- Отзыв ведущей организации и оппонентов не моделируется (вне scope).
+  может проверить только базовые формальные поля и связку с
+  `publication-claim-matrix`.
+- Отзыв ведущей организации и оппонентов не собирается автоматически
+  как живой пакет защиты; для докторской пока моделируются только
+  placeholders и deterministic presence checks.
 - Даты предзащиты и защиты заполняются вручную в `metadata.toml`.
+- Институционально-специфичные требования диссовета и вуза остаются
+  reference-driven, пока не подключён отдельный operative overlay.
 
 ## 6. Пайплайн и CI
 
@@ -144,6 +155,9 @@ blockers` вердикт для VKR, статьи, магистерской и (
 - Ops-sink не отправляет алерты в Telegram без явного
   `OPS_ALERT_CHAT_ID`; по умолчанию — stderr + optional log file.
   Так специально: без явной конфигурации daemon ведёт себя как раньше.
+- launchd coverage остаётся unit-style: CLI и plist generation покрыты
+  тестами, но реальный smoke против системного launchd в CI по-прежнему
+  не запускается.
 
 ## 7. Этическая рамка
 
@@ -163,9 +177,9 @@ blockers` вердикт для VKR, статьи, магистерской и (
    «Список таблиц», «Список рисунков», нумерация);
 2. Включить live режим коннекторов в nightly CI за счёт
    отдельного job (`OFFLINE=0` + секреты);
-3. Реализовать автореферат-генератор для диссертации (отдельный
-   work_type handler);
+3. Добавить institution-specific overlays для кандидатских
+   диссертаций и пакета защиты;
 4. Вынести fake codex в `scripts/tests/fixtures/` и добавить более
    разнообразные сценарии (blocked, needs-repair, updated);
-5. Поддержать кафедральную методичку СОГУ-2025 как полностью
-   нормализованный профиль с переопределёнными margins.
+5. Поддержать candidate/doctor quality gates уровня межглавного
+   синтеза и publication matrix coverage beyond structural checks.

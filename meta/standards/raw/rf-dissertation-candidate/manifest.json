@@ -1,0 +1,33 @@
+{
+  "profile_id": "rf-dissertation-candidate",
+  "synced_at": "2026-04-18T10:03:03.396527+00:00",
+  "force_refresh": true,
+  "sources": [
+    {
+      "source_id": "rf-dissertation-pravo-gov-2013",
+      "label": "Официальное опубликование правового акта на publication.pravo.gov.ru",
+      "url": "https://publication.pravo.gov.ru/document/0001201310010030",
+      "final_url": null,
+      "content_type": null,
+      "fetched_at": "2026-04-18T10:03:00.998251+00:00",
+      "checksum_sha256": null,
+      "filename": null,
+      "size_bytes": 0,
+      "source_date": "2013-10-01",
+      "error": "<urlopen error _ssl.c:1063: The handshake operation timed out>"
+    },
+    {
+      "source_id": "rf-dissertation-gost-page",
+      "label": "Страница protect.gost.ru с релевантным нормативным контекстом",
+      "url": "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search=",
+      "final_url": null,
+      "content_type": null,
+      "fetched_at": "2026-04-18T10:03:03.396487+00:00",
+      "checksum_sha256": null,
+      "filename": null,
+      "size_bytes": 0,
+      "source_date": null,
+      "error": "<urlopen error [Errno 8] nodename nor servname provided, or not known>"
+    }
+  ]
+}

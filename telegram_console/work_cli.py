@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from argparse import ArgumentParser
@@ -22,31 +21,7 @@ from .article_bundle_state import (
     load_article_bundle_state,
     write_article_bundle_state,
 )
-from .autonomous_daemon import (
-    daemon_status_payload,
-    read_daemon_stop_request,
-    request_daemon_stop,
-    run_daemon_foreground,
-    run_daemon_tick,
-    start_daemon_process,
-)
-from .autonomous_launchd import (
-    DEFAULT_AUTONOMOUS_DAEMON_LABEL,
-    AutonomousDaemonLaunchdError,
-    AutonomousDaemonLaunchdManager,
-)
-from .autonomous_planner import build_autonomous_plan, format_autonomous_plan
 from .autonomous_policy import AUTONOMOUS_MODES
-from .autonomous_runner import read_autonomous_state, run_autonomous_plan, stop_autonomous_run
-from .autonomous_scheduler import (
-    multi_daemon_status_payload,
-    read_multi_daemon_stop_request,
-    request_multi_daemon_stop,
-    resolve_works_scope,
-    run_multi_work_daemon_foreground,
-    run_multi_work_daemon_tick,
-    start_multi_work_daemon_process,
-)
 from .orchestrator import WorkflowOrchestrator
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .standards import (
@@ -57,12 +32,14 @@ from .standards import (
     resolve_status_profile,
     sync_standard_profile,
 )
+from .utils import resolve_executable
 from .work_bootstrap import (
     ALL_ARTIFACT_TYPES,
     WorkBootstrapError,
     WorkBootstrapRequest,
     bootstrap_work,
 )
+from .work_cli_autonomous import handle_autonomous_cli
 from .work_state import format_work_state_summary
 from .workspace import (
     TargetResolution,
@@ -86,6 +63,11 @@ THESIS_PRESETS = (
     "write-section",
     "review-section",
     "style-pass",
+    "build-maps",
+    "verify-claims",
+    "counterargument-pass",
+    "draft-author-position",
+    "formal-artifacts",
 )
 ARTICLE_COMMANDS = ("article", "review", "repair", "finalize")
 
@@ -129,6 +111,12 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     )
     vkr_front.add_argument("--work", dest="work_id")
 
+    dissertation_artifacts = subparsers.add_parser(
+        "build-dissertation-artifacts",
+        help="Generate dissertation author abstract and defense checklist from thesis/dissertation/metadata.toml.",
+    )
+    dissertation_artifacts.add_argument("--work", dest="work_id")
+
     one_shot = subparsers.add_parser(
         "one-shot-thesis",
         help="Run deterministic VKR gates (frontmatter/GOST/DOCX/originality) and write a report.",
@@ -151,6 +139,27 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             "Work-type profile (vkr-bachelor, vkr-specialist, master-thesis, "
             "dissertation-candidate, dissertation-doctor). Defaults to work.toml artifact_type."
         ),
+    )
+
+    one_shot_dissertation_parser = subparsers.add_parser(
+        "one-shot-dissertation",
+        help="Run dissertation-specific deterministic gates and write a report.",
+    )
+    one_shot_dissertation_parser.add_argument("--work", dest="work_id")
+    one_shot_dissertation_parser.add_argument(
+        "--skip-docx",
+        action="store_true",
+        help="Skip DOCX conformance gate even if DOCX is present.",
+    )
+    one_shot_dissertation_parser.add_argument(
+        "--corpus",
+        dest="corpus_path",
+        help="Optional path to originality corpus JSON. If omitted, the originality gate is skipped.",
+    )
+    one_shot_dissertation_parser.add_argument(
+        "--work-type",
+        dest="work_type",
+        help="Override dissertation work-type profile. Defaults to work.toml artifact_type.",
     )
 
     export_article = subparsers.add_parser("export-article-docx")
@@ -297,8 +306,18 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return export_thesis_docx(root_path, args.work_id)
         if args.command == "build-vkr-frontmatter":
             return build_vkr_frontmatter(root_path, args.work_id)
+        if args.command == "build-dissertation-artifacts":
+            return build_dissertation_artifacts(root_path, args.work_id)
         if args.command == "one-shot-thesis":
             return one_shot_thesis(
+                root_path,
+                args.work_id,
+                skip_docx=args.skip_docx,
+                corpus_path=args.corpus_path,
+                work_type=args.work_type,
+            )
+        if args.command == "one-shot-dissertation":
+            return one_shot_dissertation(
                 root_path,
                 args.work_id,
                 skip_docx=args.skip_docx,
@@ -320,32 +339,10 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
         if args.command == "skill-source-map":
             return skill_source_map_cli(root_path, args)
         if args.command == "autonomous":
-            return autonomous_cli(root_path, args)
+            return handle_autonomous_cli(root_path, args)
     except WorkspaceConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    return 1
-
-
-def autonomous_cli(root_dir: Path, args: Any) -> int:
-    if args.autonomous_command in {"plan", "explain"}:
-        return autonomous_plan(root_dir, args.work_id, args.mode, args.max_steps, as_json=args.as_json)
-    if args.autonomous_command == "run":
-        return autonomous_run(
-            root_dir,
-            args.work_id,
-            args.mode,
-            args.max_steps,
-            dry_run=args.dry_run,
-            execute=args.execute,
-            as_json=args.as_json,
-        )
-    if args.autonomous_command == "status":
-        return autonomous_status(root_dir, args.work_id, as_json=args.as_json)
-    if args.autonomous_command == "stop":
-        return autonomous_stop(root_dir, args.work_id, args.reason, as_json=args.as_json)
-    if args.autonomous_command == "daemon":
-        return autonomous_daemon_cli(root_dir, args)
     return 1
 
 
@@ -463,242 +460,6 @@ def skill_source_map_cli(root_dir: Path, args: Any) -> int:
     return 1
 
 
-def autonomous_plan(root_dir: Path, work_id: str | None, mode: str, max_steps: int, *, as_json: bool = False) -> int:
-    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
-    plan = build_autonomous_plan(work_state=state, mode=mode, max_steps=max_steps)
-    if as_json:
-        print(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2))
-    else:
-        print(format_autonomous_plan(plan))
-    return 0
-
-
-def autonomous_run(
-    root_dir: Path,
-    work_id: str | None,
-    mode: str,
-    max_steps: int,
-    *,
-    dry_run: bool,
-    execute: bool,
-    as_json: bool = False,
-) -> int:
-    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
-    plan = build_autonomous_plan(work_state=state, mode=mode, max_steps=max_steps)
-    run_state = run_autonomous_plan(root_dir=root_dir, plan=plan, dry_run=dry_run or not execute, execute=execute)
-    if as_json:
-        print(json.dumps(run_state, ensure_ascii=False, indent=2))
-    else:
-        print(f"Autonomous run: {run_state.get('status')}")
-        print(f"Mode: {run_state.get('mode')}")
-        print(f"Readiness claim: {run_state.get('readiness_claim')}")
-        if run_state.get("stop_reason"):
-            print(f"Stop reason: {run_state.get('stop_reason')}")
-    return 0
-
-
-def autonomous_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -> int:
-    workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=work_id)
-    state = read_autonomous_state(root_dir, work.slug)
-    if as_json:
-        print(json.dumps(state or {}, ensure_ascii=False, indent=2))
-        return 0
-    if not state:
-        print(f"Autonomous status: no state for {work.slug}")
-        return 0
-    print(f"Autonomous status: {state.get('status')}")
-    print(f"Mode: {state.get('mode')}")
-    print(f"Readiness claim: {state.get('readiness_claim')}")
-    if state.get("stop_reason"):
-        print(f"Stop reason: {state.get('stop_reason')}")
-    return 0
-
-
-def autonomous_stop(root_dir: Path, work_id: str | None, reason: str, *, as_json: bool = False) -> int:
-    workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=work_id)
-    state = stop_autonomous_run(root_dir, work.slug, reason=reason)
-    if as_json:
-        print(json.dumps(state, ensure_ascii=False, indent=2))
-    else:
-        print(f"Autonomous run: {state.get('status')}")
-        print(f"Stop reason: {state.get('stop_reason')}")
-    return 0
-
-
-def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
-    if args.daemon_command == "launchd":
-        return autonomous_daemon_launchd_cli(root_dir, args)
-    if _optional_text(getattr(args, "works_scope", None)):
-        return autonomous_multi_daemon_cli(root_dir, args)
-    work_id = _resolve_daemon_work_id(root_dir, args.work_id)
-    if args.daemon_command == "tick":
-        payload = run_daemon_tick(
-            root_dir=root_dir,
-            work_id=work_id,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    if args.daemon_command == "run":
-        payload = run_daemon_foreground(
-            root_dir=root_dir,
-            work_id=work_id,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-            stuck_after_minutes=getattr(args, "stuck_after_minutes", None),
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 1 if payload.get("stop_reason") == "daemon-already-running" else 0
-    if args.daemon_command == "start":
-        payload = start_daemon_process(
-            root_dir=root_dir,
-            work_id=work_id,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 1 if payload.get("status") == "blocked" else 0
-    if args.daemon_command == "status":
-        payload = daemon_status_payload(root_dir, work_id)
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    if args.daemon_command == "stop":
-        request_daemon_stop(root_dir, work_id, reason=args.reason)
-        payload = read_daemon_stop_request(root_dir, work_id) or {}
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    return 1
-
-
-def autonomous_daemon_launchd_cli(root_dir: Path, args: Any) -> int:
-    works_scope = _optional_text(getattr(args, "works_scope", None)) or "all"
-    _resolve_daemon_work_ids(root_dir, works_scope)
-    manager = AutonomousDaemonLaunchdManager(
-        root_dir,
-        label=_optional_text(getattr(args, "label", None)) or DEFAULT_AUTONOMOUS_DAEMON_LABEL,
-    )
-    try:
-        if args.daemon_launchd_command == "install":
-            result = manager.install(
-                works_scope=works_scope,
-                mode=args.mode,
-                poll_seconds=args.poll_seconds,
-                max_cycles=args.max_cycles,
-                max_runtime_minutes=args.max_runtime_minutes,
-            )
-            if args.as_json:
-                print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
-            else:
-                print(manager.format_result(result))
-            return 0
-        if args.daemon_launchd_command == "start":
-            status = manager.start(works_scope=works_scope)
-        elif args.daemon_launchd_command == "restart":
-            status = manager.restart(works_scope=works_scope)
-        elif args.daemon_launchd_command == "status":
-            status = manager.status(works_scope=works_scope)
-        elif args.daemon_launchd_command == "stop":
-            status = manager.stop(works_scope=works_scope)
-        elif args.daemon_launchd_command == "uninstall":
-            status = manager.uninstall(works_scope=works_scope)
-        else:
-            return 1
-    except AutonomousDaemonLaunchdError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if args.as_json:
-        print(json.dumps(status.to_dict(), ensure_ascii=False, indent=2))
-    else:
-        print(manager.format_status(status))
-    return 0
-
-
-def autonomous_multi_daemon_cli(root_dir: Path, args: Any) -> int:
-    if _optional_text(getattr(args, "work_id", None)):
-        raise WorkspaceConfigError("Используй только один параметр: --work или --works.")
-    works_scope = _optional_text(getattr(args, "works_scope", None)) or "all"
-    work_ids = _resolve_daemon_work_ids(root_dir, works_scope)
-    if args.daemon_command == "tick":
-        payload = run_multi_work_daemon_tick(
-            root_dir=root_dir,
-            work_ids=work_ids,
-            works_scope=works_scope,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    if args.daemon_command == "run":
-        payload = run_multi_work_daemon_foreground(
-            root_dir=root_dir,
-            work_ids=work_ids,
-            works_scope=works_scope,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 1 if payload.get("stop_reason") == "daemon-already-running" else 0
-    if args.daemon_command == "start":
-        payload = start_multi_work_daemon_process(
-            root_dir=root_dir,
-            works_scope=works_scope,
-            mode=args.mode,
-            poll_seconds=args.poll_seconds,
-            max_cycles=args.max_cycles,
-            max_runtime_minutes=args.max_runtime_minutes,
-        )
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 1 if payload.get("status") == "blocked" else 0
-    if args.daemon_command == "status":
-        payload = multi_daemon_status_payload(root_dir, works_scope=works_scope)
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    if args.daemon_command == "stop":
-        request_multi_daemon_stop(root_dir, works_scope=works_scope, reason=args.reason)
-        payload = read_multi_daemon_stop_request(root_dir) or {}
-        _print_daemon_payload(payload, as_json=args.as_json)
-        return 0
-    return 1
-
-
-def _resolve_daemon_work_id(root_dir: Path, work_id: str) -> str:
-    workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=work_id)
-    return work.slug
-
-
-def _resolve_daemon_work_ids(root_dir: Path, works_scope: str) -> list[str]:
-    workspace = load_workspace_config(root_dir)
-    return resolve_works_scope(workspace, works_scope)
-
-
-def _optional_text(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _print_daemon_payload(payload: dict[str, Any], *, as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
-
-
 def launch_thesis(root_dir: Path, args: Any) -> int:
     workspace = load_workspace_config(root_dir)
     work_selection = resolve_work_selection(workspace, work_id=args.work_id, target=args.target)
@@ -722,7 +483,18 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
     target_path = workspace.root_dir / target_rel
     target_state = "existing" if target_path.exists() else "missing"
     use_search = _resolve_search(
-        args.search_override, args.preset in {"full-cycle", "source-pack", "verify", "write-section"}
+        args.search_override,
+        args.preset
+        in {
+            "full-cycle",
+            "source-pack",
+            "verify",
+            "write-section",
+            "build-maps",
+            "verify-claims",
+            "counterargument-pass",
+            "draft-author-position",
+        },
     )
     review_path = derive_review_path(workspace, work, target_rel)
     sync_hint_path = _sync_path_for_target(work, args.preset, target_rel)
@@ -1173,56 +945,49 @@ def one_shot_thesis(
     corpus_path: str | None = None,
     work_type: str | None = None,
 ) -> int:
-    """Run deterministic VKR gates and write a structured report."""
-    from .one_shot import OneShotConfig, run_one_shot, write_report
-
-    workspace = load_workspace_config(root_dir)
-    work = resolve_work_config(workspace, work_id=work_id)
-    if not work.thesis:
-        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
-
-    manuscript = work.thesis.full_draft_path
-    docx = None if skip_docx else work.thesis.export_docx_path
-    thesis_root = work.thesis.paths.root_dir
-    metadata = thesis_root / "metadata.toml"
-    frontmatter = thesis_root / "frontmatter"
-    corpus = _resolve_path(root_dir, corpus_path) if corpus_path else None
-
-    effective_work_type = work_type or getattr(work, "artifact_type", None)
-    config = OneShotConfig(
-        manuscript_md=manuscript,
-        docx_path=docx,
-        metadata_path=metadata if metadata.exists() else None,
-        frontmatter_destination=frontmatter if metadata.exists() else None,
-        corpus_path=corpus,
-        require_docx=not skip_docx,
-        work_type=effective_work_type,
+    """Run thesis one-shot gates; dissertations dispatch to dissertation-specific checks."""
+    return _run_one_shot_pipeline(
+        root_dir,
+        work_id,
+        skip_docx=skip_docx,
+        corpus_path=corpus_path,
+        work_type=work_type,
+        force_dissertation=False,
     )
-    report = run_one_shot(config)
 
-    reviews_dir = thesis_root / "reviews"
-    reviews_dir.mkdir(parents=True, exist_ok=True)
-    date_stamp = report.started_at.strftime("%Y-%m-%d")
-    md_path = reviews_dir / f"{date_stamp}-one-shot-report.md"
-    json_path = reviews_dir / f"{date_stamp}-one-shot-report.json"
-    write_report(report, markdown_path=md_path, json_path=json_path)
 
-    print(f"[one-shot] status: {report.status}")
-    for gate in report.gates:
-        marker = "PASS" if gate.passed else "FAIL"
-        print(f"  [{marker}] {gate.name}: {gate.summary}")
-    print(f"[one-shot] report: {md_path.relative_to(root_dir)}")
-    return 0 if report.status == "submission-ready" else 1
+def one_shot_dissertation(
+    root_dir: Path,
+    work_id: str | None,
+    *,
+    skip_docx: bool = False,
+    corpus_path: str | None = None,
+    work_type: str | None = None,
+) -> int:
+    """Run dissertation-specific deterministic gates and write a report."""
+    return _run_one_shot_pipeline(
+        root_dir,
+        work_id,
+        skip_docx=skip_docx,
+        corpus_path=corpus_path,
+        work_type=work_type,
+        force_dissertation=True,
+    )
 
 
 def build_vkr_frontmatter(root_dir: Path, work_id: str | None) -> int:
     """Render title-page/abstract/keywords/task-sheet from thesis/metadata.toml."""
+    from .dissertation_contour import is_dissertation_artifact_type
     from .vkr_artifacts import build_bundle, write_bundle
 
     workspace = load_workspace_config(root_dir)
     work = resolve_work_config(workspace, work_id=work_id)
     if not work.thesis:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+    if is_dissertation_artifact_type(work.artifact_type):
+        raise WorkspaceConfigError(
+            f"Work `{work.slug}` использует dissertation contour. Применяй build-dissertation-artifacts."
+        )
 
     thesis_root = work.thesis.paths.root_dir
     metadata_path = thesis_root / "metadata.toml"
@@ -1239,6 +1004,101 @@ def build_vkr_frontmatter(root_dir: Path, work_id: str | None) -> int:
     for path in written:
         print(f"  - {path.relative_to(root_dir)}")
     return 0
+
+
+def build_dissertation_artifacts(root_dir: Path, work_id: str | None) -> int:
+    """Render dissertation author abstract and defense checklist from thesis/dissertation/metadata.toml."""
+    from .dissertation_artifacts import build_bundle, write_bundle
+    from .dissertation_contour import dissertation_paths, is_dissertation_artifact_type
+
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    if not work.thesis:
+        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+    if not is_dissertation_artifact_type(work.artifact_type):
+        raise WorkspaceConfigError(
+            f"Work `{work.slug}` не является dissertation contour. Для ВКР используй build-vkr-frontmatter."
+        )
+
+    paths = dissertation_paths(work)
+    bundle = build_bundle(paths.metadata_path)
+    if bundle.has_blockers:
+        print(f"[dissertation] Невозможно собрать artifacts: {len(bundle.issues)} блокер(ов):")
+        for issue in bundle.issues:
+            print(f"  - [{issue.code}] {issue.message}")
+        print(f"[dissertation] Исправьте {paths.metadata_path} и повторите.")
+        return 1
+    written = write_bundle(bundle, destination=paths.artifacts_dir)
+    print(f"[dissertation] Записано {len(written)} файл(ов) в {paths.artifacts_dir}:")
+    for path in written:
+        print(f"  - {path.relative_to(root_dir)}")
+    return 0
+
+
+def _run_one_shot_pipeline(
+    root_dir: Path,
+    work_id: str | None,
+    *,
+    skip_docx: bool,
+    corpus_path: str | None,
+    work_type: str | None,
+    force_dissertation: bool,
+) -> int:
+    from .dissertation_contour import dissertation_paths, is_dissertation_artifact_type
+    from .one_shot import OneShotConfig, run_one_shot, write_report
+    from .work_type import resolve_profile
+
+    workspace = load_workspace_config(root_dir)
+    work = resolve_work_config(workspace, work_id=work_id)
+    if not work.thesis:
+        raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
+
+    effective_work_type = work_type or getattr(work, "artifact_type", None)
+    profile = resolve_profile(effective_work_type)
+    is_dissertation = bool(profile and profile.artifact_family == "dissertation") or (
+        effective_work_type is None and is_dissertation_artifact_type(work.artifact_type)
+    )
+    if force_dissertation and not is_dissertation:
+        raise WorkspaceConfigError(
+            f"Work `{work.slug}` не является dissertation contour. Для thesis/VKR используй one-shot-thesis."
+        )
+
+    thesis_root = work.thesis.paths.root_dir
+    manuscript = work.thesis.full_draft_path
+    docx = None if skip_docx else work.thesis.export_docx_path
+    corpus = _resolve_path(root_dir, corpus_path) if corpus_path else None
+
+    dissertation = dissertation_paths(work) if is_dissertation else None
+    metadata = thesis_root / "metadata.toml"
+    frontmatter = thesis_root / "frontmatter"
+    config = OneShotConfig(
+        manuscript_md=manuscript,
+        docx_path=docx,
+        metadata_path=metadata if metadata.exists() else None,
+        frontmatter_destination=frontmatter if metadata.exists() else None,
+        dissertation_metadata_path=dissertation.metadata_path if dissertation else None,
+        dissertation_artifacts_destination=dissertation.artifacts_dir if dissertation else None,
+        dissertation_root=dissertation.root_dir if dissertation else None,
+        corpus_path=corpus,
+        require_docx=not skip_docx,
+        work_type=effective_work_type,
+    )
+    report = run_one_shot(config)
+
+    reviews_dir = thesis_root / "reviews"
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    date_stamp = report.started_at.strftime("%Y-%m-%d")
+    stem = "one-shot-dissertation-report" if is_dissertation else "one-shot-report"
+    md_path = reviews_dir / f"{date_stamp}-{stem}.md"
+    json_path = reviews_dir / f"{date_stamp}-{stem}.json"
+    write_report(report, markdown_path=md_path, json_path=json_path)
+
+    print(f"[one-shot] status: {report.status}")
+    for gate in report.gates:
+        marker = "PASS" if gate.passed else "FAIL"
+        print(f"  [{marker}] {gate.name}: {gate.summary}")
+    print(f"[one-shot] report: {md_path.relative_to(root_dir)}")
+    return 0 if report.status == "submission-ready" else 1
 
 
 def _run_thesis_standards_checks(manuscript_md: Path, exported_docx: Path) -> None:
@@ -1355,6 +1215,26 @@ def _build_thesis_prompt(
             "Use $thesis-style-editor for a final style refinement pass on this checked thesis "
             f"text in the active work `{slug}`."
         ),
+        "build-maps": (
+            "Use $thesis-structure-architect, $thesis-research-synthesizer, and "
+            f"$thesis-source-verifier to build the dissertation research scaffold in `{slug}`."
+        ),
+        "verify-claims": (
+            "Use $thesis-source-verifier and $thesis-citation-checker for this dissertation "
+            f"claim verification pass in `{slug}`."
+        ),
+        "counterargument-pass": (
+            "Use $thesis-argument-critic and the dissertation counterargument workflow to "
+            f"stress-test the dissertation logic in `{slug}`."
+        ),
+        "draft-author-position": (
+            "Use $thesis-draft-writer, $thesis-source-verifier, and $thesis-argument-critic "
+            f"to draft the dissertation author position in `{slug}`."
+        ),
+        "formal-artifacts": (
+            "Use the dissertation formal-artifact workflow to update metadata, publication evidence, "
+            f"and generated dissertation artifacts in `{slug}`."
+        ),
     }
     target_label = {
         "full-cycle": "Target artifact",
@@ -1363,6 +1243,11 @@ def _build_thesis_prompt(
         "write-section": "Target section",
         "review-section": "Target section",
         "style-pass": "Target file",
+        "build-maps": "Target dissertation map",
+        "verify-claims": "Target dissertation claim artifact",
+        "counterargument-pass": "Target dissertation review artifact",
+        "draft-author-position": "Target dissertation section",
+        "formal-artifacts": "Target dissertation artifact",
     }[contract.action]
     standards_block = f"Standards profile:\n{profile_trace}\n" if contract.action != "review-section" else ""
     return f"""{action_intro[contract.action]}
@@ -1618,6 +1503,8 @@ def _thesis_related_context(
     target_path: Path,
     profile: StandardProfileResolution,
 ) -> list[Path]:
+    from .dissertation_contour import chapter_contract_paths, dissertation_paths, is_dissertation_artifact_type
+
     assert work.thesis is not None
     paths: list[Path] = [
         workspace.root_dir / "AGENTS.md",
@@ -1637,6 +1524,31 @@ def _thesis_related_context(
         workspace.root_dir / "templates" / "chat-sync.md",
         target_path,
     ]
+    if is_dissertation_artifact_type(work.artifact_type):
+        dissertation = dissertation_paths(work)
+        paths.extend(
+            [
+                workspace.root_dir / "templates" / "claim-map.md",
+                workspace.root_dir / "templates" / "dissertation-historiography-map.md",
+                workspace.root_dir / "templates" / "dissertation-novelty-map.md",
+                workspace.root_dir / "templates" / "dissertation-chapter-contract.md",
+                workspace.root_dir / "templates" / "dissertation-review-sheet.md",
+                workspace.root_dir / "templates" / "dissertation-publication-evidence.md",
+                workspace.root_dir / "templates" / "dissertation-publication-claim-matrix.md",
+                workspace.root_dir / "templates" / "dissertation-author-abstract.md",
+                dissertation.metadata_path,
+                dissertation.historiography_map_path,
+                dissertation.novelty_map_path,
+                dissertation.claim_map_path,
+                dissertation.counterargument_review_path,
+                dissertation.dissertation_review_path,
+                dissertation.publication_evidence_path,
+                dissertation.publication_claim_matrix_path,
+                dissertation.leading_organization_path,
+                dissertation.opponents_path,
+            ]
+        )
+        paths.extend(chapter_contract_paths(work))
     keywords = _target_keywords(target_path)
     for directory in (
         work.thesis.chapters_dir,
@@ -1792,7 +1704,7 @@ def _resolve_search(override: bool | None, default_value: bool) -> bool:
 
 
 def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, model: str | None) -> None:
-    codex_bin = os.environ.get("CODEX_BIN", "codex")
+    codex_bin = _resolve_codex_bin()
     cmd = [codex_bin]
     if use_search:
         cmd.append("--search")
@@ -1818,7 +1730,8 @@ def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, mo
 
 
 def _run_pandoc(input_md: Path, output_docx: Path) -> None:
-    if shutil.which("pandoc") is None:
+    pandoc_bin = _resolve_pandoc_bin()
+    if pandoc_bin is None:
         print(
             "Ошибка: утилита pandoc не найдена в PATH. Установите Pandoc: https://pandoc.org",
             file=sys.stderr,
@@ -1826,7 +1739,7 @@ def _run_pandoc(input_md: Path, output_docx: Path) -> None:
         raise FileNotFoundError("pandoc")
     subprocess.run(
         [
-            "pandoc",
+            pandoc_bin,
             str(input_md),
             "--from",
             "markdown+footnotes",
@@ -1837,6 +1750,32 @@ def _run_pandoc(input_md: Path, output_docx: Path) -> None:
         ],
         check=True,
     )
+
+
+def _resolve_pandoc_bin() -> str | None:
+    return resolve_executable(
+        os.environ.get("PANDOC_BIN"),
+        "pandoc",
+        extra_candidates=("/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc"),
+    )
+
+
+def _resolve_codex_bin() -> str:
+    configured = os.environ.get("CODEX_BIN")
+    resolved = resolve_executable(
+        configured,
+        "codex",
+        extra_candidates=("/Applications/Codex.app/Contents/Resources/codex",),
+    )
+    if resolved:
+        return resolved
+    requested = (configured or "codex").strip() or "codex"
+    print(
+        f"Ошибка: не найден исполняемый файл `{requested}`. "
+        "Установите Codex CLI или задайте переменную окружения CODEX_BIN.",
+        file=sys.stderr,
+    )
+    raise FileNotFoundError(requested)
 
 
 def _read_notes(root_dir: Path, raw: str | None) -> str:

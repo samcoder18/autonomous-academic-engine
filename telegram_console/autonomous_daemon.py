@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import traceback
 from datetime import UTC, datetime, timedelta
@@ -14,6 +12,15 @@ from typing import Any
 
 from .autonomous_planner import build_autonomous_plan
 from .autonomous_runner import execute_autonomous_command
+from .autonomous_runtime_store import (
+    autonomous_runtime_dir,
+    build_lock_payload,
+    build_stop_request_payload,
+    read_json_payload,
+    remove_runtime_file,
+    runtime_file_path,
+    write_json_payload,
+)
 from .ops_alerts import AlertSeverity, emit_alert
 from .orchestrator import WorkflowOrchestrator
 from .resource_guards import ResourceGuardError, RunGuards, StuckDetector, TimeoutBudget
@@ -26,49 +33,48 @@ PLACEHOLDER_RE = re.compile(r"<[^>]+>")
 
 
 def daemon_runtime_dir(root_dir: str | Path) -> Path:
-    return Path(root_dir).resolve() / "output" / "telegram" / "runtime" / "autonomous"
+    return autonomous_runtime_dir(root_dir)
 
 
 def daemon_state_path(root_dir: str | Path, work_id: str) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{work_id}.daemon.json"
+    return runtime_file_path(root_dir, f"{work_id}.daemon.json")
 
 
 def daemon_lock_path(root_dir: str | Path, work_id: str) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{work_id}.daemon.lock.json"
+    return runtime_file_path(root_dir, f"{work_id}.daemon.lock.json")
 
 
 def daemon_stop_path(root_dir: str | Path, work_id: str) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{work_id}.daemon.stop.json"
+    return runtime_file_path(root_dir, f"{work_id}.daemon.stop.json")
 
 
 def read_daemon_state(root_dir: str | Path, work_id: str) -> dict[str, Any] | None:
-    return _read_json(daemon_state_path(root_dir, work_id))
+    return read_json_payload(daemon_state_path(root_dir, work_id))
 
 
 def write_daemon_state(root_dir: str | Path, work_id: str, payload: dict[str, Any]) -> Path:
     normalized = _normalize_daemon_state(root_dir, work_id, payload)
     path = daemon_state_path(root_dir, work_id)
-    _write_json(path, normalized)
+    write_json_payload(path, normalized)
     return path
 
 
 def read_daemon_lock(root_dir: str | Path, work_id: str) -> dict[str, Any] | None:
-    return _read_json(daemon_lock_path(root_dir, work_id))
+    return read_json_payload(daemon_lock_path(root_dir, work_id))
 
 
 def write_daemon_lock(root_dir: str | Path, work_id: str, payload: dict[str, Any]) -> Path:
-    lock = {
-        "kind": "autonomous-daemon-lock",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": work_id,
-        "mode": _optional_text(payload.get("mode")) or "autonomous-full",
-        "root_dir": str(Path(root_dir).resolve()),
-        "pid": _optional_int(payload.get("pid")) or os.getpid(),
-        "started_at": _optional_text(payload.get("started_at")) or utc_now(),
-        "heartbeat_at": _optional_text(payload.get("heartbeat_at")) or utc_now(),
-    }
+    lock = build_lock_payload(
+        root_dir,
+        work_id,
+        version=DAEMON_STATE_VERSION,
+        mode=_optional_text(payload.get("mode")),
+        pid=_optional_int(payload.get("pid")),
+        started_at=_optional_text(payload.get("started_at")),
+        heartbeat_at=_optional_text(payload.get("heartbeat_at")),
+    )
     path = daemon_lock_path(root_dir, work_id)
-    _write_json(path, lock)
+    write_json_payload(path, lock)
     return path
 
 
@@ -154,50 +160,36 @@ def acquire_daemon_lock(
 def heartbeat_daemon_lock(root_dir: str | Path, work_id: str, *, pid: int | None = None) -> dict[str, Any]:
     lock = read_daemon_lock(root_dir, work_id) or {}
     owner_pid = pid or _optional_int(lock.get("pid")) or os.getpid()
-    updated = {
-        **lock,
-        "kind": "autonomous-daemon-lock",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": work_id,
-        "root_dir": str(Path(root_dir).resolve()),
-        "pid": owner_pid,
-        "started_at": _optional_text(lock.get("started_at")) or utc_now(),
-        "heartbeat_at": utc_now(),
-    }
-    if not _optional_text(updated.get("mode")):
-        updated["mode"] = "autonomous-full"
+    updated = build_lock_payload(
+        root_dir,
+        work_id,
+        version=DAEMON_STATE_VERSION,
+        mode=_optional_text(lock.get("mode")),
+        pid=owner_pid,
+        started_at=_optional_text(lock.get("started_at")),
+        heartbeat_at=utc_now(),
+    )
     write_daemon_lock(root_dir, work_id, updated)
     return updated
 
 
 def release_daemon_lock(root_dir: str | Path, work_id: str) -> None:
-    path = daemon_lock_path(root_dir, work_id)
-    if path.exists():
-        path.unlink()
+    remove_runtime_file(daemon_lock_path(root_dir, work_id))
 
 
 def request_daemon_stop(root_dir: str | Path, work_id: str, *, reason: str = "operator-stop") -> Path:
-    payload = {
-        "kind": "autonomous-daemon-stop-request",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": work_id,
-        "reason": reason,
-        "requested_at": utc_now(),
-        "readiness_claim": "none",
-    }
+    payload = build_stop_request_payload(work_id, version=DAEMON_STATE_VERSION, reason=reason)
     path = daemon_stop_path(root_dir, work_id)
-    _write_json(path, payload)
+    write_json_payload(path, payload)
     return path
 
 
 def read_daemon_stop_request(root_dir: str | Path, work_id: str) -> dict[str, Any] | None:
-    return _read_json(daemon_stop_path(root_dir, work_id))
+    return read_json_payload(daemon_stop_path(root_dir, work_id))
 
 
 def clear_daemon_stop_request(root_dir: str | Path, work_id: str) -> None:
-    path = daemon_stop_path(root_dir, work_id)
-    if path.exists():
-        path.unlink()
+    remove_runtime_file(daemon_stop_path(root_dir, work_id))
 
 
 def daemon_status_payload(root_dir: str | Path, work_id: str) -> dict[str, Any]:
@@ -414,6 +406,8 @@ def run_daemon_tick(
     try:
         stop_request = read_daemon_stop_request(root_dir, work_id)
         if isinstance(stop_request, dict):
+            stop_reason = _optional_text(stop_request.get("reason")) or "operator-stop"
+            clear_daemon_stop_request(root_dir, work_id)
             return _write_daemon_cycle_state(
                 root_dir=root_dir,
                 work_id=work_id,
@@ -423,10 +417,10 @@ def run_daemon_tick(
                 max_cycles=max_cycles,
                 poll_seconds=poll_seconds,
                 max_runtime_minutes=max_runtime_minutes,
-                stop_reason=_optional_text(stop_request.get("reason")) or "operator-stop",
+                stop_reason=stop_reason,
                 decision={
                     "decision": "blocked",
-                    "stop_reason": _optional_text(stop_request.get("reason")) or "operator-stop",
+                    "stop_reason": stop_reason,
                     "blocking_categories": ["operator-stop"],
                     "blocking_gate_ids": [],
                     "readiness_claim": "none",
@@ -1124,25 +1118,6 @@ def _infer_intent(command: str | None) -> str | None:
     if command.startswith("standards-refresh"):
         return "standards-refresh"
     return None
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        temp_name = handle.name
-    Path(temp_name).replace(path)
 
 
 def _optional_text(value: object) -> str | None:

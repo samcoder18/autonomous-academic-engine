@@ -10,6 +10,8 @@ from unittest.mock import patch
 from telegram_console import work_cli
 from telegram_console.work_bootstrap import (
     DEFAULT_ARTICLE_PROFILE,
+    DEFAULT_DISSERTATION_CANDIDATE_PROFILE,
+    DEFAULT_DISSERTATION_DOCTOR_PROFILE,
     DEFAULT_THESIS_PROFILE,
     WorkBootstrapError,
     WorkBootstrapRequest,
@@ -21,7 +23,7 @@ from telegram_console.work_bootstrap import (
 
 MINIMAL_WORKSPACE_TOML = """\
 version = 1
-default_work = "biometrics-vkr"
+default_work = "starter-work"
 supported_lanes = ["thesis", "article"]
 
 [default_profiles]
@@ -33,16 +35,16 @@ runs_dir = "output/runs"
 docx_dir = "output/docx"
 
 [works]
-biometrics-vkr = "works/biometrics-vkr"
+starter-work = "works/starter-work"
 """
 
 
 def _prepare_workspace(tmp: Path) -> Path:
     (tmp / "workspace.toml").write_text(MINIMAL_WORKSPACE_TOML, encoding="utf-8")
-    biometrics_dir = tmp / "works" / "biometrics-vkr"
-    biometrics_dir.mkdir(parents=True, exist_ok=True)
-    # Place a marker so the existing biometrics-vkr directory is non-empty.
-    (biometrics_dir / "placeholder.txt").write_text("placeholder", encoding="utf-8")
+    starter_dir = tmp / "works" / "starter-work"
+    starter_dir.mkdir(parents=True, exist_ok=True)
+    # Place a marker so the existing starter-work directory is non-empty.
+    (starter_dir / "placeholder.txt").write_text("placeholder", encoding="utf-8")
     return tmp
 
 
@@ -105,8 +107,22 @@ class RenderWorkTomlTests(unittest.TestCase):
         self.assertEqual(parsed["active_lanes"], ["thesis", "article"])
         self.assertIn("thesis", parsed)
         self.assertIn("article", parsed)
-        self.assertIn("thesis_profile", parsed["standards"])
+        self.assertEqual(parsed["standards"]["thesis_profile"], DEFAULT_DISSERTATION_CANDIDATE_PROFILE)
         self.assertIn("article_profile", parsed["standards"])
+
+    def test_doctor_dissertation_uses_doctor_profile_and_fourth_chapter(self) -> None:
+        request = WorkBootstrapRequest(
+            slug="doctor-law-2027",
+            title="Докторская диссертация",
+            topic="Правовое регулирование",
+            artifact_type="dissertation-doctor",
+        )
+        text = render_work_toml(request)
+        parsed = tomllib.loads(text)
+        self.assertEqual(parsed["standards"]["thesis_profile"], DEFAULT_DISSERTATION_DOCTOR_PROFILE)
+        section_order = parsed["thesis"]["section_order"]
+        self.assertTrue(any("05-chapter-4.md" in path for path in section_order))
+        self.assertTrue(any("07-bibliography.md" in path for path in section_order))
 
     def test_rejects_unknown_artifact_type(self) -> None:
         request = WorkBootstrapRequest(
@@ -152,7 +168,7 @@ class RegisterWorkInWorkspaceTomlTests(unittest.TestCase):
         )
         self.assertIn('smart-contracts-article = "works/smart-contracts-article"', updated)
         parsed = tomllib.loads(updated)
-        self.assertEqual(parsed["default_work"], "biometrics-vkr")
+        self.assertEqual(parsed["default_work"], "starter-work")
         self.assertIn("smart-contracts-article", parsed["works"])
 
     def test_set_default_replaces_default_work(self) -> None:
@@ -231,7 +247,7 @@ class BootstrapWorkTests(unittest.TestCase):
         workspace_text = (self.root / "workspace.toml").read_text(encoding="utf-8")
         parsed_workspace = tomllib.loads(workspace_text)
         self.assertIn("smart-contracts-article", parsed_workspace["works"])
-        self.assertEqual(parsed_workspace["default_work"], "biometrics-vkr")
+        self.assertEqual(parsed_workspace["default_work"], "starter-work")
 
         work_toml = tomllib.loads(result.work_toml.read_text(encoding="utf-8"))
         self.assertEqual(work_toml["slug"], "smart-contracts-article")
@@ -254,6 +270,35 @@ class BootstrapWorkTests(unittest.TestCase):
         workspace_text = (self.root / "workspace.toml").read_text(encoding="utf-8")
         parsed_workspace = tomllib.loads(workspace_text)
         self.assertEqual(parsed_workspace["default_work"], "my-new-vkr")
+
+    def test_creates_doctor_dissertation_specific_placeholders(self) -> None:
+        request = WorkBootstrapRequest(
+            slug="doctor-law-2027",
+            title="Докторская диссертация",
+            topic="Теория публичного права",
+            artifact_type="dissertation-doctor",
+        )
+        result = bootstrap_work(self.root, request)
+        sections_dir = result.work_dir / "thesis" / "manuscript" / "sections"
+        self.assertTrue((sections_dir / "05-chapter-4.md").exists())
+        self.assertTrue((sections_dir / "07-bibliography.md").exists())
+        self.assertTrue((result.work_dir / "thesis" / "dissertation" / "metadata.toml").exists())
+        self.assertTrue((result.work_dir / "thesis" / "dissertation" / "defense" / "leading-organization.md").exists())
+        self.assertTrue((result.work_dir / "thesis" / "dissertation" / "defense" / "opponents.md").exists())
+
+    def test_creates_candidate_publication_matrix_without_doctor_extras(self) -> None:
+        request = WorkBootstrapRequest(
+            slug="candidate-law-2027",
+            title="Кандидатская диссертация",
+            topic="Цифровая идентификация",
+            artifact_type="dissertation-candidate",
+        )
+        result = bootstrap_work(self.root, request)
+        self.assertTrue(
+            (result.work_dir / "thesis" / "dissertation" / "publications" / "publication-claim-matrix.md").exists()
+        )
+        self.assertFalse((result.work_dir / "thesis" / "dissertation" / "defense" / "leading-organization.md").exists())
+        self.assertFalse((result.work_dir / "thesis" / "dissertation" / "defense" / "opponents.md").exists())
 
     def test_refuses_when_target_directory_non_empty(self) -> None:
         conflict_dir = self.root / "works" / "already-here"
@@ -312,7 +357,7 @@ class WorkInitCliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         stdout = fake_stdout.getvalue()
         self.assertIn("Created work `smart-contracts`", stdout)
-        self.assertIn("default_work remains `biometrics-vkr`", stdout)
+        self.assertIn("default_work remains `starter-work`", stdout)
 
     def test_cli_json_output(self) -> None:
         with patch("sys.stdout", new_callable=StringIO) as fake_stdout:
@@ -354,6 +399,48 @@ class WorkInitCliTests(unittest.TestCase):
             )
         self.assertEqual(rc, 2)
         self.assertIn("work init failed", fake_stderr.getvalue())
+
+
+class OneShotCliTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self.root = _prepare_workspace(Path(self._tempdir.name))
+
+    def tearDown(self) -> None:
+        self._tempdir.cleanup()
+
+    def test_dissertation_one_shot_cli_returns_report_instead_of_crashing(self) -> None:
+        bootstrap_work(
+            self.root,
+            WorkBootstrapRequest(
+                slug="candidate-law-2027",
+                title="Кандидатская диссертация",
+                topic="Цифровая идентификация",
+                artifact_type="dissertation-candidate",
+            ),
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as fake_stdout:
+            rc = work_cli.main(
+                [
+                    "one-shot-dissertation",
+                    "--work",
+                    "candidate-law-2027",
+                    "--skip-docx",
+                ],
+                root_dir=self.root,
+            )
+
+        self.assertEqual(rc, 1)
+        stdout = fake_stdout.getvalue()
+        self.assertIn("[one-shot] status: strong-draft-with-blockers", stdout)
+        self.assertIn("one-shot-dissertation-report.md", stdout)
+        report_paths = sorted(
+            (self.root / "works" / "candidate-law-2027" / "thesis" / "reviews").glob(
+                "*-one-shot-dissertation-report.md"
+            )
+        )
+        self.assertEqual(len(report_paths), 1)
 
 
 if __name__ == "__main__":

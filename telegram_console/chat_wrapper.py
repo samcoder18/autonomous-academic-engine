@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .runtime_status import build_attachments, build_checkpoint, build_failure, build_runtime_status, write_status
-from .utils import append_text, utc_now, write_json
+from .utils import append_text, resolve_executable, utc_now, write_json
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -24,7 +24,7 @@ def read_request(task_dir: Path) -> dict[str, object]:
 
 
 def build_command(request: dict[str, object], response_path: Path, session_id: str | None) -> list[str]:
-    codex_bin = str(request.get("codex_bin") or "").strip() or "codex"
+    codex_bin = _resolve_codex_bin(request)
     project_root = str(request.get("project_root") or "").strip()
     if not project_root:
         raise RuntimeError("request.project_root is required")
@@ -50,6 +50,21 @@ def build_command(request: dict[str, object], response_path: Path, session_id: s
         command.extend(["-m", model])
     command.append("-")
     return command
+
+
+def _resolve_codex_bin(request: dict[str, object]) -> str:
+    configured = str(request.get("codex_bin") or "").strip() or None
+    resolved = resolve_executable(
+        configured,
+        "codex",
+        extra_candidates=("/Applications/Codex.app/Contents/Resources/codex",),
+    )
+    if resolved:
+        return resolved
+    requested = configured or "codex"
+    raise RuntimeError(
+        f"Не найден исполняемый файл `{requested}`. Установите Codex CLI или задайте переменную окружения CODEX_BIN."
+    )
 
 
 def parse_json_events(stdout_text: str) -> tuple[str | None, str | None]:

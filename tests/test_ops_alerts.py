@@ -18,7 +18,7 @@ class OpsAlertTests(unittest.TestCase):
                 code="daemon-stale-lock",
                 message="Stale lock detected",
                 component="autonomous_daemon",
-                work_id="biometrics-vkr",
+                work_id="starter-work",
                 details={"lock": "/tmp/x.lock"},
                 sink=sink,
             )
@@ -27,7 +27,7 @@ class OpsAlertTests(unittest.TestCase):
             payload = json.loads(lines[0])
             self.assertEqual(payload["code"], "daemon-stale-lock")
             self.assertEqual(payload["severity"], "warning")
-            self.assertEqual(payload["work_id"], "biometrics-vkr")
+            self.assertEqual(payload["work_id"], "starter-work")
             self.assertEqual(payload["details"], {"lock": "/tmp/x.lock"})
 
     def test_emit_invokes_telegram_sender(self) -> None:

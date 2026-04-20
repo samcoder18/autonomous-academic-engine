@@ -13,7 +13,7 @@
 - Внешние требования и publication profiles живут в [meta/standards](meta/standards) в модели `raw + normalized`.
 - Сборочные thesis-файлы и DOCX не редактируются вручную как основные документы.
 
-По умолчанию активная работа workspace: `biometrics-vkr`.
+По умолчанию активная работа workspace: `starter-work`.
 CLI и Telegram runtime могут переключать `active work`.
 
 ## Агентные роли
@@ -80,17 +80,24 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 - [scripts/export_docx.sh](scripts/export_docx.sh) - экспортирует thesis DOCX выбранной работы.
 - [scripts/export_academic_docx.sh](scripts/export_academic_docx.sh) - экспортирует article DOCX выбранной работы.
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter` - генерирует title-page / abstract / keywords / task-sheet для VKR по `works/<slug>/thesis/metadata.toml`.
+- `python3 -m telegram_console.work_cli build-dissertation-artifacts` - генерирует `author-abstract.md` и `defense-checklist.md` для dissertation contour по `works/<slug>/thesis/dissertation/metadata.toml`; для candidate contour вызывается после maps, review sequence и author-position drafting, а `publication-claim-matrix.md` ведется как отдельный обязательный scaffold artifact.
 - `python3 -m telegram_console.work_cli one-shot-thesis` - запускает автономные machine-driven гейты (frontmatter, ГОСТ, DOCX, originality, work-type) и пишет отчёт в `works/<slug>/thesis/reviews/`. Регламент описан в §11 [master-protocol.md](meta/master-protocol.md).
-- `python3 -m telegram_console.work_cli autonomous daemon run [--stuck-after-minutes N]` - запускает long-running автономный цикл с ops-alerts и resource-guards. Операционный канал описан в §11.1 [master-protocol.md](meta/master-protocol.md).
+- `python3 -m telegram_console.work_cli one-shot-dissertation` - запускает dissertation-specific machine-driven гейты (artifacts, maps, reviews, publication evidence, publication-claim matrix, length, ГОСТ, DOCX, originality) и пишет отчёт в `works/<slug>/thesis/reviews/`.
+- `python3 -m telegram_console.work_cli autonomous daemon run [--stuck-after-minutes N]` - запускает long-running автономный цикл с ops-alerts и resource-guards. Операционный канал описан в §11.2 [master-protocol.md](meta/master-protocol.md).
 - `python3 -m telegram_console.work_cli work-status [--json]` - показывает индекс сигналов и следующий безопасный шаг по активной работе.
 - `python3 -m telegram_console.work_cli work init <slug> --artifact-type <type> --title "..." [--topic "..."] [--lanes thesis,article] [--set-default]` - создает новый `works/<slug>/` bundle (`work.toml`, `work-canon.md`, обязательные подпапки lane) и регистрирует его в `workspace.toml`. Новые works полностью изолированы от существующих.
 
 ## Навигация
 
 - [README.md](README.md) - пользовательский обзор, quickstart, архитектура и CI.
-- [meta/master-protocol.md](meta/master-protocol.md) - единый процессный регламент (включая §11 автономный движок и §11.1 ops-канал).
+- [meta/master-protocol.md](meta/master-protocol.md) - единый процессный регламент (включая §11 автономный движок, §11.1 repo-level release claims и §11.2 ops-канал).
 - [meta/autonomous-engine-unknowns-2026-04-19.md](meta/autonomous-engine-unknowns-2026-04-19.md) - прагматические границы автономного движка.
 - [meta/engineering-audit-autonomous-workspace-2026-04-19.md](meta/engineering-audit-autonomous-workspace-2026-04-19.md) - инженерный аудит workspace и план мигитации.
+- [meta/runtime-reliability-audit-2026-04-20.md](meta/runtime-reliability-audit-2026-04-20.md) - аудит daemon/CLI/runtime reliability после hardening wave.
+- [meta/runtime-reliability-backlog-2026-04-20.md](meta/runtime-reliability-backlog-2026-04-20.md) - backlog runtime reliability после фиксов этой волны.
+- [meta/candidate-polish-audit-2026-04-20.md](meta/candidate-polish-audit-2026-04-20.md) - audit-отчёт по candidate contour перед doctor-phase.
+- [meta/candidate-polish-backlog-2026-04-20.md](meta/candidate-polish-backlog-2026-04-20.md) - backlog с разделением на `must-fix before doctor`, `candidate-safe defer`, `doctor-phase only`.
+- [meta/final-quality-audit-2026-04-20.md](meta/final-quality-audit-2026-04-20.md) - итоговый repo-wide quality audit, findings и conservative repair summary.
 
 ## Процесс
 

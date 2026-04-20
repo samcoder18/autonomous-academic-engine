@@ -77,6 +77,58 @@ label = "Страница protect.gost.ru с релевантным нормат
 url = "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search="
 filename = "rf-dissertation-gost-page.html"
 
+[profiles."rf-dissertation-candidate"]
+workflow_lane = "thesis"
+unit_kind = "dissertation-regulation"
+status = "official"
+normalized_path = "meta/standards/normalized/rf-dissertation-candidate.md"
+raw_dir = "meta/standards/raw/rf-dissertation-candidate"
+official_only = true
+operative_source_id = "rf-dissertation-pravo-gov-2013"
+notes = [
+  "Operative candidate dissertation profile for thesis workflow binding.",
+  "Uses the federal dissertation regulation bundle together with local dissertation contour gates.",
+]
+
+[[profiles."rf-dissertation-candidate".sources]]
+id = "rf-dissertation-pravo-gov-2013"
+label = "Официальное опубликование правового акта на publication.pravo.gov.ru"
+url = "https://publication.pravo.gov.ru/document/0001201310010030"
+date = "2013-10-01"
+filename = "rf-dissertation-pravo-gov-2013.html"
+
+[[profiles."rf-dissertation-candidate".sources]]
+id = "rf-dissertation-gost-page"
+label = "Страница protect.gost.ru с релевантным нормативным контекстом"
+url = "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search="
+filename = "rf-dissertation-gost-page.html"
+
+[profiles."rf-dissertation-doctor"]
+workflow_lane = "thesis"
+unit_kind = "dissertation-regulation"
+status = "official"
+normalized_path = "meta/standards/normalized/rf-dissertation-doctor.md"
+raw_dir = "meta/standards/raw/rf-dissertation-doctor"
+official_only = true
+operative_source_id = "rf-dissertation-pravo-gov-2013"
+notes = [
+  "Operative doctoral dissertation profile for thesis workflow binding.",
+  "Adds defense-packet expectations and stronger dissertation contour requirements on top of the federal regulation bundle.",
+]
+
+[[profiles."rf-dissertation-doctor".sources]]
+id = "rf-dissertation-pravo-gov-2013"
+label = "Официальное опубликование правового акта на publication.pravo.gov.ru"
+url = "https://publication.pravo.gov.ru/document/0001201310010030"
+date = "2013-10-01"
+filename = "rf-dissertation-pravo-gov-2013.html"
+
+[[profiles."rf-dissertation-doctor".sources]]
+id = "rf-dissertation-gost-page"
+label = "Страница protect.gost.ru с релевантным нормативным контекстом"
+url = "https://protect.gost.ru/document.aspx?catalogid=22&control=13&page=1745&search="
+filename = "rf-dissertation-gost-page.html"
+
 [profiles."journal-jrp"]
 workflow_lane = "article"
 unit_kind = "journal"

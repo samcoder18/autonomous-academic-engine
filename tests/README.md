@@ -6,15 +6,19 @@
   python3 -m unittest discover -s tests -q
   ```
 
-- Основной интеграционный модуль: [`test_telegram_console.py`](test_telegram_console.py).
-- Автономный движок (Фазы 0–7):
+- Канонический deterministic entrypoint для локальной проверки и CI — именно `unittest discover`, а не один "главный" модуль.
+- Regression pack уже split по подсистемам:
+  - [`test_daemon_ops_integration.py`](test_daemon_ops_integration.py), [`test_daemon_smoke.py`](test_daemon_smoke.py) — daemon, ops-alerts и runtime containment;
+  - [`test_work_cli_autonomous.py`](test_work_cli_autonomous.py), [`test_work_cli_launchd.py`](test_work_cli_launchd.py), [`test_work_cli_runtime.py`](test_work_cli_runtime.py) — JSON-first CLI surfaces, launchd/runtime status и machine-readable contracts;
+  - [`test_work_bootstrap.py`](test_work_bootstrap.py), [`test_work_state.py`](test_work_state.py), [`test_work_type.py`](test_work_type.py) — work bundle bootstrap, next-action/state logic и profile coupling;
+  - [`test_dissertation_artifacts.py`](test_dissertation_artifacts.py), [`test_dissertation_standards.py`](test_dissertation_standards.py), [`test_one_shot.py`](test_one_shot.py) — dissertation contour, standards gating и one-shot flows;
+  - [`test_regression_harness.py`](test_regression_harness.py) — offline smoke вокруг публичных workflow surfaces.
+- Legacy coverage в [`test_telegram_console.py`](test_telegram_console.py) всё ещё есть, но это уже не единственный и не главный интеграционный центр.
+- Базовые тематические группы по-прежнему покрывают:
   - [`test_verdict_parser.py`](test_verdict_parser.py) — структурированные verdict-блоки;
   - [`test_ops_alerts.py`](test_ops_alerts.py), [`test_resource_guards.py`](test_resource_guards.py) — ops-каналы и resource guards;
   - [`test_sources_core.py`](test_sources_core.py), [`test_source_connectors.py`](test_source_connectors.py), [`test_source_verifier.py`](test_source_verifier.py) — connectors + verifier;
   - [`test_originality.py`](test_originality.py) — MinHash fingerprint и corpus;
-  - [`test_gost_linter.py`](test_gost_linter.py), [`test_docx_conformance.py`](test_docx_conformance.py) — ГОСТ и DOCX-conformance;
-  - [`test_vkr_artifacts.py`](test_vkr_artifacts.py), [`test_work_type.py`](test_work_type.py), [`test_one_shot.py`](test_one_shot.py), [`test_regression_harness.py`](test_regression_harness.py) — VKR-артефакты, work-type-профили и end-to-end smoke.
+  - [`test_gost_linter.py`](test_gost_linter.py), [`test_docx_conformance.py`](test_docx_conformance.py), [`test_vkr_artifacts.py`](test_vkr_artifacts.py) — ГОСТ, DOCX-conformance и VKR artifacts.
 
 - Зависимости рантайма — только стандартная библиотека Python 3.11+ (см. [pyproject.toml](../pyproject.toml)).
-
-При дальнейшем развитии допустимо разнести классы `test_telegram_console.py` по пакету `tests/test_telegram_console/` с общими фикстурами в `tests/support/`, сохранив discoverability через `unittest discover -s tests`.

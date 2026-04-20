@@ -14,6 +14,22 @@ THESIS_ACTION_PATTERNS = {
     "write-section": ("manuscript/sections/*.md",),
     "review-section": ("manuscript/sections/*.md",),
     "style-pass": ("manuscript/sections/*.md",),
+    "build-maps": ("dissertation/maps/*.md", "dissertation/chapter-contracts/*.md"),
+    "verify-claims": (
+        "dissertation/maps/*.md",
+        "dissertation/chapter-contracts/*.md",
+        "dissertation/reviews/*.md",
+        "manuscript/sections/*.md",
+    ),
+    "counterargument-pass": ("dissertation/maps/*.md", "dissertation/reviews/*.md", "manuscript/sections/*.md"),
+    "draft-author-position": ("manuscript/sections/*.md",),
+    "formal-artifacts": (
+        "dissertation/metadata.toml",
+        "dissertation/publications/*.md",
+        "dissertation/reviews/*.md",
+        "dissertation/artifacts/*.md",
+        "dissertation/defense/*.md",
+    ),
 }
 
 ARTICLE_ACTION_PATTERNS = {

@@ -20,16 +20,32 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from telegram_console import ops_alerts
 from telegram_console.autonomous_daemon import (
     _build_foreground_guards,
     _resolve_stuck_after_minutes,
     acquire_daemon_lock,
+    daemon_lock_path,
+    daemon_status_payload,
+    daemon_stop_path,
     release_daemon_lock,
+    request_daemon_stop,
+    run_daemon_foreground,
+    run_daemon_tick,
     write_daemon_lock,
 )
+from telegram_console.autonomous_scheduler import (
+    build_multi_work_schedule,
+    multi_daemon_status_payload,
+    multi_daemon_stop_path,
+    request_multi_daemon_stop,
+    run_multi_work_daemon_tick,
+)
 from telegram_console.ops_alerts import OpsAlert, OpsAlertSink, configure_default_sink
+from telegram_console.resource_guards import ResourceGuardError
+from tests.test_telegram_console import TEST_WORK_ID, add_demo_work_clone, build_fake_repo, write_raw_manifest
 
 
 class _RecordingSink(OpsAlertSink):
@@ -159,6 +175,133 @@ class GuardsConfigTests(unittest.TestCase):
     def test_build_foreground_guards_default_stuck_to_runtime(self) -> None:
         guards = _build_foreground_guards(max_runtime_minutes=90, stuck_after_minutes=None)
         self.assertEqual(guards.stuck.stuck_after, timedelta(minutes=90))
+
+
+class DaemonReliabilityTests(unittest.TestCase):
+    def test_run_daemon_foreground_releases_lock_on_guard_stop(self) -> None:
+        class _FailingGuards:
+            def start(self) -> None:
+                return None
+
+            def checkpoint(self, note: str = "") -> None:
+                return None
+
+            def check(self) -> None:
+                raise ResourceGuardError(
+                    code="run-stuck",
+                    message="autonomous daemon progress stalled",
+                    details={"idle_s": 600.0},
+                )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            with patch("telegram_console.autonomous_daemon._build_foreground_guards", return_value=_FailingGuards()):
+                state = run_daemon_foreground(
+                    root_dir=root,
+                    work_id=TEST_WORK_ID,
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                    sleep_between_cycles=False,
+                )
+
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["stop_reason"], "run-stuck")
+            self.assertFalse(daemon_lock_path(root, TEST_WORK_ID).exists())
+
+    def test_run_daemon_foreground_releases_lock_on_unhandled_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+
+            with patch("telegram_console.autonomous_daemon.run_daemon_tick", side_effect=RuntimeError("boom")):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    run_daemon_foreground(
+                        root_dir=root,
+                        work_id=TEST_WORK_ID,
+                        mode="autonomous-full",
+                        poll_seconds=0,
+                        max_cycles=5,
+                        max_runtime_minutes=10,
+                        sleep_between_cycles=False,
+                    )
+
+            self.assertFalse(daemon_lock_path(root, TEST_WORK_ID).exists())
+
+    def test_single_work_stop_request_is_consumed_after_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            request_daemon_stop(root, TEST_WORK_ID, reason="operator-stop")
+
+            state = run_daemon_tick(
+                root_dir=root,
+                work_id=TEST_WORK_ID,
+                mode="autonomous-full",
+                poll_seconds=0,
+                max_cycles=5,
+                max_runtime_minutes=10,
+            )
+
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["stop_reason"], "operator-stop")
+            self.assertFalse(daemon_stop_path(root, TEST_WORK_ID).exists())
+            self.assertIsNone(daemon_status_payload(root, TEST_WORK_ID)["stop_request"])
+
+    def test_multi_work_stop_request_is_consumed_after_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            request_multi_daemon_stop(root, works_scope="all", reason="operator-stop")
+
+            state = run_multi_work_daemon_tick(
+                root_dir=root,
+                work_ids=[TEST_WORK_ID],
+                works_scope="all",
+                mode="autonomous-full",
+                poll_seconds=0,
+                max_cycles=5,
+                max_runtime_minutes=10,
+            )
+
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["stop_reason"], "operator-stop")
+            self.assertFalse(multi_daemon_stop_path(root).exists())
+            self.assertIsNone(multi_daemon_status_payload(root, works_scope="all")["stop_request"])
+
+    def test_multi_work_schedule_isolates_work_state_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            add_demo_work_clone(root, "zeta-work")
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            original = build_multi_work_schedule.__globals__["WorkflowOrchestrator"].get_work_state
+
+            def _flaky_get_work_state(self: Any, *, work_id: str | None = None) -> dict[str, Any]:
+                if work_id == TEST_WORK_ID:
+                    raise RuntimeError("broken work-state")
+                return original(self, work_id=work_id)
+
+            with patch(
+                "telegram_console.autonomous_scheduler.WorkflowOrchestrator.get_work_state",
+                new=_flaky_get_work_state,
+            ):
+                schedule = build_multi_work_schedule(
+                    root_dir=root,
+                    work_ids=[TEST_WORK_ID, "zeta-work"],
+                    mode="autonomous-full",
+                    works_scope="all",
+                )
+
+            self.assertEqual(schedule["status"], "ready")
+            self.assertEqual(schedule["selected_work_id"], "zeta-work")
+            broken = next(item for item in schedule["candidates"] if item["work_id"] == TEST_WORK_ID)
+            self.assertEqual(broken["status"], "blocked")
+            self.assertEqual(broken["stop_reason"], "work-state-runtime-error")
 
 
 if __name__ == "__main__":

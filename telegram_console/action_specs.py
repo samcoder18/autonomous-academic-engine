@@ -450,6 +450,174 @@ _ACTION_SPECS: dict[tuple[str, str], ActionSpec] = {
         ),
         target_validation="Validated by workspace target normalization for thesis style-pass actions.",
     ),
+    ("thesis", "build-maps"): ActionSpec(
+        lane="thesis",
+        action="build-maps",
+        title="Dissertation map building",
+        summary="Построение dissertation maps и chapter research contracts.",
+        target_kind="dissertation map or contract",
+        prompt_rules=(
+            "Treat dissertation maps as mandatory research scaffolding, not as decorative notes.",
+            "Surface problem field, historiography, methodology, novelty, contribution, limits, and counterarguments.",
+            "Reuse dissertation templates instead of inventing a loose note format.",
+        ),
+        deliverables=(
+            "Update the dissertation map or chapter contract directly.",
+            "End with a concise summary of what is structurally covered and which research gaps still remain.",
+        ),
+        required_checkpoints=("context-loaded", "map-updated", "contract-updated"),
+        terminal_statuses=THESIS_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "map-updated", "Dissertation map updated."),
+            ExecutionTransition("map-updated", "completed", "Dissertation map pass finished."),
+        ),
+        quality_gates=THESIS_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=False,
+            max_iterations=0,
+            safe_only=False,
+            triggers=(),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for dissertation map actions.",
+    ),
+    ("thesis", "verify-claims"): ActionSpec(
+        lane="thesis",
+        action="verify-claims",
+        title="Dissertation claim verification",
+        summary="Верификация dissertation claims, chapter contracts и doctrinal support.",
+        target_kind="dissertation claim artifact",
+        prompt_rules=(
+            "Audit dissertation claims for doctrinal precision, historiography support, and false attribution risk.",
+            "Do not treat novelty as proven if the sources only support a narrower analytical conclusion.",
+            "Tighten claim passports and caveats instead of smoothing over weak support.",
+        ),
+        deliverables=(
+            "Update the target claim artifact directly.",
+            "End with a concise summary of verified claims, narrowed claims, and unsafe claims.",
+        ),
+        required_checkpoints=("context-loaded", "claims-checked", "target-updated-or-confirmed"),
+        terminal_statuses=THESIS_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "claims-checked", "Dissertation claims audited."),
+            ExecutionTransition("claims-checked", "completed", "Dissertation verification finished."),
+        ),
+        quality_gates=THESIS_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=True,
+            max_iterations=1,
+            safe_only=True,
+            triggers=("doctrinal drift", "novelty inflation", "false attribution"),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for dissertation verification actions.",
+    ),
+    ("thesis", "counterargument-pass"): ActionSpec(
+        lane="thesis",
+        action="counterargument-pass",
+        title="Dissertation counterargument pass",
+        summary="Отдельный pass по сильным альтернативным позициям и пределам вывода.",
+        target_kind="dissertation review artifact",
+        prompt_rules=(
+            "Identify the strongest alternative positions instead of weak objections.",
+            "Mark where the dissertation overstates novelty, ignores schools of thought, or skips limiting conditions.",
+            "Keep the output findings-first and update the dedicated review artifact.",
+        ),
+        deliverables=(
+            "Update the counterargument review artifact directly.",
+            "End with findings first, then a short note on the narrowed formulation now required.",
+        ),
+        required_checkpoints=("context-loaded", "counterarguments-reviewed", "review-artifact-updated"),
+        terminal_statuses=THESIS_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "counterarguments-reviewed", "Counterarguments collected."),
+            ExecutionTransition("counterarguments-reviewed", "completed", "Counterargument review saved."),
+        ),
+        quality_gates=THESIS_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=True,
+            max_iterations=1,
+            safe_only=True,
+            triggers=("missing counterargument", "novelty inflation", "overclaim"),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for dissertation counterargument actions.",
+    ),
+    ("thesis", "draft-author-position"): ActionSpec(
+        lane="thesis",
+        action="draft-author-position",
+        title="Dissertation author-position drafting",
+        summary="Drafting a dissertation section with an explicit author contribution.",
+        target_kind="dissertation manuscript section",
+        prompt_rules=(
+            "Make the author contribution explicit; the section must not read like a literature survey with footnotes.",
+            "Show the historiography position, the author's analytical move, and the limits of the conclusion.",
+            "Address the strongest relevant counterargument where the claim would otherwise look overstated.",
+            "Do not treat the candidate draft as mature until maps, review sequence, "
+            "and author-position drafting are all complete.",
+        ),
+        deliverables=(
+            "Update the manuscript section directly.",
+            "End with a concise summary of the drafted author contribution and the limits that remain open.",
+        ),
+        required_checkpoints=("context-loaded", "author-position-drafted", "manuscript-rebuilt-if-needed"),
+        terminal_statuses=THESIS_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "author-position-drafted", "Authorial argument drafted."),
+            ExecutionTransition("author-position-drafted", "completed", "Dissertation drafting pass finished."),
+        ),
+        quality_gates=THESIS_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=False,
+            max_iterations=0,
+            safe_only=False,
+            triggers=(),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for dissertation author-position drafting.",
+    ),
+    ("thesis", "formal-artifacts"): ActionSpec(
+        lane="thesis",
+        action="formal-artifacts",
+        title="Dissertation formal artifacts",
+        summary=(
+            "Сборка author abstract, publication evidence, publication-claim matrix "
+            "и defense-facing dissertation artifacts."
+        ),
+        target_kind="dissertation artifact bundle",
+        prompt_rules=(
+            "Update dissertation metadata, publication evidence, publication-claim "
+            "matrix, and formal artifacts without pretending readiness.",
+            "Keep missing formal fields visible instead of hiding them behind generic placeholders.",
+            "If artifact generation is possible, ensure the generated files match the metadata contract.",
+            "Do not switch to this step before maps, review sequence, "
+            "and author-position drafting are already in place.",
+        ),
+        deliverables=(
+            "Update the requested dissertation artifact directly.",
+            "End with a concise summary of which formal artifacts are complete and what still blocks final status.",
+        ),
+        required_checkpoints=("context-loaded", "formal-artifacts-updated"),
+        terminal_statuses=THESIS_TERMINAL_STATUSES,
+        transitions=(
+            ExecutionTransition("validated", "context-loaded", "Required context opened."),
+            ExecutionTransition("context-loaded", "formal-artifacts-updated", "Formal dissertation artifacts updated."),
+            ExecutionTransition("formal-artifacts-updated", "completed", "Formal-artifact pass finished."),
+        ),
+        quality_gates=THESIS_QUALITY_GATES,
+        repair_policy=RepairPolicy(
+            eligible=False,
+            max_iterations=0,
+            safe_only=True,
+            triggers=(),
+            terminal_reasons=COMMON_REPAIR_TERMINAL_REASONS,
+        ),
+        target_validation="Validated by workspace target normalization for dissertation formal-artifact actions.",
+    ),
     ("article", "article"): ActionSpec(
         lane="article",
         action="article",
@@ -701,11 +869,16 @@ def build_thesis_execution_contract(
 ) -> ExecutionContract:
     spec = resolve_action_spec("thesis", action)
     assert work.thesis is not None
+    from .dissertation_contour import is_dissertation_artifact_type
+
     context = _contract_context(
         related_context[:8], required_names=("AGENTS", "workspace", "work config", "canon", "target")
     )
     allowed_writes = _thesis_allowed_writes(work, action, target_path, review_path, sync_hint_path)
     outputs = _thesis_required_outputs(work, action, target_path, review_path, sync_hint_path)
+    prompt_rules = _format_with_work(spec.prompt_rules, work)
+    if is_dissertation_artifact_type(work.artifact_type):
+        prompt_rules = prompt_rules + _dissertation_prompt_rules(action)
     metadata = (
         ("work_id", work.slug),
         ("profile_id", profile.resolved_profile_id),
@@ -719,7 +892,7 @@ def build_thesis_execution_contract(
         summary=spec.summary,
         target_kind=spec.target_kind,
         target_validation=spec.target_validation,
-        prompt_rules=_format_with_work(spec.prompt_rules, work),
+        prompt_rules=prompt_rules,
         deliverables=_format_with_work(spec.deliverables, work),
         required_context=context,
         allowed_write_scopes=allowed_writes,
@@ -934,9 +1107,12 @@ def _thesis_allowed_writes(
     sync_hint_path: Path | None,
 ) -> tuple[AllowedWriteScope, ...]:
     assert work.thesis is not None
+    from .dissertation_contour import dissertation_paths, is_dissertation_artifact_type
+
     items = [
         AllowedWriteScope("canonical-target", str(target_path), "Primary thesis target for this action."),
     ]
+    dissertation = dissertation_paths(work) if is_dissertation_artifact_type(work.artifact_type) else None
     if action == "full-cycle":
         items.extend(
             [
@@ -950,6 +1126,8 @@ def _thesis_allowed_writes(
                 AllowedWriteScope("docx", str(work.thesis.export_docx_path), "Optional DOCX export target."),
             ]
         )
+        if dissertation is not None:
+            items.extend(_dissertation_allowed_writes(dissertation))
     elif action in {"source-pack", "verify"}:
         items.append(AllowedWriteScope("ledgers", str(work.thesis.ledgers_dir), "Claim-level evidence ledgers."))
         items.append(AllowedWriteScope("sync", str(work.thesis.sync_dir), "Sync checkpoints for this work."))
@@ -960,6 +1138,18 @@ def _thesis_allowed_writes(
         items.append(AllowedWriteScope("sync", str(work.thesis.sync_dir), "Sync checkpoints for this work."))
     if action in {"write-section", "style-pass"}:
         items.append(AllowedWriteScope("full-draft", str(work.thesis.full_draft_path), "Assembled manuscript output."))
+    if dissertation is not None and action in {
+        "build-maps",
+        "verify-claims",
+        "counterargument-pass",
+        "draft-author-position",
+        "formal-artifacts",
+    }:
+        items.extend(_dissertation_allowed_writes(dissertation))
+        if action in {"draft-author-position", "formal-artifacts"}:
+            items.append(
+                AllowedWriteScope("full-draft", str(work.thesis.full_draft_path), "Assembled manuscript output.")
+            )
     if sync_hint_path is not None and action != "full-cycle":
         items.append(AllowedWriteScope("sync-hint", str(sync_hint_path), "Preferred sync checkpoint path."))
     return tuple(_dedupe_allowed_writes(items))
@@ -973,9 +1163,17 @@ def _thesis_required_outputs(
     sync_hint_path: Path | None,
 ) -> tuple[RequiredArtifact, ...]:
     assert work.thesis is not None
+    from .dissertation_contour import chapter_contract_paths, dissertation_paths, is_dissertation_artifact_type
+
     outputs = [
         RequiredArtifact("target-file", str(target_path), "required", "Primary target affected by the action."),
     ]
+    dissertation = dissertation_paths(work) if is_dissertation_artifact_type(work.artifact_type) else None
+    dissertation_profile = None
+    if dissertation is not None:
+        from .work_type import resolve_profile
+
+        dissertation_profile = resolve_profile(work.artifact_type)
     if action in {"write-section", "style-pass", "full-cycle"}:
         outputs.append(
             RequiredArtifact(
@@ -989,6 +1187,99 @@ def _thesis_required_outputs(
         outputs.append(
             RequiredArtifact("review-sheet", str(review_path), "required", "Dedicated findings-first review artifact.")
         )
+    if dissertation is not None and action == "build-maps":
+        outputs.extend(
+            (
+                RequiredArtifact(
+                    "historiography-map",
+                    str(dissertation.historiography_map_path),
+                    "conditional",
+                    "Dissertation historiography map.",
+                ),
+                RequiredArtifact(
+                    "novelty-map",
+                    str(dissertation.novelty_map_path),
+                    "conditional",
+                    "Dissertation novelty and contribution map.",
+                ),
+                RequiredArtifact(
+                    "claim-map",
+                    str(dissertation.claim_map_path),
+                    "conditional",
+                    "Dissertation claim map.",
+                ),
+            )
+        )
+        for path in chapter_contract_paths(work):
+            outputs.append(
+                RequiredArtifact(
+                    "chapter-contract",
+                    str(path),
+                    "conditional",
+                    "Chapter research contract aligned with dissertation chapter logic.",
+                )
+            )
+    if dissertation is not None and action == "counterargument-pass":
+        outputs.append(
+            RequiredArtifact(
+                "counterargument-review",
+                str(dissertation.counterargument_review_path),
+                "required",
+                "Counterargument review artifact.",
+            )
+        )
+    if dissertation is not None and action == "formal-artifacts":
+        outputs.extend(
+            (
+                RequiredArtifact(
+                    "dissertation-metadata",
+                    str(dissertation.metadata_path),
+                    "required",
+                    "Dissertation metadata contract.",
+                ),
+                RequiredArtifact(
+                    "publication-evidence",
+                    str(dissertation.publication_evidence_path),
+                    "required",
+                    "Publication evidence sheet.",
+                ),
+                RequiredArtifact(
+                    "publication-claim-matrix",
+                    str(dissertation.publication_claim_matrix_path),
+                    "required",
+                    "Candidate publication-to-claim coverage matrix.",
+                ),
+                RequiredArtifact(
+                    "author-abstract",
+                    str(dissertation.author_abstract_path),
+                    "conditional",
+                    "Generated dissertation author abstract.",
+                ),
+                RequiredArtifact(
+                    "defense-checklist",
+                    str(dissertation.defense_checklist_path),
+                    "conditional",
+                    "Generated dissertation defense checklist.",
+                ),
+            )
+        )
+        if dissertation_profile is not None and "defense-packet" in dissertation_profile.required_artifact_groups:
+            outputs.extend(
+                (
+                    RequiredArtifact(
+                        "leading-organization",
+                        str(dissertation.leading_organization_path),
+                        "conditional",
+                        "Doctoral defense-packet placeholder for the leading organization.",
+                    ),
+                    RequiredArtifact(
+                        "opponents",
+                        str(dissertation.opponents_path),
+                        "conditional",
+                        "Doctoral defense-packet placeholder for opponents.",
+                    ),
+                )
+            )
     if sync_hint_path is not None:
         outputs.append(
             RequiredArtifact(
@@ -996,6 +1287,76 @@ def _thesis_required_outputs(
             )
         )
     return tuple(outputs)
+
+
+def _dissertation_allowed_writes(dissertation: Any) -> tuple[AllowedWriteScope, ...]:
+    return (
+        AllowedWriteScope("dissertation-root", str(dissertation.root_dir), "Dissertation-only contour root."),
+        AllowedWriteScope("dissertation-maps", str(dissertation.maps_dir), "Dissertation maps."),
+        AllowedWriteScope(
+            "dissertation-contracts",
+            str(dissertation.chapter_contracts_dir),
+            "Dissertation chapter contracts.",
+        ),
+        AllowedWriteScope("dissertation-reviews", str(dissertation.reviews_dir), "Dissertation reviews."),
+        AllowedWriteScope(
+            "dissertation-publications",
+            str(dissertation.publications_dir),
+            "Publication evidence artifacts.",
+        ),
+        AllowedWriteScope(
+            "dissertation-artifacts",
+            str(dissertation.artifacts_dir),
+            "Generated dissertation artifacts.",
+        ),
+        AllowedWriteScope("dissertation-defense", str(dissertation.defense_dir), "Defense-facing dissertation files."),
+    )
+
+
+def _dissertation_prompt_rules(action: str) -> tuple[str, ...]:
+    common = (
+        "Treat this thesis work as a dissertation contour: every major section must surface the research problem, "
+        "historiography position, author contribution, limits of the conclusion, "
+        "and at least one addressed counterargument.",
+        "A literature survey without an explicit authorial research function counts as a workflow defect.",
+        "Doctrinal support and scientific attribution must be checked with the same care as legal primary sources.",
+    )
+    action_specific = {
+        "build-maps": (
+            "Maps and chapter contracts must be specific enough to guide chapter drafting "
+            "and dissertation one-shot checks.",
+        ),
+        "verify-claims": (
+            "Flag novelty inflation, weak doctrinal attribution, "
+            "and claims that are broader than the literature supports.",
+        ),
+        "counterargument-pass": (
+            "Prefer the strongest alternative positions and schools of thought over weak objections.",
+        ),
+        "draft-author-position": (
+            "Separate historiography synthesis from the author's own analytical move in each major section.",
+            "For candidate works, introduction and substantive chapters must make the problem field "
+            "and the author's contribution explicit in the prose itself.",
+        ),
+        "formal-artifacts": (
+            "Keep formal blockers visible; do not imply dissertation readiness "
+            "if publication evidence, publication-claim matrix, or generated artifacts remain incomplete.",
+        ),
+        "write-section": (
+            "Even in direct section drafting, keep the dissertation-specific author contribution and limits explicit.",
+        ),
+        "review-section": ("Review whether the section sounds like research, not only whether it sounds polished.",),
+        "style-pass": ("Do not smooth away caveats that are necessary to preserve dissertation-grade honesty.",),
+        "verify": (
+            "Check not only factual support, but also whether historiography and doctrinal attribution "
+            "are precise enough for dissertation use.",
+        ),
+        "full-cycle": (
+            "Require dissertation maps, chapter contracts, and counterargument logic "
+            "before treating the draft as mature.",
+        ),
+    }
+    return common + action_specific.get(action, ())
 
 
 def _article_allowed_writes(

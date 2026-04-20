@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import shlex
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from .autonomous_planner import AutonomousPlan
+from .autonomous_runtime_store import read_json_payload, runtime_file_path, write_json_payload
 from .orchestrator import WorkflowOrchestrator
 from .utils import utc_now
 
@@ -14,29 +13,34 @@ AUTONOMOUS_STATE_VERSION = "v1"
 
 
 def autonomous_state_path(root_dir: str | Path, work_id: str) -> Path:
-    return Path(root_dir).resolve() / "output" / "telegram" / "runtime" / "autonomous" / f"{work_id}.json"
+    return runtime_file_path(root_dir, f"{work_id}.json")
 
 
 def write_autonomous_state(root_dir: str | Path, work_id: str, payload: dict[str, Any]) -> Path:
     path = autonomous_state_path(root_dir, work_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        temp_name = handle.name
-    Path(temp_name).replace(path)
+    write_json_payload(path, payload)
     return path
 
 
 def read_autonomous_state(root_dir: str | Path, work_id: str) -> dict[str, Any] | None:
-    path = autonomous_state_path(root_dir, work_id)
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
+    return read_json_payload(autonomous_state_path(root_dir, work_id))
+
+
+def autonomous_status_payload(root_dir: str | Path, work_id: str) -> dict[str, Any]:
+    payload = read_autonomous_state(root_dir, work_id) or {}
+    return {
+        "version": AUTONOMOUS_STATE_VERSION,
+        "kind": "autonomous-run-state",
+        "status": str(payload.get("status") or "not-started"),
+        "mode": payload.get("mode"),
+        "work_id": str(payload.get("work_id") or work_id),
+        "started_at": payload.get("started_at"),
+        "finished_at": payload.get("finished_at"),
+        "readiness_claim": "none",
+        "plan": payload.get("plan") if isinstance(payload.get("plan"), dict) else None,
+        "executed_steps": payload.get("executed_steps") if isinstance(payload.get("executed_steps"), list) else [],
+        "stop_reason": payload.get("stop_reason"),
+    }
 
 
 def run_autonomous_plan(

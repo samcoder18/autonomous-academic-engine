@@ -38,6 +38,8 @@ ARTICLE_ARTIFACT_TYPES: frozenset[str] = frozenset({"article"})
 ALL_ARTIFACT_TYPES: frozenset[str] = THESIS_ARTIFACT_TYPES | ARTICLE_ARTIFACT_TYPES
 
 DEFAULT_THESIS_PROFILE = "ru-vkr-university-default"
+DEFAULT_DISSERTATION_CANDIDATE_PROFILE = "rf-dissertation-candidate"
+DEFAULT_DISSERTATION_DOCTOR_PROFILE = "rf-dissertation-doctor"
 DEFAULT_ARTICLE_PROFILE = "ru-law-article-v1"
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -50,6 +52,17 @@ DEFAULT_THESIS_SECTIONS: tuple[str, ...] = (
     "thesis/manuscript/sections/04-chapter-3.md",
     "thesis/manuscript/sections/05-conclusion.md",
     "thesis/manuscript/sections/06-bibliography.md",
+)
+
+DOCTOR_THESIS_SECTIONS: tuple[str, ...] = (
+    "thesis/manuscript/sections/00-title.md",
+    "thesis/manuscript/sections/01-introduction.md",
+    "thesis/manuscript/sections/02-chapter-1.md",
+    "thesis/manuscript/sections/03-chapter-2.md",
+    "thesis/manuscript/sections/04-chapter-3.md",
+    "thesis/manuscript/sections/05-chapter-4.md",
+    "thesis/manuscript/sections/06-conclusion.md",
+    "thesis/manuscript/sections/07-bibliography.md",
 )
 
 
@@ -112,10 +125,44 @@ def _format_toml_string(value: str) -> str:
     return f'"{_escape_toml_string(value)}"'
 
 
+def _thesis_sections_for_artifact(artifact_type: str) -> tuple[str, ...]:
+    if artifact_type == "dissertation-doctor":
+        return DOCTOR_THESIS_SECTIONS
+    return DEFAULT_THESIS_SECTIONS
+
+
+def _thesis_section_placeholders_for_artifact(artifact_type: str) -> dict[str, str]:
+    placeholders = {
+        "thesis/manuscript/sections/00-title.md": "# Титульный лист\n",
+        "thesis/manuscript/sections/01-introduction.md": "# Введение\n\n_Черновик введения._\n",
+        "thesis/manuscript/sections/02-chapter-1.md": "# Глава 1\n\n_Черновик главы 1._\n",
+        "thesis/manuscript/sections/03-chapter-2.md": "# Глава 2\n\n_Черновик главы 2._\n",
+        "thesis/manuscript/sections/04-chapter-3.md": "# Глава 3\n\n_Черновик главы 3._\n",
+        "thesis/manuscript/sections/05-conclusion.md": "# Заключение\n\n_Черновик заключения._\n",
+        "thesis/manuscript/sections/06-bibliography.md": (
+            "# Список использованных источников\n\n_Пока пусто — наполняется по мере верификации источников._\n"
+        ),
+    }
+    if artifact_type == "dissertation-doctor":
+        placeholders = {
+            "thesis/manuscript/sections/00-title.md": "# Титульный лист\n",
+            "thesis/manuscript/sections/01-introduction.md": "# Введение\n\n_Черновик введения._\n",
+            "thesis/manuscript/sections/02-chapter-1.md": "# Глава 1\n\n_Черновик главы 1._\n",
+            "thesis/manuscript/sections/03-chapter-2.md": "# Глава 2\n\n_Черновик главы 2._\n",
+            "thesis/manuscript/sections/04-chapter-3.md": "# Глава 3\n\n_Черновик главы 3._\n",
+            "thesis/manuscript/sections/05-chapter-4.md": "# Глава 4\n\n_Черновик главы 4._\n",
+            "thesis/manuscript/sections/06-conclusion.md": "# Заключение\n\n_Черновик заключения._\n",
+            "thesis/manuscript/sections/07-bibliography.md": (
+                "# Список использованных источников\n\n_Пока пусто — наполняется по мере верификации источников._\n"
+            ),
+        }
+    return placeholders
+
+
 def render_work_toml(request: WorkBootstrapRequest) -> str:
     """Render canonical work.toml text for the new work.
 
-    Layout follows existing ``works/biometrics-vkr/work.toml`` conventions so
+    Layout follows existing ``works/<slug>/work.toml`` conventions so
     that ``load_work_config`` can resolve it without extra migrations.
     """
 
@@ -140,7 +187,7 @@ def render_work_toml(request: WorkBootstrapRequest) -> str:
 
     standards_lines: list[str] = []
     if "thesis" in lanes:
-        profile = request.thesis_profile or DEFAULT_THESIS_PROFILE
+        profile = request.thesis_profile or _default_thesis_profile_for_artifact(request.artifact_type)
         standards_lines.append(f"thesis_profile = {_format_toml_string(profile)}")
     if "article" in lanes:
         profile = request.article_profile or DEFAULT_ARTICLE_PROFILE
@@ -163,7 +210,7 @@ def render_work_toml(request: WorkBootstrapRequest) -> str:
         lines.append(f"full_draft_path = {_format_toml_string('thesis/manuscript/full-draft.md')}")
         lines.append(f"docx_filename = {_format_toml_string(f'{request.slug}.docx')}")
         lines.append("section_order = [")
-        for section in DEFAULT_THESIS_SECTIONS:
+        for section in _thesis_sections_for_artifact(request.artifact_type):
             lines.append(f"  {_format_toml_string(section)},")
         lines.append("]")
 
@@ -203,6 +250,14 @@ def render_work_canon(request: WorkBootstrapRequest) -> str:
     )
 
 
+def _default_thesis_profile_for_artifact(artifact_type: str) -> str:
+    if artifact_type == "dissertation-candidate":
+        return DEFAULT_DISSERTATION_CANDIDATE_PROFILE
+    if artifact_type == "dissertation-doctor":
+        return DEFAULT_DISSERTATION_DOCTOR_PROFILE
+    return DEFAULT_THESIS_PROFILE
+
+
 def _planned_dirs_for_lanes(work_dir: Path, lanes: tuple[str, ...]) -> tuple[Path, ...]:
     planned: list[Path] = [work_dir]
     if "thesis" in lanes:
@@ -231,6 +286,23 @@ def _planned_dirs_for_lanes(work_dir: Path, lanes: tuple[str, ...]) -> tuple[Pat
             ]
         )
     return tuple(planned)
+
+
+def _planned_dissertation_dirs(work_dir: Path) -> tuple[Path, ...]:
+    dissertation_root = work_dir / "thesis" / "dissertation"
+    return (
+        dissertation_root,
+        dissertation_root / "artifacts",
+        dissertation_root / "maps",
+        dissertation_root / "chapter-contracts",
+        dissertation_root / "reviews",
+        dissertation_root / "publications",
+        dissertation_root / "defense",
+    )
+
+
+def _is_dissertation_artifact(artifact_type: str) -> bool:
+    return artifact_type in {"dissertation-candidate", "dissertation-doctor"}
 
 
 _DEFAULT_WORK_RE = re.compile(r'(?m)^default_work\s*=\s*".*"\s*$')
@@ -320,6 +392,8 @@ def bootstrap_work(
     workspace_text_before = workspace_toml.read_text(encoding="utf-8")
     lanes = request.resolved_lanes()
     planned_dirs = _planned_dirs_for_lanes(work_dir, lanes)
+    if "thesis" in lanes and _is_dissertation_artifact(request.artifact_type):
+        planned_dirs = planned_dirs + _planned_dissertation_dirs(work_dir)
     for directory in planned_dirs:
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -329,18 +403,97 @@ def bootstrap_work(
     work_canon_path.write_text(render_work_canon(request), encoding="utf-8")
 
     if "thesis" in lanes:
-        section_placeholders = {
-            "thesis/manuscript/sections/00-title.md": "# Титульный лист\n",
-            "thesis/manuscript/sections/01-introduction.md": "# Введение\n\n_Черновик введения._\n",
-            "thesis/manuscript/sections/02-chapter-1.md": "# Глава 1\n\n_Черновик главы 1._\n",
-            "thesis/manuscript/sections/03-chapter-2.md": "# Глава 2\n\n_Черновик главы 2._\n",
-            "thesis/manuscript/sections/04-chapter-3.md": "# Глава 3\n\n_Черновик главы 3._\n",
-            "thesis/manuscript/sections/05-conclusion.md": "# Заключение\n\n_Черновик заключения._\n",
-            "thesis/manuscript/sections/06-bibliography.md": (
-                "# Список литературы\n\n_Пока пусто — наполняется по мере верификации источников._\n"
+        section_placeholders = _thesis_section_placeholders_for_artifact(request.artifact_type)
+        for rel, body in section_placeholders.items():
+            path = work_dir / rel
+            if not path.exists():
+                path.write_text(body, encoding="utf-8")
+
+    if "thesis" in lanes and _is_dissertation_artifact(request.artifact_type):
+        dissertation_placeholders = {
+            "thesis/dissertation/metadata.toml": (
+                'title = ""\n'
+                'university = ""\n'
+                "year = 2026\n"
+                'city = ""\n\n'
+                "[program]\n"
+                'code = ""\n'
+                'name = ""\n\n'
+                "[author]\n"
+                'full_name = ""\n\n'
+                "[supervisor]\n"
+                'full_name = ""\n\n'
+                "[dissertation]\n"
+                'degree = ""\n'
+                'specialty_code = ""\n'
+                'specialty_name = ""\n'
+                'novelty_summary = ""\n'
+                'contribution_summary = ""\n'
+                'methodology_summary = ""\n\n'
+                "[author_abstract]\n"
+                'ru = ""\n\n'
+                "[defense]\n"
+                'council = ""\n'
+                'leading_organization = ""\n'
+                'date = ""\n'
+            ),
+            "thesis/dissertation/maps/historiography-map.md": (
+                "# Historiography Map\n\n"
+                "## 1. Поле спора\n\n- Главная исследовательская проблема:\n- Основные школы / подходы:\n\n"
+                "## 2. Coverage\n\n- Что уже исследовано:\n- Что остается неразрешенным:\n"
+            ),
+            "thesis/dissertation/maps/novelty-contribution-map.md": (
+                "# Novelty and Contribution Map\n\n"
+                "## 1. Scientific Novelty\n\n- Тезис 1:\n- Тезис 2:\n\n"
+                "## 2. Author Contribution\n\n- Вклад 1:\n- Вклад 2:\n\n"
+                "## 3. Limits\n\n- Ограничение 1:\n"
+            ),
+            "thesis/dissertation/maps/dissertation-claim-map.md": (
+                "# Dissertation Claim Map\n\n"
+                "## 1. Claims\n\n"
+                "### Claim 1\n\n- Claim ID:\n- Claim text:\n- Counterargument to address:\n- Limits or caveats:\n"
+            ),
+            "thesis/dissertation/reviews/counterargument-review.md": (
+                "# Counterargument Review\n\n## 1. Strong Alternative Positions\n\n- Позиция:\n- Как ответить:\n"
+            ),
+            "thesis/dissertation/reviews/dissertation-review.md": (
+                "# Dissertation Review Sheet\n\n"
+                "## 1. Research Quality\n\n- Где текст обзорен вместо исследования:\n- Где завышена новизна:\n"
+            ),
+            "thesis/dissertation/publications/publication-evidence.md": (
+                "# Publication Evidence Sheet\n\n"
+                "## 1. Publication 1\n\n"
+                "- Статус:\n- Выходные данные:\n- Связь с диссертацией:\n\n"
+                "## 2. Coverage\n\n- ВАК / Scopus / WoS статус:\n- Какие тезисы диссертации покрывает публикация:\n"
+            ),
+            "thesis/dissertation/publications/publication-claim-matrix.md": (
+                "# Publication Claim Matrix\n\n"
+                "| Тезис | Глава | Публикация | Статус покрытия |\n"
+                "| --- | --- | --- | --- |\n"
+                "| Тезис 1 | Глава 1 | Публикация 1 | Полное / частичное / нет покрытия |\n"
+            ),
+            "thesis/dissertation/defense/defense-plan.md": (
+                "# Defense Plan\n\n## 1. Совет и трек защиты\n\n- Диссертационный совет:\n- Планируемый срок:\n"
             ),
         }
-        for rel, body in section_placeholders.items():
+        if request.artifact_type == "dissertation-doctor":
+            dissertation_placeholders["thesis/dissertation/defense/leading-organization.md"] = (
+                "# Leading Organization Brief\n\n"
+                "## 1. Ведущая организация\n\n"
+                "- Наименование:\n- Компетенция:\n- Связь с темой диссертации:\n"
+            )
+            dissertation_placeholders["thesis/dissertation/defense/opponents.md"] = (
+                "# Opponents Sheet\n\n## 1. Оппонент 1\n\n- ФИО:\n- Специализация:\n- Связь с темой диссертации:\n"
+            )
+        chapter_contract_count = 4 if request.artifact_type == "dissertation-doctor" else 3
+        for index in range(1, chapter_contract_count + 1):
+            dissertation_placeholders[f"thesis/dissertation/chapter-contracts/{index:02d}-chapter-contract.md"] = (
+                f"# Chapter {index} Research Contract\n\n"
+                "## 1. Research Problem\n\n- Какой вопрос решает глава:\n\n"
+                "## 2. Historiography Position\n\n- С кем спорит глава:\n\n"
+                "## 3. Author Contribution\n\n- Что именно доказывает автор:\n"
+            )
+        for rel, body in dissertation_placeholders.items():
             path = work_dir / rel
             if not path.exists():
                 path.write_text(body, encoding="utf-8")

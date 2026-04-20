@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,13 +11,22 @@ from typing import Any
 from .autonomous_daemon import (
     DAEMON_STATE_VERSION,
     DAEMON_TERMINAL_STATUSES,
-    daemon_runtime_dir,
     evaluate_daemon_action,
     read_daemon_lock,
 )
 from .autonomous_planner import build_autonomous_plan
 from .autonomous_runner import execute_autonomous_command
+from .autonomous_runtime_errors import SchedulerWorkCandidateError, classify_scheduler_candidate_error
+from .autonomous_runtime_store import (
+    build_lock_payload,
+    build_stop_request_payload,
+    read_json_payload,
+    remove_runtime_file,
+    runtime_file_path,
+    write_json_payload,
+)
 from .orchestrator import WorkflowOrchestrator
+from .orchestrator_support import WorkflowError
 from .utils import parse_datetime, utc_now
 from .workspace import WorkspaceConfig, WorkspaceConfigError, load_workspace_config
 
@@ -80,10 +87,14 @@ def build_multi_work_schedule(
             active_run=active_run,
         )
 
-    candidates = [
-        _build_work_candidate(root_dir=root_path, orchestrator=runner, work_id=work_id, mode=mode)
-        for work_id in unique_work_ids
-    ]
+    candidates: list[dict[str, Any]] = []
+    for work_id in unique_work_ids:
+        try:
+            candidate = _build_work_candidate(root_dir=root_path, orchestrator=runner, work_id=work_id, mode=mode)
+        except Exception as exc:  # noqa: BLE001 — isolate one work without collapsing the whole schedule pass
+            error = classify_scheduler_candidate_error(exc, work_id=work_id, stage="candidate-build")
+            candidate = _candidate_from_runtime_error(work_id=work_id, mode=mode, error=error)
+        candidates.append(candidate)
     ready = [candidate for candidate in candidates if candidate.get("status") == "ready"]
     selected = (
         sorted(ready, key=lambda candidate: _candidate_sort_key(candidate, rotated_work_ids=rotated_work_ids))[0]
@@ -116,47 +127,45 @@ def build_multi_work_schedule(
 
 
 def multi_daemon_state_path(root_dir: str | Path) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{MULTI_WORK_DAEMON_ID}.daemon.json"
+    return runtime_file_path(root_dir, f"{MULTI_WORK_DAEMON_ID}.daemon.json")
 
 
 def multi_daemon_lock_path(root_dir: str | Path) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{MULTI_WORK_DAEMON_ID}.daemon.lock.json"
+    return runtime_file_path(root_dir, f"{MULTI_WORK_DAEMON_ID}.daemon.lock.json")
 
 
 def multi_daemon_stop_path(root_dir: str | Path) -> Path:
-    return daemon_runtime_dir(root_dir) / f"{MULTI_WORK_DAEMON_ID}.daemon.stop.json"
+    return runtime_file_path(root_dir, f"{MULTI_WORK_DAEMON_ID}.daemon.stop.json")
 
 
 def read_multi_daemon_state(root_dir: str | Path) -> dict[str, Any] | None:
-    return _read_json(multi_daemon_state_path(root_dir))
+    return read_json_payload(multi_daemon_state_path(root_dir))
 
 
 def write_multi_daemon_state(root_dir: str | Path, payload: dict[str, Any]) -> Path:
     normalized = _normalize_multi_daemon_state(root_dir, payload)
     path = multi_daemon_state_path(root_dir)
-    _write_json(path, normalized)
+    write_json_payload(path, normalized)
     return path
 
 
 def read_multi_daemon_lock(root_dir: str | Path) -> dict[str, Any] | None:
-    return _read_json(multi_daemon_lock_path(root_dir))
+    return read_json_payload(multi_daemon_lock_path(root_dir))
 
 
 def write_multi_daemon_lock(root_dir: str | Path, payload: dict[str, Any]) -> Path:
-    now = utc_now()
-    lock = {
-        "kind": "autonomous-daemon-lock",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": MULTI_WORK_DAEMON_ID,
-        "works_scope": _optional_text(payload.get("works_scope")) or "all",
-        "mode": _optional_text(payload.get("mode")) or "autonomous-full",
-        "root_dir": str(Path(root_dir).resolve()),
-        "pid": _optional_int(payload.get("pid")) or os.getpid(),
-        "started_at": _optional_text(payload.get("started_at")) or now,
-        "heartbeat_at": _optional_text(payload.get("heartbeat_at")) or now,
-    }
+    lock = build_lock_payload(
+        root_dir,
+        MULTI_WORK_DAEMON_ID,
+        version=DAEMON_STATE_VERSION,
+        mode=_optional_text(payload.get("mode")),
+        pid=_optional_int(payload.get("pid")),
+        started_at=_optional_text(payload.get("started_at")),
+        heartbeat_at=_optional_text(payload.get("heartbeat_at")),
+        extra_fields={"works_scope": _optional_text(payload.get("works_scope")) or "all"},
+    )
     path = multi_daemon_lock_path(root_dir)
-    _write_json(path, lock)
+    write_json_payload(path, lock)
     return path
 
 
@@ -213,52 +222,42 @@ def acquire_multi_daemon_lock(
 def heartbeat_multi_daemon_lock(root_dir: str | Path, *, works_scope: str, pid: int | None = None) -> dict[str, Any]:
     lock = read_multi_daemon_lock(root_dir) or {}
     owner_pid = pid or _optional_int(lock.get("pid")) or os.getpid()
-    updated = {
-        **lock,
-        "kind": "autonomous-daemon-lock",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": MULTI_WORK_DAEMON_ID,
-        "works_scope": works_scope,
-        "root_dir": str(Path(root_dir).resolve()),
-        "pid": owner_pid,
-        "started_at": _optional_text(lock.get("started_at")) or utc_now(),
-        "heartbeat_at": utc_now(),
-    }
-    if not _optional_text(updated.get("mode")):
-        updated["mode"] = "autonomous-full"
+    updated = build_lock_payload(
+        root_dir,
+        MULTI_WORK_DAEMON_ID,
+        version=DAEMON_STATE_VERSION,
+        mode=_optional_text(lock.get("mode")),
+        pid=owner_pid,
+        started_at=_optional_text(lock.get("started_at")),
+        heartbeat_at=utc_now(),
+        extra_fields={"works_scope": works_scope},
+    )
     write_multi_daemon_lock(root_dir, updated)
     return updated
 
 
 def release_multi_daemon_lock(root_dir: str | Path) -> None:
-    path = multi_daemon_lock_path(root_dir)
-    if path.exists():
-        path.unlink()
+    remove_runtime_file(multi_daemon_lock_path(root_dir))
 
 
 def request_multi_daemon_stop(root_dir: str | Path, *, works_scope: str = "all", reason: str = "operator-stop") -> Path:
-    payload = {
-        "kind": "autonomous-daemon-stop-request",
-        "version": DAEMON_STATE_VERSION,
-        "work_id": MULTI_WORK_DAEMON_ID,
-        "works_scope": works_scope,
-        "reason": reason,
-        "requested_at": utc_now(),
-        "readiness_claim": "none",
-    }
+    payload = build_stop_request_payload(
+        MULTI_WORK_DAEMON_ID,
+        version=DAEMON_STATE_VERSION,
+        reason=reason,
+        extra_fields={"works_scope": works_scope},
+    )
     path = multi_daemon_stop_path(root_dir)
-    _write_json(path, payload)
+    write_json_payload(path, payload)
     return path
 
 
 def read_multi_daemon_stop_request(root_dir: str | Path) -> dict[str, Any] | None:
-    return _read_json(multi_daemon_stop_path(root_dir))
+    return read_json_payload(multi_daemon_stop_path(root_dir))
 
 
 def clear_multi_daemon_stop_request(root_dir: str | Path) -> None:
-    path = multi_daemon_stop_path(root_dir)
-    if path.exists():
-        path.unlink()
+    remove_runtime_file(multi_daemon_stop_path(root_dir))
 
 
 def multi_daemon_status_payload(root_dir: str | Path, *, works_scope: str = "all") -> dict[str, Any]:
@@ -323,6 +322,8 @@ def run_multi_work_daemon_tick(
     try:
         stop_request = read_multi_daemon_stop_request(root_dir)
         if isinstance(stop_request, dict):
+            stop_reason = _optional_text(stop_request.get("reason")) or "operator-stop"
+            clear_multi_daemon_stop_request(root_dir)
             return _write_multi_daemon_cycle_state(
                 root_dir=root_dir,
                 mode=mode,
@@ -333,7 +334,7 @@ def run_multi_work_daemon_tick(
                 max_cycles=max_cycles,
                 poll_seconds=poll_seconds,
                 max_runtime_minutes=max_runtime_minutes,
-                stop_reason=_optional_text(stop_request.get("reason")) or "operator-stop",
+                stop_reason=stop_reason,
                 schedule=None,
                 result=None,
             )
@@ -652,48 +653,55 @@ def _build_work_candidate(
             single_work_lock=single_lock,
         )
 
+    handled_errors = (
+        WorkflowError,
+        WorkspaceConfigError,
+        FileNotFoundError,
+        NotADirectoryError,
+        PermissionError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    )
+
     try:
         work_state = orchestrator.get_work_state(work_id=work_id)
-    except Exception as exc:
-        decision = _blocked_decision(
-            mode=mode,
-            stop_reason="work-state-error",
-            reason=str(exc),
-            blocking_categories=["work-state"],
-        )
-        return _candidate_payload(
+    except handled_errors as exc:
+        return _candidate_from_runtime_error(
             work_id=work_id,
-            status="blocked",
-            plan=None,
-            decision=decision,
-            command=None,
-            priority=9999,
-            stop_reason="work-state-error",
-            known_blocker_categories=[],
-            single_work_lock=None,
+            mode=mode,
+            error=classify_scheduler_candidate_error(exc, work_id=work_id, stage="work-state"),
         )
 
-    plan = build_autonomous_plan(work_state=work_state, mode=mode, max_steps=3).to_dict()
-    first_blocked: tuple[dict[str, Any], dict[str, Any], int] | None = None
-    for step in _plan_steps(plan):
-        action = _action_from_plan_step(step)
-        decision = evaluate_daemon_action(work_state=work_state, action=action, mode=mode)
-        priority = _action_priority(work_state, action)
-        command = _optional_text(decision.get("safe_command")) or _optional_text(decision.get("command"))
-        if decision.get("decision") == "allowed" and command:
-            return _candidate_payload(
-                work_id=work_id,
-                status="ready",
-                plan=plan,
-                decision=decision,
-                command=command,
-                priority=priority,
-                stop_reason=None,
-                known_blocker_categories=_known_blocker_categories(work_state),
-                single_work_lock=None,
-            )
-        if first_blocked is None:
-            first_blocked = (decision, action or {}, priority)
+    try:
+        plan = build_autonomous_plan(work_state=work_state, mode=mode, max_steps=3).to_dict()
+        first_blocked: tuple[dict[str, Any], dict[str, Any], int] | None = None
+        for step in _plan_steps(plan):
+            action = _action_from_plan_step(step)
+            decision = evaluate_daemon_action(work_state=work_state, action=action, mode=mode)
+            priority = _action_priority(work_state, action)
+            command = _optional_text(decision.get("safe_command")) or _optional_text(decision.get("command"))
+            if decision.get("decision") == "allowed" and command:
+                return _candidate_payload(
+                    work_id=work_id,
+                    status="ready",
+                    plan=plan,
+                    decision=decision,
+                    command=command,
+                    priority=priority,
+                    stop_reason=None,
+                    known_blocker_categories=_known_blocker_categories(work_state),
+                    single_work_lock=None,
+                )
+            if first_blocked is None:
+                first_blocked = (decision, action or {}, priority)
+    except handled_errors as exc:
+        return _candidate_from_runtime_error(
+            work_id=work_id,
+            mode=mode,
+            error=classify_scheduler_candidate_error(exc, work_id=work_id, stage="candidate-evaluation"),
+            known_blocker_categories=_known_blocker_categories(work_state),
+        )
 
     if first_blocked is None:
         decision = _blocked_decision(
@@ -720,6 +728,32 @@ def _build_work_candidate(
         priority=priority,
         stop_reason=stop_reason,
         known_blocker_categories=_known_blocker_categories(work_state),
+        single_work_lock=None,
+    )
+
+
+def _candidate_from_runtime_error(
+    *,
+    work_id: str,
+    mode: str,
+    error: SchedulerWorkCandidateError,
+    known_blocker_categories: list[str] | None = None,
+) -> dict[str, Any]:
+    decision = _blocked_decision(
+        mode=mode,
+        stop_reason=error.code,
+        reason=str(error),
+        blocking_categories=list(error.blocking_categories),
+    )
+    return _candidate_payload(
+        work_id=work_id,
+        status="blocked",
+        plan=None,
+        decision=decision,
+        command=None,
+        priority=9999,
+        stop_reason=error.code,
+        known_blocker_categories=known_blocker_categories or [],
         single_work_lock=None,
     )
 
@@ -1131,25 +1165,6 @@ def _pid_is_alive(pid: int | None) -> bool:
     except PermissionError:
         return True
     return True
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        temp_name = handle.name
-    Path(temp_name).replace(path)
 
 
 def _optional_text(value: object) -> str | None:

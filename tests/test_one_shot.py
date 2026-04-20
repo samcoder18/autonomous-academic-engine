@@ -75,6 +75,177 @@ def _write_metadata(path: Path) -> None:
     )
 
 
+def _write_dissertation_metadata(path: Path) -> None:
+    author_abstract = "А" * 450
+    path.write_text(
+        dedent(
+            f"""
+            title = "Кандидатская диссертация"
+            university = "U"
+            year = 2026
+            city = "City"
+
+            [program]
+            code = "5.1.3"
+            name = "Юридические науки"
+
+            [author]
+            full_name = "Иванова А. П."
+
+            [supervisor]
+            full_name = "Петров П. П."
+
+            [dissertation]
+            degree = "кандидат юридических наук"
+            specialty_code = "5.1.3"
+            specialty_name = "Частно-правовые науки"
+            novelty_summary = "Новизна состоит в уточнении доктринальной модели защиты персональных данных."
+            contribution_summary = "Вклад автора состоит в построении новой нормативной связки между режимами данных."
+            methodology_summary = "Методология включает формально-юридический, сравнительный и доктринальный анализ."
+
+            [author_abstract]
+            ru = "{author_abstract}"
+
+            [defense]
+            council = "Д 999.999.99"
+            leading_organization = "Юридический институт"
+            date = "2026-06-01"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def _candidate_manuscript(*, chapter_repetitions: int) -> str:
+    paragraph = (
+        "Авторский анализ показывает пределы вывода, связь с доктриной "
+        "и необходимость адресовать сильный контраргумент. "
+    )
+    chapter_body = paragraph * chapter_repetitions
+    bibliography = "\n".join(
+        f"{index}. Источник {index} / Автор И. И. — Москва: Норма, 20{(index % 20) + 5}. — {120 + index} с."
+        for index in range(1, 126)
+    )
+    return "\n".join(
+        [
+            "# Заголовок",
+            "",
+            "## Введение",
+            "",
+            chapter_body,
+            "",
+            "## Глава 1",
+            "",
+            chapter_body,
+            "",
+            "## Глава 2",
+            "",
+            chapter_body,
+            "",
+            "## Глава 3",
+            "",
+            chapter_body,
+            "",
+            "## Заключение",
+            "",
+            chapter_body,
+            "",
+            "## Список использованных источников",
+            "",
+            bibliography,
+            "",
+        ]
+    )
+
+
+def _write_candidate_dissertation_contour(root: Path, *, with_historiography: bool = True) -> None:
+    (root / "maps").mkdir(parents=True, exist_ok=True)
+    (root / "reviews").mkdir(parents=True, exist_ok=True)
+    (root / "publications").mkdir(parents=True, exist_ok=True)
+    if with_historiography:
+        (root / "maps" / "historiography-map.md").write_text(
+            dedent(
+                """\
+                # Historiography Map
+
+                Поле исследования раскрывает школы, спор и неразрешенные вопросы в пределах цифровой идентификации.
+                Дополнительно фиксируется, какие школы доминируют и где остается неразрешенный doctrinal gap.
+                """
+            ),
+            encoding="utf-8",
+        )
+    (root / "maps" / "novelty-contribution-map.md").write_text(
+        dedent(
+            """\
+            # Novelty and Contribution Map
+
+            Новизна формулируется через уточнение модели защиты данных.
+            Вклад автора заключается в новой связке doctrinal reasoning и практики.
+            Ограничение вывода связано с текущим состоянием законодательства.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (root / "maps" / "dissertation-claim-map.md").write_text(
+        dedent(
+            """\
+            # Dissertation Claim Map
+
+            Claim coverage shows how each claim is supported.
+            A counterargument is attached to the main claim and limits are preserved explicitly.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (root / "reviews" / "dissertation-review.md").write_text(
+        dedent(
+            """\
+            # Dissertation Review
+
+            Новизна проверена отдельно от обзора.
+            Вклад автора описан явно, а методология соотнесена с выводами.
+            Ограничения вывода сохранены и не скрыты за стилистическим сглаживанием.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (root / "reviews" / "counterargument-review.md").write_text(
+        dedent(
+            """\
+            # Counterargument Review
+
+            Сильная позиция конкурирующей школы описана как позиция.
+            Ответ автора сохранен в узкой и добросовестной формулировке.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (root / "publications" / "publication-evidence.md").write_text(
+        dedent(
+            """\
+            # Publication Evidence
+
+            Статус публикации зафиксирован.
+            Выходные данные заполнены.
+            Связь с диссертацией показана на уровне ключевых положений.
+            """
+        ),
+        encoding="utf-8",
+    )
+    (root / "publications" / "publication-claim-matrix.md").write_text(
+        dedent(
+            """\
+            # Publication Claim Matrix
+
+            | Тезис | Глава | Публикация | Статус покрытия |
+            | --- | --- | --- | --- |
+            | Тезис 1 | Глава 1 | Публикация 1 | Полное покрытие |
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
 _GOOD_MANUSCRIPT = dedent(
     """\
     # Глава 1
@@ -197,7 +368,165 @@ class OneShotTests(unittest.TestCase):
             write_report(report, markdown_path=md_path, json_path=json_path)
             self.assertTrue(md_path.exists())
             self.assertTrue(json_path.exists())
-            self.assertIn("One-shot VKR report", md_path.read_text(encoding="utf-8"))
+            self.assertIn("One-shot thesis report", md_path.read_text(encoding="utf-8"))
+
+
+class CandidateDissertationOneShotTests(unittest.TestCase):
+    def test_missing_historiography_map_is_blocker(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=700), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root, with_historiography=False)
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "strong-draft-with-blockers")
+            codes = {b.code for b in report.all_blockers}
+            self.assertIn("artifact-missing", codes)
+            gate_names = {gate.name for gate in report.gates if not gate.passed}
+            self.assertIn("historiography-coverage", gate_names)
+
+    def test_missing_publication_claim_matrix_is_blocker(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=700), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root)
+            (dissertation_root / "publications" / "publication-claim-matrix.md").unlink()
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "strong-draft-with-blockers")
+            gate_names = {gate.name for gate in report.gates if not gate.passed}
+            self.assertIn("publication-claim-coverage", gate_names)
+
+    def test_length_underflow_blocks_submission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=40), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root)
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "strong-draft-with-blockers")
+            categories = {b.category for b in report.all_blockers}
+            self.assertIn("length-conformance", categories)
+
+    def test_missing_author_abstract_blocks_submission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=700), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            metadata.write_text(metadata.read_text(encoding="utf-8").replace("А" * 450, "А" * 100), encoding="utf-8")
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root)
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "strong-draft-with-blockers")
+            gate_names = {gate.name for gate in report.gates if not gate.passed}
+            self.assertIn("dissertation-artifacts", gate_names)
+
+    def test_missing_publication_evidence_blocks_submission(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=700), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root)
+            (dissertation_root / "publications" / "publication-evidence.md").unlink()
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "strong-draft-with-blockers")
+            gate_names = {gate.name for gate in report.gates if not gate.passed}
+            self.assertIn("publication-evidence", gate_names)
+
+    def test_happy_path_generates_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_candidate_manuscript(chapter_repetitions=700), encoding="utf-8")
+            metadata = root / "dissertation-metadata.toml"
+            _write_dissertation_metadata(metadata)
+            dissertation_root = root / "dissertation"
+            _write_candidate_dissertation_contour(dissertation_root)
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                    dissertation_metadata_path=metadata,
+                    dissertation_artifacts_destination=dissertation_root / "artifacts",
+                    dissertation_root=dissertation_root,
+                    work_type="dissertation-candidate",
+                )
+            )
+            self.assertEqual(report.status, "submission-ready")
+            self.assertTrue((dissertation_root / "artifacts" / "author-abstract.md").exists())
+            self.assertTrue((dissertation_root / "artifacts" / "defense-checklist.md").exists())
+            self.assertTrue((dissertation_root / "publications" / "publication-claim-matrix.md").exists())
 
 
 if __name__ == "__main__":

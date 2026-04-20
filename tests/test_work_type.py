@@ -37,6 +37,18 @@ class ProfileRegistryTests(unittest.TestCase):
     def test_resolve_profile_none_for_empty_string(self) -> None:
         self.assertIsNone(resolve_profile(""))
 
+    def test_dissertation_candidate_profile_exposes_contour_requirements(self) -> None:
+        profile = resolve_profile("dissertation-candidate")
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.artifact_family, "dissertation")
+        self.assertTrue(profile.requires_author_abstract)
+        self.assertTrue(profile.requires_publication_evidence)
+        self.assertTrue(profile.requires_counterargument_pass)
+        self.assertIn("historiography-map", profile.required_artifact_groups)
+        self.assertIn("publication-claim-matrix", profile.required_artifact_groups)
+        self.assertIn("dissertation-review", profile.required_review_artifacts)
+
 
 class ValidateStructureTests(unittest.TestCase):
     def test_vkr_bachelor_requires_all_sections(self) -> None:
@@ -107,6 +119,32 @@ class ValidateStructureTests(unittest.TestCase):
         blockers = validate_to_blockers("# Empty\n", profile)
         self.assertTrue(blockers)
         self.assertTrue(all(b.category == "work-type-structure" for b in blockers))
+
+    def test_doctor_profile_requires_four_chapters(self) -> None:
+        profile = resolve_profile("dissertation-doctor")
+        assert profile is not None
+        markdown = dedent(
+            """\
+            # Title
+
+            ## Введение
+
+            ## Глава 1
+
+            ## Глава 2
+
+            ## Глава 3
+
+            ## Заключение
+
+            ## Список использованных источников
+
+            1. Источник / Автор И. И. — Москва, 2024.
+            """
+        )
+        issues = validate_structure(markdown, profile)
+        codes = {issue.code for issue in issues}
+        self.assertIn("chapter-count-insufficient", codes)
 
 
 if __name__ == "__main__":

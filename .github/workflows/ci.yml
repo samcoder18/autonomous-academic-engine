@@ -21,6 +21,9 @@ jobs:
       - name: Ruff
         run: ruff check telegram_console tests
 
+      - name: Ruff format
+        run: ruff format --check telegram_console tests
+
       - name: Unit tests
         env:
           PYTHONPATH: ${{ github.workspace }}

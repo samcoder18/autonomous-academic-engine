@@ -184,6 +184,10 @@ def resolve_next_actions(
             )
         )
 
+    dissertation_action = _dissertation_continuation_action(thesis)
+    if dissertation_action is not None:
+        actions.append(dissertation_action)
+
     article_blocker = _first_lane_blocker(known_blockers, "article", exclude_categories={"standards-consistency"})
     if article_blocker is not None:
         target = _optional_text(article_blocker.get("target")) or _first_article_repair_target(article)
@@ -294,16 +298,7 @@ def resolve_next_actions(
             )
 
         if not any(_is_work_continuation_action(item) for item in actions) and (actions or not export_gate_active):
-            actions.append(
-                WorkNextAction(
-                    action_id="draft-next",
-                    label="Draft next artifact",
-                    command="launch-thesis write-section <section> or launch-academic article --topic <topic>",
-                    reason="No managed artifacts are ready for review or export yet.",
-                    priority=90,
-                    intent="draft",
-                )
-            )
+            actions.append(_draft_next_action(thesis=thesis, article=article))
 
     if not actions:
         article_export = _first_article_export_target(article)
@@ -342,9 +337,46 @@ def resolve_next_actions(
     return tuple(sorted(deduped.values(), key=lambda item: (item.priority, item.action_id)))
 
 
+def _draft_next_action(*, thesis: dict[str, Any], article: dict[str, Any]) -> WorkNextAction:
+    thesis_available = bool(thesis.get("available"))
+    article_available = bool(article.get("available"))
+
+    if article_available and not thesis_available:
+        return WorkNextAction(
+            action_id="draft-next",
+            label="Draft article artifact",
+            command="launch-academic article --topic <topic>",
+            reason="No managed article artifacts are ready for review or export yet.",
+            priority=90,
+            lane="article",
+            intent="draft",
+        )
+
+    if thesis_available and not article_available:
+        return WorkNextAction(
+            action_id="draft-next",
+            label="Draft thesis artifact",
+            command="launch-thesis write-section <section>",
+            reason="No managed thesis artifacts are ready for review or export yet.",
+            priority=90,
+            lane="thesis",
+            intent="draft",
+        )
+
+    return WorkNextAction(
+        action_id="draft-next",
+        label="Draft next artifact",
+        command="launch-thesis write-section <section> or launch-academic article --topic <topic>",
+        reason="No managed artifacts are ready for review or export yet.",
+        priority=90,
+        intent="draft",
+    )
+
+
 def format_work_state_summary(state: dict[str, Any]) -> str:
     thesis_summary = state.get("thesis", {}).get("summary", {})
     thesis_ledger = state.get("thesis", {}).get("ledger_advisory", {})
+    dissertation_summary = state.get("thesis", {}).get("dissertation", {}).get("summary", {})
     article_summary = state.get("article", {}).get("summary", {})
     quality_advisories = state.get("quality_advisories", {})
     standards_profiles = state.get("standards", {}).get("profiles", {})
@@ -380,6 +412,17 @@ def format_work_state_summary(state: dict[str, Any]) -> str:
                 f"recheck={thesis_ledger.get('needs_recheck_count') or 0}, "
                 f"unsafe={thesis_ledger.get('unsafe_for_draft_count') or 0}"
             )
+    if isinstance(dissertation_summary, dict) and dissertation_summary.get("available"):
+        lines.append(
+            "Dissertation contour: "
+            f"maps_complete={'yes' if dissertation_summary.get('maps_complete') else 'no'}, "
+            f"review_sequence={'yes' if dissertation_summary.get('review_sequence_complete') else 'no'}, "
+            f"publication_matrix={'yes' if dissertation_summary.get('publication_matrix_complete') else 'no'}, "
+            f"maturity={'yes' if dissertation_summary.get('candidate_intellectual_maturity_complete') else 'no'}, "
+            f"contracts_complete={'yes' if dissertation_summary.get('chapter_contracts_complete') else 'no'}, "
+            f"formal_complete={'yes' if dissertation_summary.get('formal_artifacts_complete') else 'no'}, "
+            f"defense_complete={'yes' if dissertation_summary.get('defense_packet_complete', True) else 'no'}"
+        )
     if isinstance(quality_advisories, dict):
         thesis_quality = quality_advisories.get("thesis") if isinstance(quality_advisories.get("thesis"), dict) else {}
         article_quality = (
@@ -473,12 +516,17 @@ def _compact_thesis_state(
     ledger_advisory: dict[str, Any] | None,
 ) -> dict[str, Any]:
     compact_ledger_advisory = _compact_thesis_ledger_advisory(root_dir, ledger_advisory)
+    compact_dissertation = _compact_dissertation_state(
+        root_dir,
+        overview.get("dissertation") if isinstance(overview, dict) else None,
+    )
     if not isinstance(overview, dict):
         return {
             "available": False,
             "sections": [],
             "summary": {"kind": "thesis-overview-summary", "section_count": 0, "reviewed_count": 0, "blocked_count": 0},
             "ledger_advisory": compact_ledger_advisory,
+            "dissertation": compact_dissertation,
             "blockers": [],
         }
     sections: list[dict[str, Any]] = []
@@ -516,21 +564,184 @@ def _compact_thesis_state(
                 }
             )
     summary = overview.get("summary") if isinstance(overview.get("summary"), dict) else {}
+    reviewed_count = _optional_int(summary.get("reviewed_count")) or sum(
+        1 for item in sections if item["review_exists"]
+    )
+    compact_dissertation = _sync_candidate_dissertation_summary(compact_dissertation, reviewed_count=reviewed_count)
+    section_blocked_count = _optional_int(summary.get("blocked_count")) or sum(
+        1 for item in sections if item["blocker_count"]
+    )
     return {
         "available": True,
         "sections": sections,
         "ledger_advisory": compact_ledger_advisory,
+        "dissertation": compact_dissertation,
         "summary": {
             "kind": "thesis-overview-summary",
             "section_count": _optional_int(summary.get("section_count")) or len(sections),
-            "reviewed_count": _optional_int(summary.get("reviewed_count"))
-            or sum(1 for item in sections if item["review_exists"]),
-            "blocked_count": _optional_int(summary.get("blocked_count"))
-            or sum(1 for item in sections if item["blocker_count"]),
+            "reviewed_count": reviewed_count,
+            "blocked_count": section_blocked_count + len(compact_dissertation.get("blockers") or []),
             "suggested_next_action": _optional_text(summary.get("suggested_next_action")),
         },
+        "blockers": blockers + list(compact_dissertation.get("blockers") or []),
+    }
+
+
+def _compact_dissertation_state(root_dir: Path, payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {
+            "available": False,
+            "summary": {
+                "available": False,
+                "maps_complete": False,
+                "chapter_contracts_complete": False,
+                "publication_matrix_complete": False,
+                "review_sequence_complete": False,
+                "candidate_intellectual_maturity_complete": False,
+                "formal_artifacts_complete": False,
+                "defense_packet_complete": False,
+                "suggested_next_action": None,
+                "next_target": None,
+            },
+            "maps": [],
+            "chapter_contracts": [],
+            "reviews": [],
+            "artifacts": [],
+            "publication_artifacts": [],
+            "publication_claim_matrix": {"path": None, "exists": False},
+            "defense_artifacts": [],
+            "blockers": [],
+        }
+
+    maps = [_compact_artifact_entry(root_dir, item) for item in payload.get("maps") or [] if isinstance(item, dict)]
+    chapter_contracts = [
+        _compact_artifact_entry(root_dir, item)
+        for item in payload.get("chapter_contracts") or []
+        if isinstance(item, dict)
+    ]
+    reviews = [
+        _compact_artifact_entry(root_dir, item) for item in payload.get("reviews") or [] if isinstance(item, dict)
+    ]
+    artifacts = [
+        _compact_artifact_entry(root_dir, item) for item in payload.get("artifacts") or [] if isinstance(item, dict)
+    ]
+    publication_artifacts = [
+        _compact_artifact_entry(root_dir, item)
+        for item in payload.get("publication_artifacts") or []
+        if isinstance(item, dict)
+    ]
+    defense_artifacts = [
+        _compact_artifact_entry(root_dir, item)
+        for item in payload.get("defense_artifacts") or []
+        if isinstance(item, dict)
+    ]
+    publication = (
+        _compact_artifact_entry(root_dir, payload.get("publication_evidence"))
+        if isinstance(payload.get("publication_evidence"), dict)
+        else {"path": None, "exists": False}
+    )
+    publication_claim_matrix = (
+        _compact_artifact_entry(root_dir, payload.get("publication_claim_matrix"))
+        if isinstance(payload.get("publication_claim_matrix"), dict)
+        else {"path": None, "exists": False}
+    )
+    metadata = (
+        _compact_artifact_entry(root_dir, payload.get("metadata"))
+        if isinstance(payload.get("metadata"), dict)
+        else {"path": None, "exists": False}
+    )
+
+    blockers: list[dict[str, Any]] = []
+    next_target: str | None = None
+    suggested_next_action = _optional_text(payload.get("suggested_next_action"))
+    review_sequence_complete = bool(reviews) and all(item.get("exists") for item in reviews)
+    publication_matrix_complete = bool(publication_artifacts) and all(
+        item.get("exists") for item in publication_artifacts
+    )
+    for group, action in (
+        (maps + chapter_contracts, "build-maps"),
+        (reviews[:1], "verify-claims"),
+        (reviews[1:2], "counterargument-pass"),
+        ([metadata, publication, *publication_artifacts, *artifacts, *defense_artifacts], "formal-artifacts"),
+    ):
+        missing = next((item for item in group if isinstance(item, dict) and not item.get("exists")), None)
+        if missing is not None:
+            if next_target is None:
+                next_target = _optional_text(missing.get("path"))
+            blockers.append(
+                {
+                    "category": "thesis",
+                    "code": "dissertation-contour-missing",
+                    "message": f"Dissertation artifact `{missing.get('path') or 'n/a'}` is missing.",
+                    "repairable": True,
+                    "lane": "thesis",
+                    "target": _optional_text(missing.get("path")),
+                    "details": {"suggested_next_action": action},
+                }
+            )
+
+    summary = {
+        "available": True,
+        "profile_id": _optional_text(payload.get("profile_id")),
+        "character_count": _optional_int(payload.get("character_count")),
+        "maps_complete": bool(maps) and all(item.get("exists") for item in maps),
+        "chapter_contracts_complete": bool(chapter_contracts) and all(item.get("exists") for item in chapter_contracts),
+        "publication_matrix_complete": publication_matrix_complete,
+        "review_sequence_complete": review_sequence_complete,
+        "candidate_intellectual_maturity_complete": False,
+        "formal_artifacts_complete": metadata.get("exists")
+        and publication.get("exists")
+        and all(item.get("exists") for item in publication_artifacts)
+        and all(item.get("exists") for item in artifacts),
+        "defense_packet_complete": not defense_artifacts or all(item.get("exists") for item in defense_artifacts),
+        "suggested_next_action": suggested_next_action,
+        "next_target": next_target,
+    }
+    return {
+        "available": True,
+        "summary": summary,
+        "metadata": metadata,
+        "maps": maps,
+        "chapter_contracts": chapter_contracts,
+        "reviews": reviews,
+        "artifacts": artifacts,
+        "publication_artifacts": publication_artifacts,
+        "publication_claim_matrix": publication_claim_matrix,
+        "defense_artifacts": defense_artifacts,
+        "publication_evidence": publication,
         "blockers": blockers,
     }
+
+
+def _compact_artifact_entry(root_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "artifact_id": _optional_text(payload.get("artifact_id")),
+        "path": _compact_path(root_dir, _optional_text(payload.get("path"))),
+        "exists": bool(payload.get("exists")),
+    }
+
+
+def _sync_candidate_dissertation_summary(
+    dissertation: dict[str, Any],
+    *,
+    reviewed_count: int,
+) -> dict[str, Any]:
+    if not isinstance(dissertation, dict) or not dissertation.get("available"):
+        return dissertation
+    summary = dissertation.get("summary") if isinstance(dissertation.get("summary"), dict) else {}
+    profile_id = _optional_text(summary.get("profile_id"))
+    is_candidate = profile_id == "dissertation-candidate"
+    review_sequence_complete = bool(summary.get("review_sequence_complete"))
+    maps_complete = bool(summary.get("maps_complete")) and bool(summary.get("chapter_contracts_complete"))
+    candidate_intellectual_maturity_complete = maps_complete and review_sequence_complete and reviewed_count > 0
+    updated_summary = dict(summary)
+    updated_summary["candidate_intellectual_maturity_complete"] = candidate_intellectual_maturity_complete
+    if is_candidate and maps_complete and review_sequence_complete and not candidate_intellectual_maturity_complete:
+        updated_summary["suggested_next_action"] = "draft-author-position"
+        updated_summary["next_target"] = None
+    updated = dict(dissertation)
+    updated["summary"] = updated_summary
+    return updated
 
 
 def _compact_thesis_ledger_advisory(root_dir: Path, advisory: dict[str, Any] | None) -> dict[str, Any]:
@@ -967,6 +1178,83 @@ def _first_lane_blocker(
     return None
 
 
+def _dissertation_continuation_action(thesis: dict[str, Any]) -> WorkNextAction | None:
+    dissertation = thesis.get("dissertation") if isinstance(thesis.get("dissertation"), dict) else None
+    if not isinstance(dissertation, dict) or not dissertation.get("available"):
+        return None
+
+    summary = dissertation.get("summary") if isinstance(dissertation.get("summary"), dict) else {}
+    action = _optional_text(summary.get("suggested_next_action"))
+    if action == "formal-artifacts" and not bool(summary.get("candidate_intellectual_maturity_complete")):
+        action = "draft-author-position"
+    if action not in {
+        "build-maps",
+        "verify-claims",
+        "counterargument-pass",
+        "draft-author-position",
+        "formal-artifacts",
+    }:
+        return None
+
+    target = _optional_text(summary.get("next_target"))
+    if action == "draft-author-position" and not target:
+        unreviewed = _first_unreviewed_thesis_section(thesis)
+        if isinstance(unreviewed, dict):
+            target = _optional_text(unreviewed.get("target"))
+        target = target or _first_thesis_target(thesis)
+
+    placeholder_targets = {
+        "build-maps": "<dissertation-map-or-contract>",
+        "verify-claims": "<dissertation-claim-artifact>",
+        "counterargument-pass": "<dissertation-review-artifact>",
+        "draft-author-position": "<dissertation-section>",
+        "formal-artifacts": "<dissertation-artifact>",
+    }
+    labels = {
+        "build-maps": "Build dissertation maps",
+        "verify-claims": "Verify dissertation claims",
+        "counterargument-pass": "Run counterargument pass",
+        "draft-author-position": "Draft dissertation author position",
+        "formal-artifacts": "Update dissertation formal artifacts",
+    }
+    reasons = {
+        "build-maps": "Dissertation contour still lacks required maps or chapter research contracts.",
+        "verify-claims": "Dissertation claim logic still needs a dedicated review artifact.",
+        "counterargument-pass": "Dissertation contour still lacks a counterargument review pass.",
+        "draft-author-position": (
+            "Core dissertation scaffold is in place; the next safe step is author-position drafting."
+        ),
+        "formal-artifacts": "Formal dissertation artifacts remain incomplete and still block final readiness.",
+    }
+    intents = {
+        "build-maps": "research-scaffold",
+        "verify-claims": "verify",
+        "counterargument-pass": "review",
+        "draft-author-position": "draft",
+        "formal-artifacts": "formalize",
+    }
+    priorities = {
+        "build-maps": 20,
+        "verify-claims": 21,
+        "counterargument-pass": 22,
+        "draft-author-position": 23,
+        "formal-artifacts": 24,
+    }
+    resolved_target = target or placeholder_targets[action]
+    return WorkNextAction(
+        action_id=f"dissertation-{action}",
+        label=labels[action],
+        command=f"launch-thesis {action} {resolved_target}",
+        reason=reasons[action],
+        priority=priorities[action],
+        lane="thesis",
+        target=target,
+        intent=intents[action],
+        blocks_export=action != "draft-author-position",
+        blocking_scope=("export",) if action != "draft-author-position" else (),
+    )
+
+
 def _first_article_repair_target(article: dict[str, Any]) -> str | None:
     for bundle in article.get("bundles") or []:
         if not isinstance(bundle, dict):
@@ -1047,6 +1335,20 @@ def _thesis_ready_for_export(thesis: dict[str, Any]) -> bool:
     section_count = int(summary.get("section_count") or 0)
     reviewed_count = int(summary.get("reviewed_count") or 0)
     blocked_count = int(summary.get("blocked_count") or 0)
+    dissertation = thesis.get("dissertation") if isinstance(thesis.get("dissertation"), dict) else None
+    if isinstance(dissertation, dict) and dissertation.get("available"):
+        dissertation_summary = dissertation.get("summary") if isinstance(dissertation.get("summary"), dict) else {}
+        if not dissertation_summary.get("maps_complete"):
+            return False
+        if not dissertation_summary.get("chapter_contracts_complete"):
+            return False
+        if not dissertation_summary.get("formal_artifacts_complete"):
+            return False
+        if not dissertation_summary.get("defense_packet_complete", True):
+            return False
+        reviews = dissertation.get("reviews") if isinstance(dissertation.get("reviews"), list) else []
+        if not reviews or any(not item.get("exists") for item in reviews if isinstance(item, dict)):
+            return False
     return section_count > 0 and reviewed_count >= section_count and blocked_count == 0
 
 

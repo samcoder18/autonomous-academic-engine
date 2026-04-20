@@ -14,7 +14,7 @@ set -euo pipefail
 
 ACTION="${CODEX_FAKE_ACTION:-write-section}"
 LANE="${CODEX_FAKE_LANE:-thesis}"
-WORK="${CODEX_FAKE_WORK:-biometrics-vkr}"
+WORK="${CODEX_FAKE_WORK:-starter-work}"
 STATUS="${CODEX_FAKE_STATUS:-reviewed}"
 
 cat <<EOF

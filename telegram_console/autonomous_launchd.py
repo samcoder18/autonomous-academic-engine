@@ -43,6 +43,7 @@ class AutonomousDaemonLaunchdStatus:
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": "autonomous-daemon-launchd-status",
+            "status": self.runtime_status,
             "label": self.label,
             "installed": self.installed,
             "loaded": self.loaded,
@@ -52,7 +53,16 @@ class AutonomousDaemonLaunchdStatus:
             "stdout_log": str(self.stdout_log),
             "stderr_log": str(self.stderr_log),
             "note": self.note,
+            "readiness_claim": "none",
         }
+
+    @property
+    def runtime_status(self) -> str:
+        if self.loaded:
+            return "loaded"
+        if self.installed:
+            return "installed"
+        return "not-installed"
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,7 @@ class AutonomousDaemonLaunchdResult:
             "installed": self.installed,
             "note": self.note,
             "status": self.status.to_dict(),
+            "readiness_claim": "none",
         }
 
 

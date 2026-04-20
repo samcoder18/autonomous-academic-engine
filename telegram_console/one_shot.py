@@ -22,6 +22,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .dissertation_artifacts import build_bundle as build_dissertation_bundle
+from .dissertation_artifacts import write_bundle as write_dissertation_bundle
 from .docx_conformance import ConformanceProfile, check_docx
 from .gost_linter import lint_bibliography
 from .originality.checker import OriginalityChecker, passage_blockers
@@ -77,7 +79,7 @@ class OneShotReport:
 
     def to_markdown(self) -> str:
         lines = [
-            f"# One-shot VKR report — {self.status}",
+            f"# One-shot thesis report — {self.status}",
             "",
             f"- Started: {self.started_at.isoformat()}",
             f"- Finished: {self.finished_at.isoformat()}",
@@ -120,6 +122,9 @@ class OneShotConfig:
     docx_path: Path | None
     metadata_path: Path | None
     frontmatter_destination: Path | None
+    dissertation_metadata_path: Path | None = None
+    dissertation_artifacts_destination: Path | None = None
+    dissertation_root: Path | None = None
     corpus_path: Path | None = None
     originality_threshold: float = 0.35
     conformance_profile: ConformanceProfile = field(default_factory=ConformanceProfile)
@@ -133,17 +138,33 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
     notes: list[str] = []
     artifacts: dict[str, str] = {}
 
-    if config.metadata_path and config.frontmatter_destination:
+    profile = resolve_profile(config.work_type)
+    is_dissertation = bool(profile and profile.artifact_family == "dissertation")
+
+    if is_dissertation:
+        if config.dissertation_metadata_path and config.dissertation_artifacts_destination:
+            gates.append(
+                _gate_dissertation_artifacts(
+                    config.dissertation_metadata_path,
+                    config.dissertation_artifacts_destination,
+                )
+            )
+            artifacts["dissertation_artifacts"] = str(config.dissertation_artifacts_destination)
+        if config.dissertation_root:
+            gates.extend(_dissertation_contour_gates(config.dissertation_root, profile))
+            artifacts["dissertation_root"] = str(config.dissertation_root)
+    elif config.metadata_path and config.frontmatter_destination:
         gates.append(_gate_frontmatter(config.metadata_path, config.frontmatter_destination))
         artifacts["frontmatter"] = str(config.frontmatter_destination)
 
     gates.append(_gate_bibliography(config.manuscript_md))
     artifacts["manuscript"] = str(config.manuscript_md)
 
-    profile = resolve_profile(config.work_type)
     if profile is not None:
         gates.append(_gate_work_type_structure(config.manuscript_md, profile))
         artifacts["work_type"] = profile.identifier
+        if profile.min_chars or profile.max_chars:
+            gates.append(_gate_length_conformance(config.manuscript_md, profile))
         if profile.maximum_originality_similarity:
             if config.originality_threshold > profile.maximum_originality_similarity:
                 notes.append(
@@ -209,6 +230,24 @@ def _gate_frontmatter(metadata_path: Path, destination: Path) -> GateResult:
     )
 
 
+def _gate_dissertation_artifacts(metadata_path: Path, destination: Path) -> GateResult:
+    bundle = build_dissertation_bundle(metadata_path)
+    if bundle.has_blockers:
+        return GateResult(
+            name="dissertation-artifacts",
+            passed=False,
+            summary=f"Dissertation artifacts not renderable: {len(bundle.issues)} metadata blocker(s).",
+            blockers=tuple(bundle.blockers()),
+        )
+    written = write_dissertation_bundle(bundle, destination=destination)
+    return GateResult(
+        name="dissertation-artifacts",
+        passed=True,
+        summary=f"Rendered {len(written)} dissertation artifact(s) into {destination}.",
+        details={"files": [str(path) for path in written]},
+    )
+
+
 def _gate_work_type_structure(manuscript_md: Path, profile: WorkTypeProfile) -> GateResult:
     if not manuscript_md.exists():
         return GateResult(
@@ -240,6 +279,65 @@ def _gate_work_type_structure(manuscript_md: Path, profile: WorkTypeProfile) -> 
             f"{profile.title}: all required sections present, "
             f"bibliography has at least {profile.minimum_entries} entries."
         ),
+    )
+
+
+def _gate_length_conformance(manuscript_md: Path, profile: WorkTypeProfile) -> GateResult:
+    if not manuscript_md.exists():
+        return GateResult(
+            name="length-conformance",
+            passed=False,
+            summary=f"Manuscript missing at {manuscript_md}.",
+            blockers=(
+                Blocker(
+                    category="runtime",
+                    code="manuscript-missing",
+                    message=f"Manuscript missing: {manuscript_md}",
+                    repairable=False,
+                ),
+            ),
+        )
+    char_count = len(manuscript_md.read_text(encoding="utf-8"))
+    blockers: list[Blocker] = []
+    if profile.min_chars is not None and char_count < profile.min_chars:
+        blockers.append(
+            Blocker(
+                category="length-conformance",
+                code="below-minimum-length",
+                message=(
+                    f"Manuscript has {char_count} characters, {profile.title} requires at least {profile.min_chars}."
+                ),
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+                details={"actual": char_count, "min_chars": profile.min_chars},
+            )
+        )
+    if profile.max_chars is not None and char_count > profile.max_chars:
+        blockers.append(
+            Blocker(
+                category="length-conformance",
+                code="above-maximum-length",
+                message=(
+                    f"Manuscript has {char_count} characters, {profile.title} allows at most {profile.max_chars}."
+                ),
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+                details={"actual": char_count, "max_chars": profile.max_chars},
+            )
+        )
+    if blockers:
+        return GateResult(
+            name="length-conformance",
+            passed=False,
+            summary=f"Length check found {len(blockers)} issue(s) against the work-type range.",
+            blockers=tuple(blockers),
+            details={"actual_chars": char_count, "min_chars": profile.min_chars, "max_chars": profile.max_chars},
+        )
+    return GateResult(
+        name="length-conformance",
+        passed=True,
+        summary=f"Manuscript length {char_count} chars is inside the configured range.",
+        details={"actual_chars": char_count, "min_chars": profile.min_chars, "max_chars": profile.max_chars},
     )
 
 
@@ -353,6 +451,153 @@ def _gate_originality(
         name="originality",
         passed=True,
         summary=(f"Originality checker: all passages below similarity threshold {threshold}."),
+    )
+
+
+def _dissertation_contour_gates(root_dir: Path, profile: WorkTypeProfile) -> list[GateResult]:
+    paths = {
+        "historiography-coverage": root_dir / "maps" / "historiography-map.md",
+        "novelty-contract": root_dir / "maps" / "novelty-contribution-map.md",
+        "claim-map-coverage": root_dir / "maps" / "dissertation-claim-map.md",
+        "counterargument-coverage": root_dir / "reviews" / "counterargument-review.md",
+        "dissertation-review-coverage": root_dir / "reviews" / "dissertation-review.md",
+        "publication-evidence": root_dir / "publications" / "publication-evidence.md",
+        "publication-claim-coverage": root_dir / "publications" / "publication-claim-matrix.md",
+        "leading-organization-packet": root_dir / "defense" / "leading-organization.md",
+        "opponents-packet": root_dir / "defense" / "opponents.md",
+    }
+    gates = [
+        _gate_markdown_contract(
+            "historiography-coverage",
+            paths["historiography-coverage"],
+            required_markers=("поле", "школ", "неразреш"),
+            min_chars=120,
+        ),
+        _gate_markdown_contract(
+            "novelty-contract",
+            paths["novelty-contract"],
+            required_markers=("новиз", "вклад", "огранич"),
+            min_chars=120,
+        ),
+        _gate_markdown_contract(
+            "claim-map-coverage",
+            paths["claim-map-coverage"],
+            required_markers=("claim", "counterargument", "limits"),
+            min_chars=140,
+        ),
+        _gate_markdown_contract(
+            "dissertation-review-coverage",
+            paths["dissertation-review-coverage"],
+            required_markers=("новизн", "вклад", "методолог", "огранич"),
+            min_chars=120,
+        ),
+    ]
+    if profile.requires_counterargument_pass:
+        gates.append(
+            _gate_markdown_contract(
+                "counterargument-coverage",
+                paths["counterargument-coverage"],
+                required_markers=("позици", "ответ"),
+                min_chars=100,
+            )
+        )
+    if profile.requires_publication_evidence:
+        gates.append(
+            _gate_markdown_contract(
+                "publication-evidence",
+                paths["publication-evidence"],
+                required_markers=("статус", "выходные данные", "связ"),
+                min_chars=100,
+            )
+        )
+    if "publication-claim-matrix" in profile.required_artifact_groups:
+        gates.append(
+            _gate_markdown_contract(
+                "publication-claim-coverage",
+                paths["publication-claim-coverage"],
+                required_markers=("тезис", "глава", "публикац", "покрыт"),
+                min_chars=120,
+            )
+        )
+    if "defense-packet" in profile.required_artifact_groups:
+        gates.extend(
+            (
+                _gate_markdown_contract(
+                    "leading-organization-packet",
+                    paths["leading-organization-packet"],
+                    required_markers=("ведущ", "компетенц", "связ"),
+                    min_chars=90,
+                ),
+                _gate_markdown_contract(
+                    "opponents-packet",
+                    paths["opponents-packet"],
+                    required_markers=("оппонент", "специализац", "связ"),
+                    min_chars=90,
+                ),
+            )
+        )
+    return gates
+
+
+def _gate_markdown_contract(
+    gate_name: str,
+    path: Path,
+    *,
+    required_markers: tuple[str, ...],
+    min_chars: int,
+) -> GateResult:
+    if not path.exists():
+        return GateResult(
+            name=gate_name,
+            passed=False,
+            summary=f"Required dissertation artifact missing at {path}.",
+            blockers=(
+                Blocker(
+                    category=gate_name,
+                    code="artifact-missing",
+                    message=f"Required dissertation artifact missing: {path}",
+                    repairable=True,
+                    blocks_statuses=("submission-ready",),
+                ),
+            ),
+        )
+    text = path.read_text(encoding="utf-8").strip()
+    blockers: list[Blocker] = []
+    if len(text) < min_chars:
+        blockers.append(
+            Blocker(
+                category=gate_name,
+                code="artifact-too-thin",
+                message=f"Artifact `{path.name}` is too short for a reliable dissertation contract.",
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+                details={"actual_chars": len(text), "minimum_chars": min_chars},
+            )
+        )
+    normalized = text.casefold()
+    for marker in required_markers:
+        if marker.casefold() not in normalized:
+            blockers.append(
+                Blocker(
+                    category=gate_name,
+                    code="required-marker-missing",
+                    message=f"Artifact `{path.name}` is missing the expected marker `{marker}`.",
+                    repairable=True,
+                    blocks_statuses=("submission-ready",),
+                    details={"marker": marker},
+                )
+            )
+    if blockers:
+        return GateResult(
+            name=gate_name,
+            passed=False,
+            summary=f"Dissertation artifact `{path.name}` has {len(blockers)} contract issue(s).",
+            blockers=tuple(blockers),
+        )
+    return GateResult(
+        name=gate_name,
+        passed=True,
+        summary=f"Dissertation artifact `{path.name}` matches the minimum contract.",
     )
 
 

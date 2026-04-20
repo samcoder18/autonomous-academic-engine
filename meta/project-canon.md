@@ -2,10 +2,10 @@
 
 Этот файл сохранен только для legacy-ссылок и старых навыков.
 
-Активный канон thesis lane больше не хранится в `meta/`.
+Активный канон работы больше не хранится в `meta/`.
 Используй:
 
-- [works/biometrics-vkr/work-canon.md](works/biometrics-vkr/work-canon.md) для текущей работы по умолчанию;
+- [works/starter-work/work-canon.md](works/starter-work/work-canon.md) для текущего clean starter bundle по умолчанию;
 - `works/<slug>/work-canon.md` для любой другой активной работы.
 
 Корневая конфигурация workspace:

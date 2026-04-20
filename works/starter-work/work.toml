@@ -1,0 +1,21 @@
+version = 1
+slug = "starter-work"
+title = "Starter Work"
+topic = "Clean starter bundle for the legal-academic engine"
+artifact_type = "article"
+language = "ru"
+active_lanes = ["article"]
+work_canon = "work-canon.md"
+
+[standards]
+article_profile = "journal-jrp"
+
+[article]
+root_dir = "articles"
+briefs_dir = "articles/briefs"
+evidence_dir = "articles/evidence"
+claim_maps_dir = "articles/claim-maps"
+drafts_dir = "articles/drafts"
+reviews_dir = "articles/reviews"
+final_dir = "articles/final"
+docx_subdir = "articles"

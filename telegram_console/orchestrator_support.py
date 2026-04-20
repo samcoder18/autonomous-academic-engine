@@ -16,6 +16,11 @@ THESIS_ACTIONS = (
     "write-section",
     "review-section",
     "style-pass",
+    "build-maps",
+    "verify-claims",
+    "counterargument-pass",
+    "draft-author-position",
+    "formal-artifacts",
 )
 ARTICLE_ACTIONS = ("article", "review", "repair", "finalize")
 
@@ -31,6 +36,11 @@ ACTION_TITLES = {
     "write-section": "написание раздела",
     "review-section": "рецензия раздела",
     "style-pass": "стиль и ритм",
+    "build-maps": "карта диссертации",
+    "verify-claims": "проверка тезисов диссертации",
+    "counterargument-pass": "контраргументы",
+    "draft-author-position": "авторская позиция",
+    "formal-artifacts": "формальные артефакты",
     "article": "новая статья",
     "review": "рецензирование",
     "repair": "исправление",

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -73,3 +76,34 @@ def append_text(path: Path, header: str, content: str) -> None:
         if content and not content.endswith("\n"):
             handle.write("\n")
         handle.write("\n")
+
+
+def resolve_executable(
+    configured: str | None,
+    default_name: str,
+    *,
+    extra_candidates: Sequence[str] = (),
+) -> str | None:
+    candidates: list[str] = []
+    if configured:
+        candidates.append(configured)
+    candidates.append(default_name)
+    candidates.extend(extra_candidates)
+
+    seen: set[str] = set()
+    for raw_candidate in candidates:
+        candidate = str(raw_candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        direct = Path(candidate).expanduser()
+        if direct.is_file() and os.access(direct, os.X_OK):
+            return str(direct.resolve())
+
+        resolved = shutil.which(candidate)
+        if resolved:
+            path = Path(resolved).expanduser()
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path.resolve())
+    return None
