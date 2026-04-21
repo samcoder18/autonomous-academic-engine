@@ -22,6 +22,11 @@
 - statement_precision:
 - knowledge_date:
 - verification_result:
+- verification_status:
+- support_scope:
+- pinpoint_locator:
+- support_excerpt:
+- caveat_note:
 - period:
 - territory:
 - method:
@@ -45,6 +50,11 @@
 - statement_precision:
 - knowledge_date:
 - verification_result:
+- verification_status:
+- support_scope:
+- pinpoint_locator:
+- support_excerpt:
+- caveat_note:
 - period:
 - territory:
 - method:

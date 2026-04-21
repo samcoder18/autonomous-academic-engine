@@ -166,19 +166,15 @@ def audit_skill_source_map(
                 continue
             checked_external_files.append(str(skill_file))
             text = skill_file.read_text(encoding="utf-8")
-            absolute_source_path = str((root / entry.agent_path).resolve())
-            has_source_header = "Source of truth" in text
-            has_expected_path = (
-                entry.expected_source_of_truth_path in text or entry.agent_path in text or absolute_source_path in text
-            )
-            if not has_source_header or not has_expected_path:
+            expected_text = _render_external_skill_text(text, root, entry)
+            if _normalize_external_skill_for_compare(text) != _normalize_external_skill_for_compare(expected_text):
                 issues.append(
                     SkillSourceAuditIssue(
-                        code="external-source-of-truth-missing",
+                        code="external-body-drift",
                         skill_name=entry.skill_name,
                         message=(
-                            f"External skill `{entry.expected_external_skill_id}` exists but does not expose "
-                            "the expected Source of truth mapping."
+                            f"External skill `{entry.expected_external_skill_id}` is not synchronized with "
+                            f"`{entry.agent_path}`."
                         ),
                     )
                 )
@@ -221,10 +217,7 @@ def sync_external_skill_sources(
             continue
 
         original_text = skill_file.read_text(encoding="utf-8")
-        updated_text = _upsert_source_of_truth_section(
-            original_text,
-            _render_source_of_truth_section(root, entry),
-        )
+        updated_text = _render_external_skill_text(original_text, root, entry)
         changed = updated_text != original_text
         status = "already-synced"
         if changed:
@@ -273,15 +266,29 @@ def _render_source_of_truth_section(root_dir: Path, entry: SkillSourceMapEntry) 
     )
 
 
-def _upsert_source_of_truth_section(text: str, section: str) -> str:
-    normalized = text.rstrip()
-    pattern = re.compile(r"(?ms)^## Source of truth\s*\n.*?(?=^##\s|\Z)")
-    replacement = section.rstrip()
-    if pattern.search(normalized):
-        return pattern.sub(replacement + "\n\n", normalized, count=1).rstrip() + "\n"
-    if not normalized:
-        return replacement + "\n"
-    return normalized + "\n\n" + replacement + "\n"
+def _render_external_skill_text(existing_text: str, root_dir: Path, entry: SkillSourceMapEntry) -> str:
+    frontmatter, _ = _split_frontmatter(existing_text)
+    agent_text = entry.resolved_agent_path(root_dir).read_text(encoding="utf-8").rstrip()
+    body = agent_text + "\n\n" + _render_source_of_truth_section(root_dir, entry).rstrip() + "\n"
+    if frontmatter:
+        return _ensure_trailing_newline(frontmatter.rstrip() + "\n" + body)
+    return _ensure_trailing_newline(body)
+
+
+def _normalize_external_skill_for_compare(text: str) -> str:
+    frontmatter, body = _split_frontmatter(text)
+    normalized_body = body.rstrip()
+    return (frontmatter.rstrip() + "\n" if frontmatter else "") + normalized_body
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    if not text.startswith("---\n"):
+        return ("", text)
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return ("", text)
+    split_at = end + len("\n---\n")
+    return (text[:split_at], text[split_at:])
 
 
 def _ensure_trailing_newline(text: str) -> str:

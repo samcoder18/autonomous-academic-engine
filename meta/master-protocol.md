@@ -76,7 +76,9 @@
 - Для новой главы оптимален пакет 6-12 профильных источников; шире - только при явной необходимости.
 - Для каждого источника фиксируются роль, полезные тезисы, пределы использования и дата проверки.
 - Базовая source taxonomy для thesis и article lane: `primary-normative`, `official-guidance`, `court-decision`, `empirical`, `secondary-doctrine`, `news`, `commentary`.
-- Для thesis lane после source package и до drafting желательно вести evidence ledger с `claim_id`, типом утверждения, статусом проверки, ссылкой на элемент source package и датой проверки первички.
+- Для thesis lane после source package и до drafting ведется evidence ledger с `claim_id`, типом утверждения, статусом проверки, ссылкой на элемент source package и датой проверки первички.
+- Для любого non-analytical claim strict claim passport включает как минимум `claim_id`, `basis_type`, `primary_identifier`, `official_primary_link`, `jurisdiction`, `statement_precision`, `knowledge_date`, `verification_result`, `verification_status`, `support_scope`, `pinpoint_locator`, `support_excerpt`, `draft_use`, `false_attribution_check`; для qualified/partial claims обязателен `caveat_note`.
+- `draft_use = safe` запрещен для `needs-recheck`, `unsafe-for-draft`, partial/context-only support и stale dynamic material.
 - Для норм, судебной практики, статистики и других динамичных данных приоритет всегда за первичными и официальными источниками.
 - Для article lane это правило действует как жесткий default: официальный и первичный источник является финальной authority для права, практики, регуляторики и статистики.
 - До сильного синтеза нужна triangulation: как минимум сопоставление первички с еще одним релевантным слоем, если тезис не исчерпывается одним источником.
@@ -122,6 +124,8 @@
 - Финальный Markdown и checklist хранятся в `works/<slug>/articles/final/`.
 - DOCX статьи экспортируется через [scripts/export_academic_docx.sh](../scripts/export_academic_docx.sh) с `--work`.
 - Finalizer не должен утверждать полную формальную готовность, если relevant raw standard отсутствует или конфликтует с normalized profile.
+- Article review/checklist обязаны сохранять машинно читаемые blocking fields по citation safety, footnote consistency, close paraphrase, counterarguments, limits/caveats и другим финальным blockers.
+- Если citation / paraphrase / counterargument / caveat blockers остаются открытыми, managed finalization обязан понижать статус до `strong-draft-with-blockers` и блокировать `export-ready`.
 
 ## 9. Листы проверки и синхронизации
 
@@ -152,12 +156,13 @@
 Перед тем как объявить любой thesis-результат `submission-ready`, рукопись обязана пройти детерминированный one-shot pipeline:
 
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — собирает title-page, abstract, keywords, task-sheet из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра (автор, научный руководитель, abstract < 200 символов, < 3 ключевых слов RU/EN) блокирует сборку.
-- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — запускает гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure` и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — запускает гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure`, а для managed thesis bundle еще и `thesis-quality-contract`, и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
 
 Правила статуса:
 
 - при любом FAIL хотя бы одного гейта отчёт получает статус `strong-draft-with-blockers` — финализатор обязан понизить итоговый статус и передать список блокеров в `repair_kernel`;
 - статус `submission-ready` разрешён только если все применимые гейты PASS и `work-type-structure` сошёлся с выбранным профилем (`article`, `vkr-bachelor`, `vkr-specialist`, `master-thesis`, `dissertation-candidate`, `dissertation-doctor`);
+- `thesis-quality-contract` требует для managed thesis bundle claim ledger, verification log и review artifacts с machine-readable strict fields; отсутствие этих артефактов или неполный claim passport блокируют `submission-ready`;
 - origin-text originality-gate обязан использовать локальный corpus (`telegram_console.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
 
 ### 11.1 Repo-level release claims

@@ -4,6 +4,7 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from .article_runtime_signals import extract_article_artifact_signals
 from .guarded_prose import extract_guarded_prose_matches, load_guarded_prose_rules
 from .workspace import WorkConfig, article_bundle_paths, discover_article_slugs
 
@@ -37,6 +38,9 @@ EXPANDED_LEDGER_FIELDS = {
     "support_scope",
     "draft_use",
     "false_attribution_check",
+    "pinpoint_locator",
+    "support_excerpt",
+    "caveat_note",
     "notes",
 }
 
@@ -48,6 +52,9 @@ VERIFICATION_LOG_FIELDS = {
     "verification_result",
     "verification_status",
     "false_attribution_check",
+    "pinpoint_locator",
+    "support_excerpt",
+    "caveat_note",
     "notes",
 }
 
@@ -78,6 +85,18 @@ CLAIM_FIELD_ALIASES = {
     "draft_use": "draft_use",
     "false attribution check": "false_attribution_check",
     "false_attribution_check": "false_attribution_check",
+    "pinpoint locator": "pinpoint_locator",
+    "pinpoint_locator": "pinpoint_locator",
+    "support locator": "pinpoint_locator",
+    "support_locator": "pinpoint_locator",
+    "support excerpt": "support_excerpt",
+    "support_excerpt": "support_excerpt",
+    "holding summary": "support_excerpt",
+    "holding_summary": "support_excerpt",
+    "caveat note": "caveat_note",
+    "caveat_note": "caveat_note",
+    "limit note": "caveat_note",
+    "limit_note": "caveat_note",
     "source ids": "source_ids",
     "source id": "source_id",
     "supported claim ids": "supported_claim_ids",
@@ -153,6 +172,18 @@ FOREIGN_JURISDICTION_CODES = {
     "ca",
     "au",
     "tr",
+}
+NON_ANALYTICAL_BASIS_TYPES = DYNAMIC_BASIS_TYPES | SECONDARY_BASIS_TYPES
+ARTICLE_PROSE_BLOCKER_FLAGS = {
+    "citation-safety-gap": "citation_safety_gap",
+    "close-paraphrase-risk": "close_paraphrase_risk",
+    "footnote-consistency-gap": "footnote_consistency_gap",
+    "citation-model-inconsistent": "citation_model_inconsistent",
+    "bibliographic-wording-unsafe": "bibliographic_wording_unsafe",
+    "counterargument-gap": "counterargument_gap",
+    "missing-caveats": "missing_caveats",
+    "overclaims-not-narrowed": "overclaims_not_narrowed",
+    "inferential-gaps": "inferential_gaps",
 }
 
 
@@ -256,6 +287,8 @@ def _build_article_quality_advisory(work: WorkConfig) -> dict[str, object]:
     sources: list[str] = []
     claim_records: list[dict[str, str]] = []
     bundle_coverages: list[str] = []
+    prose_coverages: list[str] = []
+    prose_issues: list[dict[str, str]] = []
     for slug in discover_article_slugs(work):
         bundle = article_bundle_paths(work, slug)
         bundle_payload = _article_bundle_quality_payload(bundle, slug=slug)
@@ -265,15 +298,22 @@ def _build_article_quality_advisory(work: WorkConfig) -> dict[str, object]:
             _append_source(sources, source_name)
         bundle_coverages.append(bundle_payload["coverage"])
         claim_records.extend(bundle_payload["claim_records"])
+        prose_payload = _article_bundle_review_payload(bundle)
+        if prose_payload is not None:
+            prose_coverages.append(str(prose_payload["coverage"]))
+            prose_issues.extend(prose_payload["issues"])  # type: ignore[arg-type]
+            for source_name in prose_payload["sources"]:  # type: ignore[index]
+                _append_source(sources, str(source_name))
 
     coverage = _aggregate_bundle_coverages(bundle_coverages)
+    prose_coverage = _aggregate_bundle_coverages(prose_coverages)
 
     return {
         "coverage": coverage,
         "sources": sources,
         "verification_advisory": _build_verification_advisory(records=claim_records, base_status=coverage),
         "source_mix_advisory": _build_source_mix_advisory(records=claim_records, base_status=coverage),
-        "prose_advisory": _build_advisory_payload("missing", []),
+        "prose_advisory": _build_advisory_payload(prose_coverage, prose_issues),
     }
 
 
@@ -338,6 +378,41 @@ def _article_bundle_quality_payload(bundle: dict[str, Path], *, slug: str) -> di
         "sources": sources,
         "coverage": coverage,
         "claim_records": _merge_claim_records([*evidence_claim_records, *claim_map_records]),
+    }
+
+
+def _article_bundle_review_payload(bundle: dict[str, Path]) -> dict[str, object] | None:
+    artifact_texts: dict[str, str] = {}
+    sources: list[str] = []
+    for source_name, key in (("review", "review"), ("checklist", "checklist")):
+        path = bundle[key]
+        if not path.exists():
+            continue
+        artifact_texts[source_name] = path.read_text(encoding="utf-8")
+        sources.append(source_name)
+    if not artifact_texts:
+        return None
+
+    signals = extract_article_artifact_signals(artifact_texts)
+    issues: list[dict[str, str]] = []
+    for blocker in signals.blockers:
+        flag = _article_blocker_flag(blocker.code)
+        if not flag:
+            continue
+        issue = {
+            "flag": flag,
+            "message": blocker.message,
+        }
+        for key in ("source", "field", "value"):
+            value = blocker.details.get(key)
+            if isinstance(value, str) and value:
+                issue[key] = value
+        issues.append(issue)
+
+    return {
+        "coverage": "full" if len(artifact_texts) == 2 else "limited",
+        "sources": tuple(sources),
+        "issues": issues,
     }
 
 
@@ -464,12 +539,45 @@ def _build_verification_advisory(
             issues.append(
                 _issue("missing_official_primary_link", "Strong claim is missing an official primary link.", record)
             )
+        if _requires_strict_claim_passport(basis_type):
+            if not record.get("pinpoint_locator"):
+                issues.append(
+                    _issue(
+                        "missing_pinpoint_locator",
+                        "Non-analytical claim is missing a pinpoint locator for the supporting material.",
+                        record,
+                    )
+                )
+            if not record.get("support_excerpt"):
+                issues.append(
+                    _issue(
+                        "missing_support_excerpt",
+                        "Non-analytical claim is missing a short support excerpt or holding summary.",
+                        record,
+                    )
+                )
+            if _claim_needs_caveat(record) and not record.get("caveat_note"):
+                issues.append(
+                    _issue(
+                        "partial_support_without_caveat",
+                        "Qualified or partial claim is missing an explicit caveat or limit note.",
+                        record,
+                    )
+                )
         if "needs-recheck" in status or "needs recheck" in status or "stale" in result:
             issues.append(
                 _issue("stale_knowledge_date", "Claim is explicitly marked for re-check or stale verification.", record)
             )
         if basis_type in DYNAMIC_BASIS_TYPES and not record.get("knowledge_date"):
             issues.append(_issue("stale_knowledge_date", "Dynamic material is missing a knowledge_date.", record))
+        if _claim_is_unsafe_for_safe_drafting(record):
+            issues.append(
+                _issue(
+                    "unsafe_draft_use",
+                    "Claim is marked safe for drafting despite partial, stale, or unsafe verification.",
+                    record,
+                )
+            )
         false_attribution_check = _normalized_text(record.get("false_attribution_check"))
         if false_attribution_check and false_attribution_check not in PASS_VALUES:
             issues.append(_issue("false_attribution_risk", "False attribution check needs review.", record))
@@ -685,6 +793,38 @@ def _record_has_stats_metadata(record: dict[str, str]) -> bool:
     return all(record.get(field) for field in ("period", "territory", "method", "provider"))
 
 
+def _requires_strict_claim_passport(basis_type: str | None) -> bool:
+    normalized = _normalized_text(basis_type)
+    return bool(normalized and (normalized in NON_ANALYTICAL_BASIS_TYPES or normalized == "primary-normative"))
+
+
+def _claim_needs_caveat(record: dict[str, str]) -> bool:
+    statement_precision = _normalized_text(record.get("statement_precision"))
+    support_scope = _normalized_text(record.get("support_scope"))
+    verification_result = _normalized_text(record.get("verification_result"))
+    return (
+        statement_precision in {"qualified", "context-only"}
+        or support_scope in {"partial", "context-only"}
+        or "partial support" in verification_result
+    )
+
+
+def _claim_is_unsafe_for_safe_drafting(record: dict[str, str]) -> bool:
+    draft_use = _normalized_text(record.get("draft_use"))
+    if draft_use != "safe":
+        return False
+    verification_status = _normalized_text(record.get("verification_status"))
+    support_scope = _normalized_text(record.get("support_scope"))
+    verification_result = _normalized_text(record.get("verification_result"))
+    if verification_status in {"needs-recheck", "unsafe-for-draft"}:
+        return True
+    if support_scope in {"partial", "context-only"}:
+        return True
+    if "partial support" in verification_result or "not found in primary" in verification_result:
+        return True
+    return False
+
+
 def _record_has_content(record: dict[str, str]) -> bool:
     return any(key not in {"heading"} and value for key, value in record.items())
 
@@ -755,6 +895,14 @@ def _split_multi_value(value: str | None) -> list[str]:
 
 def _normalized_text(value: str | None) -> str:
     return _normalize_inline_value(value or "").casefold()
+
+
+def _article_blocker_flag(code: str | None) -> str | None:
+    normalized = _normalized_text(code)
+    for suffix, flag in ARTICLE_PROSE_BLOCKER_FLAGS.items():
+        if normalized.endswith(suffix):
+            return flag
+    return None
 
 
 def _looks_truthy(value: str | None) -> bool:

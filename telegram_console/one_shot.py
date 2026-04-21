@@ -29,6 +29,7 @@ from .gost_linter import lint_bibliography
 from .originality.checker import OriginalityChecker, passage_blockers
 from .originality.corpus import OriginalityCorpus
 from .repair_kernel import Blocker
+from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .vkr_artifacts import build_bundle, write_bundle
 from .work_type import WorkTypeProfile, resolve_profile, validate_structure
 
@@ -159,6 +160,9 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
 
     gates.append(_gate_bibliography(config.manuscript_md))
     artifacts["manuscript"] = str(config.manuscript_md)
+    thesis_quality_gate = _gate_thesis_quality_contract(config.manuscript_md)
+    if thesis_quality_gate is not None:
+        gates.append(thesis_quality_gate)
 
     if profile is not None:
         gates.append(_gate_work_type_structure(config.manuscript_md, profile))
@@ -370,6 +374,143 @@ def _gate_bibliography(manuscript_md: Path) -> GateResult:
         passed=True,
         summary=f"GOST linter: {len(report.entries)} entries, no structural issues.",
     )
+
+
+def _gate_thesis_quality_contract(manuscript_md: Path) -> GateResult | None:
+    thesis_root = _infer_thesis_root(manuscript_md)
+    if thesis_root is None:
+        return None
+
+    ledgers_dir = thesis_root / "ledgers"
+    reviews_dir = thesis_root / "reviews"
+    if not ledgers_dir.exists() and not reviews_dir.exists():
+        return GateResult(
+            name="thesis-quality-contract",
+            passed=True,
+            summary="Managed thesis quality contract is not applicable outside a thesis bundle.",
+        )
+
+    blockers: list[Blocker] = []
+    claim_ledgers = sorted(path for path in ledgers_dir.glob("*.md")) if ledgers_dir.exists() else []
+    verification_logs = [path for path in claim_ledgers if "verification-log" in path.stem.casefold()]
+    claim_ledgers = [path for path in claim_ledgers if path not in verification_logs]
+    review_files = (
+        sorted(path for path in reviews_dir.glob("*.md") if "one-shot" not in path.stem.casefold())
+        if reviews_dir.exists()
+        else []
+    )
+
+    if not claim_ledgers:
+        blockers.append(
+            Blocker(
+                category="verification",
+                code="thesis-ledger-missing",
+                message="Managed thesis bundle is missing a claim ledger for the pre-final quality contract.",
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+            )
+        )
+    if not verification_logs:
+        blockers.append(
+            Blocker(
+                category="verification",
+                code="thesis-verification-log-missing",
+                message="Managed thesis bundle is missing a verification log for strong claims.",
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+            )
+        )
+    if not review_files:
+        blockers.append(
+            Blocker(
+                category="review",
+                code="thesis-review-artifact-missing",
+                message="Managed thesis bundle is missing a review artifact for the pre-final quality contract.",
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+            )
+        )
+
+    required_markers = (
+        "claim_id",
+        "basis_type",
+        "primary_identifier",
+        "official_primary_link",
+        "pinpoint_locator",
+        "support_excerpt",
+        "verification_status",
+        "draft_use",
+    )
+    for ledger_path in claim_ledgers:
+        text = ledger_path.read_text(encoding="utf-8")
+        missing_markers = [marker for marker in required_markers if marker not in text]
+        if missing_markers:
+            blockers.append(
+                Blocker(
+                    category="verification",
+                    code="thesis-claim-passport-incomplete",
+                    message=(
+                        f"Ledger `{ledger_path.name}` is missing strict claim-passport markers: "
+                        + ", ".join(missing_markers)
+                    ),
+                    repairable=True,
+                    blocks_statuses=("submission-ready",),
+                )
+            )
+        for raw_line in text.splitlines():
+            line = raw_line.casefold()
+            if ("needs-recheck" in line or "unsafe-for-draft" in line or "unsafe for draft" in line) and "safe" in line:
+                blockers.append(
+                    Blocker(
+                        category="verification",
+                        code="thesis-unsafe-draft-use",
+                        message=(
+                            f"Ledger `{ledger_path.name}` marks a needs-recheck or unsafe claim as safe for drafting."
+                        ),
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                    )
+                )
+                break
+
+    if review_files:
+        artifact_texts = {path.stem: path.read_text(encoding="utf-8") for path in review_files}
+        review_signals = extract_thesis_runtime_signals(artifact_texts)
+        blockers.extend(review_signals.blockers)
+
+    if blockers:
+        return GateResult(
+            name="thesis-quality-contract",
+            passed=False,
+            summary=f"Thesis quality contract found {len(blockers)} issue(s) across managed ledgers/reviews.",
+            blockers=tuple(blockers),
+            details={
+                "claim_ledgers": [str(path) for path in claim_ledgers],
+                "verification_logs": [str(path) for path in verification_logs],
+                "review_files": [str(path) for path in review_files],
+            },
+        )
+
+    return GateResult(
+        name="thesis-quality-contract",
+        passed=True,
+        summary="Managed thesis bundle exposes strict claim-passport and review artifacts.",
+        details={
+            "claim_ledgers": [str(path) for path in claim_ledgers],
+            "verification_logs": [str(path) for path in verification_logs],
+            "review_files": [str(path) for path in review_files],
+        },
+    )
+
+
+def _infer_thesis_root(manuscript_md: Path) -> Path | None:
+    if manuscript_md.name != "full-draft.md":
+        return None
+    if manuscript_md.parent.name == "manuscript":
+        return manuscript_md.parent.parent
+    if manuscript_md.parent.name == "thesis":
+        return manuscript_md.parent
+    return None
 
 
 def _gate_docx_conformance(

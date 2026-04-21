@@ -45,7 +45,7 @@ CLI и Telegram runtime могут переключать `active work`.
 
 Для более формального и автономного запуска эта логика вынесена в skills Codex.
 Repo-first mapping между skills и role docs хранится в [meta/skill-source-map.toml](meta/skill-source-map.toml).
-`agents/*.md` остаются source of truth для reusable role behavior; внешний `SKILL.md` должен явно ссылаться на соответствующий repo-side источник.
+`agents/*.md` остаются source of truth для reusable role behavior; внешний `SKILL.md` должен явно ссылаться на соответствующий repo-side источник и синхронизироваться с ним целиком, а не только через отдельную ссылку.
 
 ### Thesis skills
 
@@ -81,7 +81,7 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 - [scripts/export_academic_docx.sh](scripts/export_academic_docx.sh) - экспортирует article DOCX выбранной работы.
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter` - генерирует title-page / abstract / keywords / task-sheet для VKR по `works/<slug>/thesis/metadata.toml`.
 - `python3 -m telegram_console.work_cli build-dissertation-artifacts` - генерирует `author-abstract.md` и `defense-checklist.md` для dissertation contour по `works/<slug>/thesis/dissertation/metadata.toml`; для candidate contour вызывается после maps, review sequence и author-position drafting, а `publication-claim-matrix.md` ведется как отдельный обязательный scaffold artifact.
-- `python3 -m telegram_console.work_cli one-shot-thesis` - запускает автономные machine-driven гейты (frontmatter, ГОСТ, DOCX, originality, work-type) и пишет отчёт в `works/<slug>/thesis/reviews/`. Регламент описан в §11 [master-protocol.md](meta/master-protocol.md).
+- `python3 -m telegram_console.work_cli one-shot-thesis` - запускает автономные machine-driven гейты (frontmatter, ГОСТ, DOCX, originality, work-type, strict thesis quality contract для managed thesis bundle) и пишет отчёт в `works/<slug>/thesis/reviews/`. Регламент описан в §11 [master-protocol.md](meta/master-protocol.md).
 - `python3 -m telegram_console.work_cli one-shot-dissertation` - запускает dissertation-specific machine-driven гейты (artifacts, maps, reviews, publication evidence, publication-claim matrix, length, ГОСТ, DOCX, originality) и пишет отчёт в `works/<slug>/thesis/reviews/`.
 - `python3 -m telegram_console.work_cli autonomous daemon run [--stuck-after-minutes N]` - запускает long-running автономный цикл с ops-alerts и resource-guards. Операционный канал описан в §11.2 [master-protocol.md](meta/master-protocol.md).
 - `python3 -m telegram_console.work_cli work-status [--json]` - показывает индекс сигналов и следующий безопасный шаг по активной работе.

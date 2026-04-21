@@ -5,7 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-BLOCKING_SUBMISSION_CATEGORIES = {"dynamic-material", "primary-support", "standards-consistency"}
+BLOCKING_SUBMISSION_CATEGORIES = {
+    "citation",
+    "dynamic-material",
+    "logic",
+    "primary-support",
+    "review",
+    "standards-consistency",
+}
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,12 @@ def evaluate_article_finalization(
         blocked.append("dynamic-material-blockers")
     if "standards-consistency" in blocker_categories:
         blocked.append("standards-blockers")
+    if "citation" in blocker_categories:
+        blocked.append("citation-blockers")
+    if "logic" in blocker_categories:
+        blocked.append("logic-blockers")
+    if "review" in blocker_categories:
+        blocked.append("review-blockers")
 
     for gate in contract_gates:
         if not isinstance(gate, dict) or gate.get("status") != "block":

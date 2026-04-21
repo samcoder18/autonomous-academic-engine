@@ -53,6 +53,35 @@ FIELD_ALIASES = {
     "inferential gaps": {
         "inferential gaps",
     },
+    "counterarguments addressed": {
+        "counterarguments addressed",
+        "counterarguments handled",
+    },
+    "limits or caveats missing": {
+        "limits or caveats missing",
+        "limits preserved",
+        "caveats preserved",
+    },
+    "footnotes are consistent": {
+        "footnotes are consistent",
+        "footnotes complete",
+    },
+    "attribution is citation-safe": {
+        "attribution is citation-safe",
+        "citation-safe for finalization",
+    },
+    "close paraphrase risks": {
+        "close paraphrase risks",
+    },
+    "citation model consistent": {
+        "citation model consistent",
+    },
+    "bibliographic wording acceptable": {
+        "bibliographic wording acceptable",
+    },
+    "overclaims narrowed": {
+        "overclaims narrowed",
+    },
     "checklist blockers": {
         "checklist blockers",
         "remaining blockers",
@@ -201,6 +230,78 @@ def _artifact_blocker_from_field(source_name: str, field_key: str, field_value: 
             code="requirements-conflict",
             message="Artifact reports unresolved conflicts in publication requirements.",
         )
+    if field_key == "counterarguments addressed" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="logic",
+            code="counterargument-gap",
+            message="Artifact says material counterarguments are still under-addressed.",
+        )
+    if field_key == "limits or caveats missing" and _looks_blocking_text(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="logic",
+            code="missing-caveats",
+            message="Artifact says important limits or caveats are still missing.",
+        )
+    if field_key == "footnotes are consistent" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="citation",
+            code="footnote-consistency-gap",
+            message="Artifact says footnote completeness or consistency is still insufficient.",
+        )
+    if field_key == "attribution is citation-safe" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="citation",
+            code="citation-safety-gap",
+            message="Artifact says attribution is not citation-safe yet.",
+        )
+    if field_key == "close paraphrase risks" and _looks_blocking_text(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="citation",
+            code="close-paraphrase-risk",
+            message="Artifact reports unresolved close paraphrase risk.",
+        )
+    if field_key == "citation model consistent" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="citation",
+            code="citation-model-inconsistent",
+            message="Artifact says the citation model is not consistent yet.",
+        )
+    if field_key == "bibliographic wording acceptable" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="citation",
+            code="bibliographic-wording-unsafe",
+            message="Artifact says bibliographic wording is still unsafe or incomplete.",
+        )
+    if field_key == "overclaims narrowed" and _looks_negative_response(clean_value):
+        return _build_artifact_blocker(
+            source_name,
+            field_key,
+            clean_value,
+            category="logic",
+            code="overclaims-not-narrowed",
+            message="Artifact says overclaims are not narrowed yet.",
+        )
 
     if field_key in {
         "unsafe or overstated claims",
@@ -247,6 +348,14 @@ def _artifact_blocker_code(field_key: str) -> str:
     mapping = {
         "unsafe or overstated claims": "unsafe-claims",
         "inferential gaps": "inferential-gaps",
+        "counterarguments addressed": "counterargument-gap",
+        "limits or caveats missing": "missing-caveats",
+        "footnotes are consistent": "footnote-consistency-gap",
+        "attribution is citation-safe": "citation-safety-gap",
+        "close paraphrase risks": "close-paraphrase-risk",
+        "citation model consistent": "citation-model-inconsistent",
+        "bibliographic wording acceptable": "bibliographic-wording-unsafe",
+        "overclaims narrowed": "overclaims-not-narrowed",
         "checklist blockers": "checklist-blockers",
         "formatting blockers": "formatting-blockers",
         "what still blocks formal submission": "formal-submission-blockers",
@@ -258,6 +367,14 @@ def _artifact_blocker_message(field_key: str) -> str:
     mapping = {
         "unsafe or overstated claims": "Artifact reports unsafe or overstated claims that still need repair.",
         "inferential gaps": "Artifact reports unresolved inferential gaps.",
+        "counterarguments addressed": "Artifact reports unresolved counterargument coverage.",
+        "limits or caveats missing": "Artifact reports missing limits or caveats.",
+        "footnotes are consistent": "Artifact reports unresolved footnote consistency issues.",
+        "attribution is citation-safe": "Artifact reports unresolved citation-safety issues.",
+        "close paraphrase risks": "Artifact reports unresolved close paraphrase risk.",
+        "citation model consistent": "Artifact reports inconsistent citation model usage.",
+        "bibliographic wording acceptable": "Artifact reports unsafe bibliographic wording.",
+        "overclaims narrowed": "Artifact reports unresolved overclaims.",
         "checklist blockers": "Artifact reports unresolved checklist blockers.",
         "formatting blockers": "Artifact reports unresolved formatting blockers.",
         "what still blocks formal submission": "Artifact explicitly lists what still blocks formal submission.",
@@ -270,6 +387,8 @@ def _infer_artifact_blocker_category(field_key: str, field_value: str) -> str:
     if any(token in text for token in ("format", "standard", "profile", "conflict", "оформ", "требован")):
         return "standards-consistency"
     if any(token in text for token in ("citation", "footnote", "атрибуц", "сноск", "bibliograph")):
+        return "citation"
+    if any(token in text for token in ("paraphrase", "перефраз")):
         return "citation"
     if any(token in text for token in ("dynamic", "re-check", "recheck", "актуаль", "перепровер")):
         return "dynamic-material"
@@ -289,6 +408,8 @@ def _infer_artifact_blocker_category(field_key: str, field_value: str) -> str:
         return "logic"
     if field_key == "unsafe or overstated claims":
         return "primary-support"
+    if field_key == "close paraphrase risks":
+        return "citation"
     return "review"
 
 
@@ -363,10 +484,16 @@ def _looks_negative_response(value: str) -> bool:
         for token in (
             "not loaded",
             "not confirmed",
+            "not handled",
+            "not narrowed",
+            "not safe",
             "not re-checked",
             "not rechecked",
             "not yet",
             "недостат",
+            "не суз",
+            "не снят",
+            "не безопас",
             "не загруж",
             "не подтверж",
             "не перепровер",
@@ -381,4 +508,15 @@ def _looks_blocking_text(value: str) -> bool:
         return False
     if normalized in {"none", "no", "n/a", "ok"}:
         return False
-    return normalized not in {"none identified", "no blockers", "нет", "отсутствуют", "не блокирует"}
+    return normalized not in {
+        "none identified",
+        "no blockers",
+        "нет",
+        "отсутствуют",
+        "не блокирует",
+        "none",
+        "нет рисков",
+        "рисков нет",
+        "no close paraphrase risks",
+        "none noted",
+    }

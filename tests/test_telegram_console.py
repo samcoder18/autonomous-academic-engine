@@ -2137,11 +2137,11 @@ class WorkflowOrchestratorTests(unittest.TestCase):
 
         resolution = json.loads((run_dir / "resolution.json").read_text(encoding="utf-8"))
         self.assertEqual(resolution["thesis_runtime"]["summary_block"]["kind"], "thesis-section-summary")
-        self.assertEqual(resolution["thesis_runtime"]["summary_block"]["blocker_count"], 1)
+        self.assertEqual(resolution["thesis_runtime"]["summary_block"]["blocker_count"], 2)
         self.assertEqual(resolution["thesis_runtime"]["thesis_repair_plan"]["suggested_action"], "verify")
 
         section_status = self.orchestrator.get_artifact_status(f"thesis:{TEST_THESIS_SECTION.as_posix()}")
-        self.assertEqual(section_status["summary"]["blocker_count"], 1)
+        self.assertEqual(section_status["summary"]["blocker_count"], 2)
         self.assertEqual(section_status["summary"]["terminal_reason"], "blocked-primary-support")
 
         work_state = self.orchestrator.get_artifact_status("work")
@@ -2362,6 +2362,31 @@ class ArticleRuntimeSignalsTests(unittest.TestCase):
         self.assertEqual(signals.blockers[0].details["source"], "review")
         self.assertEqual(signals.blockers[0].details["field"], "guarded-prose")
 
+    def test_extract_article_artifact_signals_reads_strict_review_fields(self) -> None:
+        signals = extract_article_artifact_signals(
+            {
+                "review": (
+                    "- Attribution is citation-safe: no\n"
+                    "- Footnotes are consistent: no\n"
+                    "- Close paraphrase risks: paragraph 2 mirrors the source too closely\n"
+                    "- Counterarguments addressed: no\n"
+                    "- Limits or caveats missing: yes\n"
+                    "- Overclaims narrowed: no\n"
+                ),
+            }
+        )
+
+        blocker_codes = {item.code for item in signals.blockers}
+        blocker_categories = {item.category for item in signals.blockers}
+
+        self.assertTrue(any(code.endswith("citation-safety-gap") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("footnote-consistency-gap") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("close-paraphrase-risk") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("counterargument-gap") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("missing-caveats") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("overclaims-not-narrowed") for code in blocker_codes))
+        self.assertEqual(blocker_categories, {"citation", "logic"})
+
 
 class ThesisRuntimeSignalsTests(unittest.TestCase):
     def test_extract_thesis_runtime_signals_parses_review_findings(self) -> None:
@@ -2412,6 +2437,31 @@ class ThesisRuntimeSignalsTests(unittest.TestCase):
         self.assertIsNone(signals.status_hint)
         self.assertEqual({item.category for item in signals.blockers}, {"primary-support", "dynamic-material"})
         self.assertTrue(all(item.details["field"] == "guarded-prose" for item in signals.blockers))
+
+    def test_extract_thesis_runtime_signals_reads_strict_review_contract_fields(self) -> None:
+        signals = extract_thesis_runtime_signals(
+            {
+                "review": (
+                    "- Не маскируется ли пересказ под анализ: да\n"
+                    "- Достаточно ли данных для выводов: нет\n"
+                    "- Нет ли рискованных близких перефразирований: да\n"
+                    "- Отделена ли авторская позиция от обзора литературы: нет\n"
+                    "- Есть ли ограничения выводов там, где они нужны: нет\n"
+                    "- Единообразно ли оформлены ссылки: нет\n"
+                ),
+            }
+        )
+
+        blocker_codes = {item.code for item in signals.blockers}
+        blocker_categories = {item.category for item in signals.blockers}
+
+        self.assertTrue(any(code.endswith("summary-vs-analysis-drift") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("insufficient-evidence-for-conclusion") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("close-paraphrase-risk") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("author-position-not-separated") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("missing-limits") for code in blocker_codes))
+        self.assertTrue(any(code.endswith("citation-consistency-gap") for code in blocker_codes))
+        self.assertEqual(blocker_categories, {"citation", "review"})
 
 
 class GuardedProseRegistryTests(unittest.TestCase):
@@ -2488,6 +2538,9 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "verification_status",
             "source_package_item_ids",
             "support_scope",
+            "pinpoint_locator",
+            "support_excerpt",
+            "caveat_note",
             "draft_use",
             "false_attribution_check",
             "notes",
@@ -2504,6 +2557,9 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
         self.assertIn("claim passport", template_text.casefold())
         self.assertIn("official_primary_link", template_text)
         self.assertIn("false_attribution_check", template_text)
+        self.assertIn("pinpoint_locator", template_text)
+        self.assertIn("support_excerpt", template_text)
+        self.assertIn("caveat_note", template_text)
 
     def test_evidence_pack_template_declares_claim_passport_fields(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2515,6 +2571,11 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "official_primary_link",
             "knowledge_date",
             "verification_result",
+            "verification_status",
+            "support_scope",
+            "pinpoint_locator",
+            "support_excerpt",
+            "caveat_note",
             "false_attribution_check",
             "period",
             "territory",
@@ -2533,6 +2594,11 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "official_primary_link",
             "knowledge_date",
             "verification_result",
+            "verification_status",
+            "support_scope",
+            "pinpoint_locator",
+            "support_excerpt",
+            "caveat_note",
             "false_attribution_check",
             "period",
             "territory",
@@ -2556,6 +2622,9 @@ class ThesisEvidenceLedgerContractTests(unittest.TestCase):
             "verification_result",
             "verification_status",
             "false_attribution_check",
+            "pinpoint_locator",
+            "support_excerpt",
+            "caveat_note",
             "notes",
         ):
             self.assertIn(field_name, template_text)
@@ -2688,6 +2757,43 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
         self.assertIn("paragraph", micro_review_text.casefold())
         self.assertIn("generic prose pattern", micro_review_text.casefold())
 
+    def test_all_repo_mapped_agent_docs_follow_uniform_contract_shape(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        manifest = load_skill_source_map(repo_root)
+        verdict_required = {
+            "thesis-source-verifier",
+            "thesis-citation-checker",
+            "thesis-argument-critic",
+            "thesis-style-editor",
+            "academic-source-verifier",
+            "academic-citation-checker",
+            "academic-counterargument-critic",
+            "academic-submission-evaluator",
+            "academic-repair-orchestrator",
+            "academic-finalizer",
+        }
+
+        required_sections = (
+            "## Когда использовать",
+            "## Что открыть сначала",
+            "## Входной contract",
+            "## Что делать по шагам",
+            "## Что запрещено",
+            "## Что считается хорошим результатом",
+            "## Обязательный handoff",
+            "## Structured verdict",
+        )
+
+        for skill_name, entry in manifest.items():
+            text = (repo_root / entry.agent_path).read_text(encoding="utf-8")
+            normalized = text.casefold()
+            for heading in required_sections:
+                self.assertIn(heading, text, msg=f"{skill_name} missing section {heading}")
+            if skill_name in verdict_required:
+                self.assertIn("```verdict", text, msg=f"{skill_name} should require a structured verdict")
+            else:
+                self.assertIn("advisory/handoff-only", normalized, msg=f"{skill_name} should stay advisory-only")
+
 
 class SkillSourceMapAuditTests(unittest.TestCase):
     def test_skill_source_manifest_covers_skills_declared_in_agents(self) -> None:
@@ -2719,11 +2825,11 @@ class SkillSourceMapAuditTests(unittest.TestCase):
 
         issue_codes = {(issue.skill_name, issue.code) for issue in report.issues}
         self.assertIn(
-            ("thesis-research-synthesizer", "external-source-of-truth-missing"),
+            ("thesis-research-synthesizer", "external-body-drift"),
             issue_codes,
         )
         self.assertNotIn(
-            ("academic-intake", "external-source-of-truth-missing"),
+            ("academic-intake", "external-body-drift"),
             issue_codes,
         )
 
@@ -2761,6 +2867,8 @@ class SkillSourceMapSyncTests(unittest.TestCase):
         items = {item.skill_name: item for item in report.items}
         second_items = {item.skill_name: item for item in second_report.items}
         self.assertEqual(items["thesis-research-synthesizer"].status, "updated")
+        self.assertIn("# Агент: Синтезатор ресерча", updated_text)
+        self.assertIn("## Что открыть сначала", updated_text)
         self.assertIn("## Source of truth", updated_text)
         self.assertIn("agents/research-synthesizer.md", updated_text)
         self.assertEqual(second_items["thesis-research-synthesizer"].status, "already-synced")
@@ -2927,9 +3035,9 @@ class QualityAdvisoryTests(unittest.TestCase):
                     """\
                     # Ledger
 
-                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
-                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | pinpoint_locator | support_excerpt | caveat_note | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | Art. 10 para. 1 | The statute directly supports the claim. | none | safe | passed | ok |
                     """
                 ),
             )
@@ -2939,9 +3047,9 @@ class QualityAdvisoryTests(unittest.TestCase):
                     """\
                     # Verification log
 
-                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | notes |
-                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | conflicting primary | needs-recheck | needs-review | conflict |
+                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | pinpoint_locator | support_excerpt | caveat_note | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | conflicting primary | needs-recheck | needs-review | Art. 10 para. 1 | Conflicting primary text exists. | preserve narrow reading | conflict |
                     """
                 ),
             )
@@ -3017,8 +3125,35 @@ class QualityAdvisoryTests(unittest.TestCase):
                     - statement_precision: qualified
                     - knowledge_date: 2026-04-19
                     - verification_result: secondary summary only
+                    - verification_status: needs-recheck
+                    - support_scope: partial
+                    - pinpoint_locator: Doctrine chapter 2
+                    - support_excerpt: Secondary summary only.
+                    - caveat_note: Must remain a narrow comparative note.
                     - false_attribution_check: passed
                     - Safe for final text: no
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md",
+                textwrap.dedent(
+                    """\
+                    # Review
+
+                    - Attribution is citation-safe: no
+                    - Counterarguments addressed: no
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "final" / "demo-checklist.md",
+                textwrap.dedent(
+                    """\
+                    # Checklist
+
+                    - Footnotes are consistent: no
+                    - Limits or caveats missing: yes
                     """
                 ),
             )
@@ -3037,6 +3172,67 @@ class QualityAdvisoryTests(unittest.TestCase):
         self.assertIn("partial_support", advisories["article"]["verification_advisory"]["flags"])
         self.assertIn("stats_missing_metadata", advisories["article"]["source_mix_advisory"]["flags"])
         self.assertIn("foreign_law_secondary_only", advisories["article"]["source_mix_advisory"]["flags"])
+        self.assertIn("citation_safety_gap", advisories["article"]["prose_advisory"]["flags"])
+        self.assertIn("counterargument_gap", advisories["article"]["prose_advisory"]["flags"])
+        self.assertIn("footnote_consistency_gap", advisories["article"]["prose_advisory"]["flags"])
+        self.assertIn("missing_caveats", advisories["article"]["prose_advisory"]["flags"])
+
+    def test_build_quality_advisories_flags_strict_claim_passport_gaps_and_unsafe_draft_use(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "evidence" / "strict.md",
+                textwrap.dedent(
+                    """\
+                    # Evidence Pack
+
+                    ### Claim Passport 1
+
+                    - Claim ID: S-1
+                    - Claim text: Partial empirical claim.
+                    - basis_type: empirical
+                    - primary_identifier: Dataset 1
+                    - official_primary_link: https://example.test/dataset
+                    - jurisdiction: RU
+                    - statement_precision: qualified
+                    - knowledge_date: 2026-04-19
+                    - verification_result: partial support only
+                    - verification_status: needs-recheck
+                    - support_scope: partial
+                    - draft_use: safe
+                    - false_attribution_check: passed
+                    """
+                ),
+            )
+            write_file(
+                root / TEST_WORK_ROOT / "articles" / "claim-maps" / "strict.md",
+                textwrap.dedent(
+                    """\
+                    # Claim Map
+
+                    ### Claim 1
+                    - Claim ID: S-1
+                    - basis_type: empirical
+                    - jurisdiction: RU
+                    - verification_result: partial support only
+                    - verification_status: needs-recheck
+                    - support_scope: partial
+                    - statement_precision: qualified
+                    - draft_use: safe
+                    """
+                ),
+            )
+            workspace = load_workspace_config(root)
+            work = load_work_config(workspace, TEST_WORK_ID)
+
+            advisories = build_quality_advisories(work)
+
+        flags = advisories["article"]["verification_advisory"]["flags"]
+        self.assertIn("missing_pinpoint_locator", flags)
+        self.assertIn("missing_support_excerpt", flags)
+        self.assertIn("partial_support_without_caveat", flags)
+        self.assertIn("unsafe_draft_use", flags)
 
     def test_build_quality_advisories_marks_legacy_ledgers_as_limited_without_noise(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3390,9 +3586,9 @@ class QualityAdvisoryTests(unittest.TestCase):
                     """\
                     # Ledger
 
-                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | draft_use | false_attribution_check | notes |
-                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | safe | passed | ok |
+                    | claim_id | section_target | claim_text | basis_type | source_package_item_ids | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | support_scope | pinpoint_locator | support_excerpt | caveat_note | draft_use | false_attribution_check | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | thesis/manuscript/sections/01-introduction.md | Verified claim | primary-normative | S1 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | direct | Art. 10 para. 1 | Direct support from the statute. | none | safe | passed | ok |
                     """
                 ),
             )
@@ -3402,9 +3598,9 @@ class QualityAdvisoryTests(unittest.TestCase):
                     """\
                     # Verification log
 
-                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | notes |
-                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | passed | ok |
+                    | claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | knowledge_date | verification_result | verification_status | false_attribution_check | pinpoint_locator | support_excerpt | caveat_note | notes |
+                    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+                    | CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | verified | passed | Art. 10 para. 1 | Direct support from the statute. | none | ok |
                     """
                 ),
             )
@@ -4975,6 +5171,28 @@ class FinalizationEngineTests(unittest.TestCase):
         self.assertEqual(result["finalization_status"], "export-ready")
         self.assertIn("docx", result["allowed_exports"])
         self.assertEqual(result["readiness_claim"], "none")
+
+    def test_finalization_blocks_citation_logic_and_review_blockers(self) -> None:
+        write_file(self.bundle["final_markdown"], "# Final\n")
+        write_file(self.bundle["checklist"], "# Checklist\n")
+        write_file(self.bundle["review"], "# Review\n")
+
+        result = evaluate_article_finalization(
+            bundle=self.bundle,
+            readiness_status="submission-ready",
+            blockers=[
+                {"category": "citation", "code": "citation-safety-gap", "message": "Citation still unsafe."},
+                {"category": "logic", "code": "counterargument-gap", "message": "Counterargument missing."},
+                {"category": "review", "code": "missing-caveats", "message": "Limits are missing."},
+            ],
+            contract_gates=[],
+        ).to_dict()
+
+        self.assertEqual(result["status"], "block")
+        self.assertIn("citation-blockers", result["blocked_reasons"])
+        self.assertIn("logic-blockers", result["blocked_reasons"])
+        self.assertIn("review-blockers", result["blocked_reasons"])
+        self.assertEqual(result["effective_readiness_status"], "strong-draft-with-blockers")
 
 
 class AutonomousDaemonTests(unittest.TestCase):

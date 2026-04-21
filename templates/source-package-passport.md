@@ -31,6 +31,9 @@
   - `verification_result`
   - `verification_status`
   - `support_scope`
+  - `pinpoint_locator`
+  - `support_excerpt`
+  - `caveat_note` for partial / qualified support
   - `draft_use`
   - `false_attribution_check`
   - `notes`
@@ -59,6 +62,11 @@
   - official_primary_link:
   - knowledge_date:
   - verification_result:
+  - verification_status:
+  - support_scope:
+  - pinpoint_locator:
+  - support_excerpt:
+  - caveat_note:
   - false_attribution_check:
   - period:
   - territory:
@@ -87,6 +95,11 @@
   - official_primary_link:
   - knowledge_date:
   - verification_result:
+  - verification_status:
+  - support_scope:
+  - pinpoint_locator:
+  - support_excerpt:
+  - caveat_note:
   - false_attribution_check:
   - period:
   - territory:

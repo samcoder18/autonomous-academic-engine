@@ -38,6 +38,21 @@ FIELD_ALIASES = {
     "citation-consistency": {
         "единообразно ли оформлены ссылки",
     },
+    "summary-vs-analysis-drift": {
+        "не маскируется ли пересказ под анализ",
+    },
+    "evidence-sufficiency": {
+        "достаточно ли данных для выводов",
+    },
+    "close-paraphrase-risk": {
+        "нет ли рискованных близких перефразирований",
+    },
+    "author-position-separation": {
+        "отделена ли авторская позиция от обзора литературы",
+    },
+    "limits-present": {
+        "есть ли ограничения выводов там, где они нужны",
+    },
 }
 
 FIELD_ALIAS_INDEX = {alias: canonical for canonical, aliases in FIELD_ALIASES.items() for alias in aliases}
@@ -195,6 +210,51 @@ def _blocker_from_field(source_name: str, field_key: str, field_value: str) -> B
             code="citation-consistency-gap",
             message="Review says citation formatting is not consistent yet.",
         )
+    if field_key == "summary-vs-analysis-drift" and _looks_issue_present(field_value):
+        return _build_blocker(
+            source_name,
+            field_key,
+            field_value,
+            category="review",
+            code="summary-vs-analysis-drift",
+            message="Review says summary is still being masked as analysis.",
+        )
+    if field_key == "evidence-sufficiency" and _looks_negative_confirmation(field_value):
+        return _build_blocker(
+            source_name,
+            field_key,
+            field_value,
+            category="review",
+            code="insufficient-evidence-for-conclusion",
+            message="Review says the section still lacks enough evidence for its conclusions.",
+        )
+    if field_key == "close-paraphrase-risk" and _looks_issue_present(field_value):
+        return _build_blocker(
+            source_name,
+            field_key,
+            field_value,
+            category="citation",
+            code="close-paraphrase-risk",
+            message="Review says the section still contains risky close paraphrase.",
+        )
+    if field_key == "author-position-separation" and _looks_negative_confirmation(field_value):
+        return _build_blocker(
+            source_name,
+            field_key,
+            field_value,
+            category="review",
+            code="author-position-not-separated",
+            message="Review says the author's position is not clearly separated from the literature review.",
+        )
+    if field_key == "limits-present" and _looks_negative_confirmation(field_value):
+        return _build_blocker(
+            source_name,
+            field_key,
+            field_value,
+            category="review",
+            code="missing-limits",
+            message="Review says the section is missing necessary limits or caveats.",
+        )
     return None
 
 
@@ -265,7 +325,7 @@ def _looks_negative_confirmation(value: str) -> bool:
     normalized = _normalize_value(value).casefold().strip(" .")
     if normalized in {"нет", "no", "false"}:
         return True
-    return any(token in normalized for token in ("не ", "неполн", "недостат"))
+    return any(token in normalized for token in ("не ", "неполн", "недостат", "отсутств"))
 
 
 def _looks_primary_support_gap(value: str) -> bool:
@@ -283,11 +343,12 @@ def _looks_blocking_text(value: str) -> bool:
 
 
 def _dedupe_blockers(blockers: list[Blocker]) -> tuple[Blocker, ...]:
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     deduped: list[Blocker] = []
     for blocker in blockers:
-        if blocker.category in seen:
+        key = (blocker.category, blocker.code)
+        if key in seen:
             continue
-        seen.add(blocker.category)
+        seen.add(key)
         deduped.append(blocker)
     return tuple(deduped)

@@ -17,6 +17,9 @@
   - interpretation;
   - navigation toward primary sources.
 - Proprietary legal databases: `navigation only`
+- Every non-analytical claim passport must include `pinpoint_locator` and a short `support_excerpt` / holding summary.
+- Partial or qualified support must travel with an explicit `caveat_note`.
+- `Safe for drafting: yes` is forbidden when the claim remains `needs-recheck`, `unsafe-for-draft`, or only `partial`.
 
 ## 3. Source Register
 
@@ -73,6 +76,9 @@
 - verification_result:
 - verification_status:
 - support_scope:
+- pinpoint_locator:
+- support_excerpt:
+- caveat_note:
 - draft_use:
 - false_attribution_check:
 - period:
@@ -94,6 +100,9 @@
 - verification_result:
 - verification_status:
 - support_scope:
+- pinpoint_locator:
+- support_excerpt:
+- caveat_note:
 - draft_use:
 - false_attribution_check:
 - period:

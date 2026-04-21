@@ -370,6 +370,153 @@ class OneShotTests(unittest.TestCase):
             self.assertTrue(json_path.exists())
             self.assertIn("One-shot thesis report", md_path.read_text(encoding="utf-8"))
 
+    def test_managed_thesis_bundle_blocks_incomplete_quality_contract(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thesis_root = root / "thesis"
+            manuscript = thesis_root / "manuscript" / "full-draft.md"
+            manuscript.parent.mkdir(parents=True, exist_ok=True)
+            manuscript.write_text(_GOOD_MANUSCRIPT, encoding="utf-8")
+            (thesis_root / "ledgers").mkdir(parents=True, exist_ok=True)
+            ledger_header = (
+                "| claim_id | section_target | claim_text | basis_type | source_package_item_ids | "
+                "primary_identifier | official_primary_link | jurisdiction | statement_precision | "
+                "knowledge_date | verification_result | verification_status | support_scope | "
+                "draft_use | false_attribution_check | notes |"
+            )
+            ledger_separator = (
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            )
+            ledger_row = (
+                "| CL-001 | thesis/manuscript/sections/01.md | Demo claim | primary-normative | S1 | "
+                "Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | "
+                "supported in official text | verified | direct | safe | passed | ok |"
+            )
+            (thesis_root / "ledgers" / "01-ledger.md").write_text(
+                dedent(
+                    f"""\
+                    # Ledger
+
+                    {ledger_header}
+                    {ledger_separator}
+                    {ledger_row}
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                )
+            )
+
+        self.assertEqual(report.status, "strong-draft-with-blockers")
+        gate = next(item for item in report.gates if item.name == "thesis-quality-contract")
+        codes = {blocker.code for blocker in gate.blockers}
+        self.assertFalse(gate.passed)
+        self.assertIn("thesis-verification-log-missing", codes)
+        self.assertIn("thesis-review-artifact-missing", codes)
+        self.assertIn("thesis-claim-passport-incomplete", codes)
+
+    def test_managed_thesis_bundle_passes_strict_quality_contract(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            thesis_root = root / "thesis"
+            manuscript = thesis_root / "manuscript" / "full-draft.md"
+            manuscript.parent.mkdir(parents=True, exist_ok=True)
+            manuscript.write_text(_GOOD_MANUSCRIPT, encoding="utf-8")
+            ledgers_dir = thesis_root / "ledgers"
+            reviews_dir = thesis_root / "reviews"
+            ledgers_dir.mkdir(parents=True, exist_ok=True)
+            reviews_dir.mkdir(parents=True, exist_ok=True)
+            strict_ledger_header = (
+                "| claim_id | section_target | claim_text | basis_type | source_package_item_ids | "
+                "primary_identifier | official_primary_link | jurisdiction | statement_precision | "
+                "knowledge_date | verification_result | verification_status | support_scope | "
+                "pinpoint_locator | support_excerpt | caveat_note | draft_use | "
+                "false_attribution_check | notes |"
+            )
+            strict_ledger_separator = (
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | "
+                "--- | --- | --- | --- |"
+            )
+            strict_ledger_row = (
+                "| CL-001 | thesis/manuscript/sections/01.md | Demo claim | primary-normative | S1 | "
+                "Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | supported in official text | "
+                "verified | direct | Art. 10 para. 1 | Direct support from the statute. | none | safe | "
+                "passed | ok |"
+            )
+            (ledgers_dir / "01-ledger.md").write_text(
+                dedent(
+                    f"""\
+                    # Ledger
+
+                    {strict_ledger_header}
+                    {strict_ledger_separator}
+                    {strict_ledger_row}
+                    """
+                ),
+                encoding="utf-8",
+            )
+            verification_header = (
+                "| claim_id | primary_identifier | official_primary_link | jurisdiction | statement_precision | "
+                "knowledge_date | verification_result | verification_status | false_attribution_check | "
+                "pinpoint_locator | support_excerpt | caveat_note | notes |"
+            )
+            verification_separator = "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+            verification_row = (
+                "| CL-001 | Art. 10 | https://example.test/act | RU | exact | 2026-04-19 | "
+                "supported in official text | verified | passed | Art. 10 para. 1 | "
+                "Direct support from the statute. | none | ok |"
+            )
+            (ledgers_dir / "01-verification-log.md").write_text(
+                dedent(
+                    f"""\
+                    # Verification log
+
+                    {verification_header}
+                    {verification_separator}
+                    {verification_row}
+                    """
+                ),
+                encoding="utf-8",
+            )
+            (reviews_dir / "01-review.md").write_text(
+                dedent(
+                    """\
+                    # Review
+
+                    - Есть ли утверждения без опоры: нет
+                    - Есть ли спорные выводы: нет
+                    - Все ли динамичные нормы и решения перепроверены на дату написания: да
+                    - Что нужно дополнить источниками: нет
+                    - Единообразно ли оформлены ссылки: да
+                    - Не маскируется ли пересказ под анализ: нет
+                    - Достаточно ли данных для выводов: да
+                    - Нет ли рискованных близких перефразирований: нет
+                    - Отделена ли авторская позиция от обзора литературы: да
+                    - Есть ли ограничения выводов там, где они нужны: да
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                )
+            )
+
+        gate = next(item for item in report.gates if item.name == "thesis-quality-contract")
+        self.assertTrue(gate.passed)
+
 
 class CandidateDissertationOneShotTests(unittest.TestCase):
     def test_missing_historiography_map_is_blocker(self) -> None:

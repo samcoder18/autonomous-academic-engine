@@ -8,7 +8,7 @@ Reusable workspace для подготовки юридических акаде
 
 - **Multi-work**: один репозиторий держит произвольное число `works/<slug>/` с собственным каноном, thesis lane, article lane и standards.
 - **Deterministic gates**: фронтматтер ВКР, dissertation artifacts/maps/reviews, publication-claim coverage, ГОСТ-библиография, DOCX-conformance, originality (MinHash), work-type структура и length-conformance — всё машинно, без внешних SaaS.
-- **One-shot pipeline**: единственная команда прогоняет все гейты и выдаёт честный вердикт (`submission-ready` или `strong-draft-with-blockers` с полным списком блокеров).
+- **One-shot pipeline**: единственная команда прогоняет все гейты и выдаёт честный вердикт (`submission-ready` или `strong-draft-with-blockers` с полным списком блокеров). Для managed thesis bundle дополнительно проверяется strict thesis quality contract.
 - **Source connectors**: stub/live архитектура для `publication.pravo.gov.ru`, `sudact.ru`, `cbr.ru`, `elibrary.ru`, `cyberleninka`, `semantic_scholar`, `vak.gov`. Live-режим opt-in per-connector.
 - **Autonomous daemon + ops-канал**: long-running цикл с ops-alerts (stale-lock, stuck-detector, unhandled exception) и resource-guards.
 - **Telegram runtime**: работа-aware orchestration с мультипроектным реестром, активной работой, принудительной пересборкой chat-context.
@@ -126,7 +126,7 @@ Deterministic machine-driven гейты: фронтматтер, ГОСТ-биб
 
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — генерирует `title-page.md`, `abstract-ru.md`, `abstract-en.md`, `keywords.md`, `task-sheet.md` из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра блокирует сборку.
 - `python3 -m telegram_console.work_cli build-dissertation-artifacts [--work <slug>]` — генерирует `author-abstract.md` и `defense-checklist.md` из `works/<slug>/thesis/dissertation/metadata.toml`. Для candidate contour это завершающая формальная ступень после maps, review sequence и author-position drafting; `publication-claim-matrix.md` поддерживается отдельно как обязательный scaffold artifact.
-- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — прогон thesis/VKR гейтов с честным итоговым статусом; для dissertation works автоматически использует dissertation-specific profile.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — прогон thesis/VKR гейтов с честным итоговым статусом; для managed thesis bundle дополнительно проверяет strict claim-passport/review contract, а для dissertation works автоматически использует dissertation-specific profile.
 - `python3 -m telegram_console.work_cli one-shot-dissertation [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — явный dissertation entrypoint: dissertation artifacts, maps, reviews, publication evidence, publication-claim matrix, length, ГОСТ, DOCX, originality.
 
 Инварианты статуса:
@@ -203,6 +203,8 @@ python3 -m telegram_console.work_cli autonomous daemon stop --work <slug>
 python3 -m telegram_console.work_cli skill-source-map audit [--skills-root <path>] [--json]
 python3 -m telegram_console.work_cli skill-source-map sync-external --skills-root <path> [--write]
 ```
+
+`skill-source-map sync-external` синхронизирует внешний `SKILL.md` целиком с repo-side `agents/*.md`, сохраняя frontmatter внешнего файла и добавляя `Source of truth`.
 
 ### Совместимость legacy-путей
 
