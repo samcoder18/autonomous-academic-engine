@@ -115,6 +115,6 @@ python3 -m telegram_console.work_cli standards-status journal-jrp
 
 ## Closeout Boundaries
 
-- В эту волну не входили tag/release package и GitHub release notes.
+- Первичная clean-snapshot wave не включала tag/release package и GitHub release notes; follow-up release-closeout добавил GitHub-facing changelog и release body отдельно.
 - В эту волну не входило наполнение `starter-work` содержательным article bundle.
 - В эту волну не входил content-level verdict по thesis/article manuscript quality.

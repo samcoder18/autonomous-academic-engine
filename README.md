@@ -255,8 +255,10 @@ ruff format --check telegram_console/ tests/
 
 ## Ключевые документы
 
+- [CHANGELOG.md](CHANGELOG.md) — короткий GitHub-facing changelog по релизным изменениям.
 - [AGENTS.md](AGENTS.md) — индекс агентных ролей, launcher'ов и hard rules.
 - [meta/master-protocol.md](meta/master-protocol.md) — единый workflow-регламент для всех lane.
+- [meta/github-release-body-2026-04-21.md](meta/github-release-body-2026-04-21.md) — готовый короткий текст для GitHub Release body.
 - [meta/autonomous-engine-unknowns-2026-04-19.md](meta/autonomous-engine-unknowns-2026-04-19.md) — границы автономного движка.
 - [meta/engineering-audit-autonomous-workspace-2026-04-19.md](meta/engineering-audit-autonomous-workspace-2026-04-19.md) — полный инженерный аудит и план мигитации.
 - [meta/runtime-reliability-audit-2026-04-20.md](meta/runtime-reliability-audit-2026-04-20.md) — отдельный аудит daemon/CLI/runtime reliability.
