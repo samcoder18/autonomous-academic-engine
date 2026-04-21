@@ -17,8 +17,8 @@ Reusable workspace для подготовки юридических акаде
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/sam111-crypto/VKR.git
-cd VKR
+git clone https://github.com/sam111-crypto/autonomous-academic-engine.git
+cd autonomous-academic-engine
 pip install -e ".[dev]"
 python3 -m unittest discover -s tests -q   # offline, детерминированный
 ```
