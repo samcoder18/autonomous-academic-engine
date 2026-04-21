@@ -1,6 +1,6 @@
 # Changelog
 
-Этот changelog фиксирует GitHub-facing релизные изменения репозитория.
+Этот changelog фиксирует GitHub-facing релизные изменения `autonomous-academic-engine`.
 Подробные инженерные аудиты и closeout-документы остаются в `meta/`.
 
 ## 2026-04-21 — Academic Quality Hardening

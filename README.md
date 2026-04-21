@@ -1,6 +1,6 @@
-# Legal-Academic Workspace
+# Autonomous Academic Engine
 
-Reusable workspace для подготовки юридических академических текстов (ВКР, диссертаций, статей) с автономным движком машинно-проверяемых гейтов.
+Автономный workflow-engine для подготовки юридических академических текстов: ВКР, диссертаций и статей с machine-driven quality gates, verified evidence trace и честным finalization.
 
 Система не используется для обхода антиплагиата, AI-детекторов и маскировки заимствований. Качество достигается через strong research, verified primary sources, evidence trace, честное понижение статуса и естественный академический стиль. Подробнее — [Принцип качества](#принцип-качества) и [AGENTS.md](AGENTS.md).
 

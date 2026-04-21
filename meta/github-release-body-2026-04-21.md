@@ -1,5 +1,7 @@
 # GitHub Release Body (2026-04-21)
 
+`autonomous-academic-engine` is an autonomous workflow engine for legal-academic writing with deterministic quality gates and evidence-first finalization.
+
 ## Highlights
 
 - Hardened academic quality gates across thesis and article workflows.
