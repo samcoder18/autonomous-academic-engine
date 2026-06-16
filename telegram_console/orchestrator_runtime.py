@@ -26,32 +26,35 @@ from .utils import parse_datetime, utc_now
 class OrchestratorRuntimeMixin:
     """Active run sync, record loading and lightweight runtime helpers."""
 
-    def sync_active_run(self) -> list[RunRecord]:
-        active = self.store.get_active_run()
-        if not active or not self._active_run_matches(active):
-            return []
+    def sync_active_run(self, work_id: str | None = None) -> list[RunRecord]:
+        active_runs = [self.store.get_active_run(work_id)] if work_id else self.store.list_active_runs()
+        completed: list[RunRecord] = []
+        for active in active_runs:
+            if not active or not self._active_run_matches(active):
+                continue
+            run_dir = Path(active["run_dir"])
+            request = self.store.read_json(run_dir / "request.json", default={}) or {}
+            result = self.store.read_json(run_dir / "result.json")
+            if result is None and self._pid_is_alive(int(active.get("pid", 0))):
+                continue
 
-        run_dir = Path(active["run_dir"])
-        request = self.store.read_json(run_dir / "request.json", default={}) or {}
-        result = self.store.read_json(run_dir / "result.json")
-        if result is None and self._pid_is_alive(int(active.get("pid", 0))):
-            return []
+            if result is None:
+                result = {
+                    "started_at": request.get("started_at"),
+                    "finished_at": utc_now(),
+                    "returncode": None,
+                    "status": "interrupted",
+                    "log_path": str(run_dir / "launcher.log"),
+                    "error": "Process exited without result.json",
+                }
+                self.store.write_json(run_dir / "result.json", result)
 
-        if result is None:
-            result = {
-                "started_at": request.get("started_at"),
-                "finished_at": utc_now(),
-                "returncode": None,
-                "status": "interrupted",
-                "log_path": str(run_dir / "launcher.log"),
-                "error": "Process exited without result.json",
-            }
-            self.store.write_json(run_dir / "result.json", result)
-
-        record = self._finalize_runtime_run(run_dir, request, result)
-        self.store.clear_active_run()
-        self.store.append_notification(record.to_dict())
-        return [record]
+            record = self._finalize_runtime_run(run_dir, request, result)
+            active_work_id = str(active.get("work_id") or "").strip() or None
+            self.store.clear_active_run(active_work_id)
+            self.store.append_notification(record.to_dict())
+            completed.append(record)
+        return completed
 
     def drain_notifications(self) -> list[RunRecord]:
         items = self.store.pop_notifications()
@@ -73,7 +76,7 @@ class OrchestratorRuntimeMixin:
 
         records.extend(self._load_runtime_exception_records(lane, work.slug))
 
-        active = self.store.get_active_run()
+        active = self.store.get_active_run(work.slug)
         if active and self._active_run_matches(active) and lane in ("all", active["lane"]):
             if str(active.get("work_id") or "").strip() == work.slug:
                 records.insert(0, self._active_run_record(active))
@@ -394,7 +397,7 @@ class OrchestratorRuntimeMixin:
         return sorted(records, key=lambda item: item.sort_key, reverse=True)[:limit]
 
     def _active_workflow_run_for_work(self, work_id: str) -> dict[str, Any] | None:
-        active = self.store.get_active_run()
+        active = self.store.get_active_run(work_id)
         if not isinstance(active, dict) or not self._active_run_matches(active):
             return None
         if str(active.get("work_id") or "").strip() != work_id:

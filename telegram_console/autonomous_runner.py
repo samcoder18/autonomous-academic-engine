@@ -69,14 +69,14 @@ def run_autonomous_plan(
                 status = "stopped"
                 break
             command = str(step.get("command") or "").strip()
-            result = _execute_allowed_command(orchestrator, command)
+            result = _execute_allowed_command(orchestrator, command, work_id=work_id)
             executed.append(result)
             if result.get("status") == "started-run":
                 stop_reason = "step-started"
                 break
             if result.get("status") == "completed":
                 stop_reason = "step-completed"
-                break
+                continue
             if result.get("status") != "skipped":
                 status = "stopped"
                 stop_reason = str(result.get("reason") or "execution-stopped")
@@ -130,19 +130,72 @@ def execute_autonomous_command(
         return {"status": "completed", "command": command}
     if args[0] == "export-thesis-docx":
         result = orchestrator.export_docx("thesis", work_id=work_id)
-        return {"status": "completed", "command": command, "export": result}
+        return _validated_export_result(command, result, work_id=work_id)
     if args[0] == "export-article-docx" and len(args) >= 2:
         article_slug = Path(args[1]).stem
         result = orchestrator.export_docx(f"article:{article_slug}", work_id=work_id)
-        return {"status": "completed", "command": command, "export": result}
+        return _validated_export_result(command, result, work_id=work_id)
     if args[0] == "launch-thesis" and len(args) >= 3:
         active = orchestrator.start_run("thesis", args[1], args[2], work_id=work_id)
-        return {"status": "started-run", "command": command, "run_id": active.get("run_id")}
+        return _validated_started_run_result(command, active, work_id=work_id)
     if args[0] == "launch-academic" and len(args) >= 3:
         active = orchestrator.start_run("article", args[1], args[2], work_id=work_id)
-        return {"status": "started-run", "command": command, "run_id": active.get("run_id")}
+        return _validated_started_run_result(command, active, work_id=work_id)
     return {"status": "skipped", "reason": "unsupported-command", "command": command}
 
 
-def _execute_allowed_command(orchestrator: WorkflowOrchestrator, command: str) -> dict[str, Any]:
-    return execute_autonomous_command(orchestrator, command)
+def _validated_export_result(
+    command: str,
+    result: object,
+    *,
+    work_id: str | None,
+) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {
+            "status": "failed",
+            "reason": "invalid-export-result",
+            "command": command,
+        }
+    output_path = str(result.get("path") or "").strip()
+    result_work_id = str(result.get("work_id") or "").strip()
+    if not output_path or not Path(output_path).is_file() or (work_id is not None and result_work_id != work_id):
+        return {
+            "status": "failed",
+            "reason": "invalid-export-result",
+            "command": command,
+            "export": result,
+        }
+    return {"status": "completed", "command": command, "export": result}
+
+
+def _validated_started_run_result(
+    command: str,
+    result: object,
+    *,
+    work_id: str | None,
+) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {
+            "status": "failed",
+            "reason": "invalid-start-result",
+            "command": command,
+        }
+    run_id = str(result.get("run_id") or "").strip()
+    result_work_id = str(result.get("work_id") or "").strip()
+    if not run_id or (work_id is not None and result_work_id != work_id):
+        return {
+            "status": "failed",
+            "reason": "invalid-start-result",
+            "command": command,
+            "run": result,
+        }
+    return {"status": "started-run", "command": command, "run_id": run_id}
+
+
+def _execute_allowed_command(
+    orchestrator: WorkflowOrchestrator,
+    command: str,
+    *,
+    work_id: str,
+) -> dict[str, Any]:
+    return execute_autonomous_command(orchestrator, command, work_id=work_id)

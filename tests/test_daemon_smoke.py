@@ -15,12 +15,18 @@ from telegram_console.autonomous_daemon import (
     start_daemon_process,
 )
 from telegram_console.autonomous_launchd import AutonomousDaemonLaunchdManager
+from telegram_console.autonomous_scheduler import (
+    multi_daemon_lock_path,
+    multi_daemon_status_payload,
+    start_multi_work_daemon_process,
+)
 from tests.test_telegram_console import (
     TEST_WORK_ID,
     FakeLaunchctl,
     build_fake_repo,
     write_file,
     write_raw_manifest,
+    write_submission_ready_workflow,
 )
 
 
@@ -43,6 +49,7 @@ class DaemonSmokeTests(unittest.TestCase):
             write_raw_manifest(root, "thesis-v1")
             write_raw_manifest(root, "ru-law-article-v1")
             write_file(root / "works" / TEST_WORK_ID / "articles" / "reviews" / "demo.md", "# Review\n")
+            write_submission_ready_workflow(root, "article")
 
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -81,6 +88,51 @@ class DaemonSmokeTests(unittest.TestCase):
                 time.sleep(0.05)
             self.assertFalse(daemon_lock_path(root, TEST_WORK_ID).exists())
 
+    def test_background_multi_work_daemon_reaches_terminal_state_and_releases_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            write_file(root / "works" / TEST_WORK_ID / "articles" / "reviews" / "demo.md", "# Review\n")
+            write_submission_ready_workflow(root, "article")
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"subprocess .* is still running",
+                    category=ResourceWarning,
+                )
+                state = start_multi_work_daemon_process(
+                    root_dir=root,
+                    works_scope="all",
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=1,
+                    max_runtime_minutes=2,
+                )
+            pid = int(state["pid"])
+            self.addCleanup(_terminate_pid, pid)
+
+            terminal_state = None
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                payload = multi_daemon_status_payload(root, works_scope="all")
+                if payload.get("status") in DAEMON_TERMINAL_STATUSES:
+                    terminal_state = payload
+                    break
+                time.sleep(0.1)
+
+            self.assertIsNotNone(terminal_state, "multi-work daemon did not reach a terminal state in time")
+            assert terminal_state is not None
+            self.assertEqual(terminal_state["status"], "completed")
+            self.assertEqual(terminal_state["stop_reason"], "terminal-export")
+
+            release_deadline = time.monotonic() + 2.0
+            while time.monotonic() < release_deadline and multi_daemon_lock_path(root).exists():
+                time.sleep(0.05)
+            self.assertFalse(multi_daemon_lock_path(root).exists())
+
 
 class LaunchdSmokeTests(unittest.TestCase):
     def test_launchd_manager_lifecycle_smoke(self) -> None:
@@ -107,6 +159,8 @@ class LaunchdSmokeTests(unittest.TestCase):
             self.assertIn("telegram_console.work_cli", plist_text)
             self.assertIn("<string>--works</string>", plist_text)
             self.assertIn("<string>all</string>", plist_text)
+            self.assertIn("<key>KeepAlive</key>\n  <true/>", plist_text)
+            self.assertIn("<key>ThrottleInterval</key>\n  <integer>15</integer>", plist_text)
 
             restarted = manager.restart(works_scope="all")
             self.assertTrue(restarted.installed)

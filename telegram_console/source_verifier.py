@@ -16,6 +16,8 @@ Verification axes:
   recommendation but does not hard-block submission-ready.
 - **unverifiable**: nothing to compare against (no canonical date, no
   edition); flagged for manual review.
+- **test-only**: connector returned deterministic stub provenance; useful
+  for offline tests but never sufficient for final readiness.
 - **current**: happy path.
 """
 
@@ -45,7 +47,7 @@ class VerificationSummary:
 
     @property
     def has_blocking(self) -> bool:
-        return any(record.is_blocking_primary for record in self.records)
+        return any(record.is_blocking for record in self.records)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -105,6 +107,35 @@ class SourceVerifier:
                 details={"source_kind": source.kind.value},
             )
 
+        if _has_stub_provenance(source):
+            return VerificationRecord(
+                claim_id=claim.claim_id,
+                status=VerificationStatus.TEST_ONLY,
+                source_identifier=source.identifier,
+                checked_at=checked_at,
+                reason="Stub provenance is test-only and cannot establish source currency.",
+                details={"source_kind": source.kind.value},
+            )
+
+        if claim.expected_kind in (*PRIMARY_REQUIRED_KINDS, SourceKind.STATISTICS):
+            missing_provenance = _live_readiness_gaps(source)
+            if missing_provenance:
+                return VerificationRecord(
+                    claim_id=claim.claim_id,
+                    status=VerificationStatus.UNVERIFIABLE,
+                    source_identifier=source.identifier,
+                    checked_at=checked_at,
+                    reason=(
+                        "Live provenance is incomplete for a primary or dynamic source: "
+                        + ", ".join(missing_provenance)
+                        + "."
+                    ),
+                    details={
+                        "source_kind": source.kind.value,
+                        "missing_live_provenance": missing_provenance,
+                    },
+                )
+
         if claim.cited_as_of and (source.amended_on or source.effective_on):
             redaction = source.amended_on or source.effective_on
             assert redaction is not None
@@ -157,13 +188,37 @@ class SourceVerifier:
 
 
 def _fetch_is_stale(source: Source, *, now: datetime, stale_after: timedelta) -> bool:
-    if not source.provenance or source.provenance.notes == "stub-mode":
+    if not source.provenance or _has_stub_provenance(source):
         return False
     retrieved = source.provenance.retrieved_at
+    if not isinstance(retrieved, datetime):
+        return False
     if retrieved.tzinfo is None:
         retrieved = retrieved.replace(tzinfo=UTC)
     current = now if now.tzinfo else now.replace(tzinfo=UTC)
     return (current - retrieved) > stale_after
+
+
+def _has_stub_provenance(source: Source) -> bool:
+    provenance = source.provenance
+    return bool(provenance and provenance.notes.strip().casefold() == "stub-mode")
+
+
+def _live_readiness_gaps(source: Source) -> list[str]:
+    provenance = source.provenance
+    if provenance is None:
+        return ["provenance"]
+
+    gaps: list[str] = []
+    if not provenance.canonical_url.strip():
+        gaps.append("canonical_url")
+    if provenance.http_status is None or not 200 <= provenance.http_status < 300:
+        gaps.append("http_status_2xx")
+    if not isinstance(provenance.retrieved_at, datetime):
+        gaps.append("retrieved_at")
+    if not source.content_hash.strip():
+        gaps.append("content_hash")
+    return gaps
 
 
 def _records_to_blockers(records: Iterable[VerificationRecord]) -> Iterable[Blocker]:
@@ -192,5 +247,15 @@ def _records_to_blockers(records: Iterable[VerificationRecord]) -> Iterable[Bloc
                 code=f"unverifiable-{record.claim_id}",
                 message=(f"Claim {record.claim_id!r} could not be verified. Reason: {record.reason}"),
                 repairable=True,
+                blocks_statuses=("submission-ready",),
+                details=record.to_dict(),
+            )
+        elif record.status == VerificationStatus.TEST_ONLY:
+            yield Blocker(
+                category="verification",
+                code=f"test-only-{record.claim_id}",
+                message=(f"Claim {record.claim_id!r} is supported only by stub provenance. Reason: {record.reason}"),
+                repairable=True,
+                blocks_statuses=("submission-ready",),
                 details=record.to_dict(),
             )

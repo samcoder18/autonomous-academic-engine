@@ -8,7 +8,8 @@
 
 - **Multi-work**: один репозиторий держит произвольное число `works/<slug>/` с собственным каноном, thesis lane, article lane и standards.
 - **Deterministic gates**: фронтматтер ВКР, dissertation artifacts/maps/reviews, publication-claim coverage, ГОСТ-библиография, DOCX-conformance, originality (MinHash), work-type структура и length-conformance — всё машинно, без внешних SaaS.
-- **One-shot pipeline**: единственная команда прогоняет все гейты и выдаёт честный вердикт (`submission-ready` или `strong-draft-with-blockers` с полным списком блокеров). Для managed thesis bundle дополнительно проверяется strict thesis quality contract.
+- **Isolated role DAG**: каждая профильная роль работает отдельным Codex-процессом в staging-копии work; публикация происходит только после machine gates и conflict-safe promotion.
+- **One-shot pipeline**: команда прогоняет machine gates и возвращает `machine-gates-passed` или `blocked`. Academic readiness вычисляется отдельно через evaluator + machine veto.
 - **Source connectors**: stub/live архитектура для `publication.pravo.gov.ru`, `sudact.ru`, `cbr.ru`, `elibrary.ru`, `cyberleninka`, `semantic_scholar`, `vak.gov`. Live-режим opt-in per-connector.
 - **Autonomous daemon + ops-канал**: long-running цикл с ops-alerts (stale-lock, stuck-detector, unhandled exception) и resource-guards.
 - **Telegram runtime**: работа-aware orchestration с мультипроектным реестром, активной работой, принудительной пересборкой chat-context.
@@ -50,13 +51,20 @@ python3 -m telegram_console.work_cli work init phd-law \
 Запустить machine-driven гейты по thesis-capable работе:
 
 ```bash
-python3 -m telegram_console.work_cli one-shot-thesis --work <thesis-slug> --skip-docx
+python3 -m telegram_console.work_cli one-shot-thesis --work <thesis-slug> --corpus <corpus.json>
 ```
 
 Для dissertation contour есть явный entrypoint:
 
 ```bash
-python3 -m telegram_console.work_cli one-shot-dissertation --work <dissertation-slug> --skip-docx
+python3 -m telegram_console.work_cli one-shot-dissertation --work <dissertation-slug> --corpus <corpus.json>
+```
+
+Запуск role workflow возвращает `queued` и `workflow_id`; выполнение идёт в background:
+
+```bash
+python3 -m telegram_console.work_cli launch-thesis full-cycle <section> --work <slug>
+python3 -m telegram_console.work_cli launch-academic article --topic "..." --work <slug>
 ```
 
 Посмотреть следующий безопасный шаг:
@@ -126,13 +134,15 @@ Deterministic machine-driven гейты: фронтматтер, ГОСТ-биб
 
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — генерирует `title-page.md`, `abstract-ru.md`, `abstract-en.md`, `keywords.md`, `task-sheet.md` из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра блокирует сборку.
 - `python3 -m telegram_console.work_cli build-dissertation-artifacts [--work <slug>]` — генерирует `author-abstract.md` и `defense-checklist.md` из `works/<slug>/thesis/dissertation/metadata.toml`. Для candidate contour это завершающая формальная ступень после maps, review sequence и author-position drafting; `publication-claim-matrix.md` поддерживается отдельно как обязательный scaffold artifact.
-- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — прогон thesis/VKR гейтов с честным итоговым статусом; для managed thesis bundle дополнительно проверяет strict claim-passport/review contract, а для dissertation works автоматически использует dissertation-specific profile.
-- `python3 -m telegram_console.work_cli one-shot-dissertation [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — явный dissertation entrypoint: dissertation artifacts, maps, reviews, publication evidence, publication-claim matrix, length, ГОСТ, DOCX, originality.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] --corpus <path> [--work-type <profile>]` — strict thesis/VKR gates; DOCX, metadata/frontmatter, work type и originality corpus обязательны.
+- `python3 -m telegram_console.work_cli one-shot-dissertation [--work <slug>] --corpus <path> [--work-type <profile>]` — strict dissertation gates: artifacts, maps, reviews, publication evidence, publication-claim matrix, length, ГОСТ, DOCX, originality.
+- Legacy-флаг `--skip-docx` принимается для CLI-совместимости, но в strict mode не отключает обязательный DOCX gate.
 
 Инварианты статуса:
 
-- `submission-ready` — только когда все применимые гейты PASS **и** `work-type-structure` сошёлся с выбранным профилем.
+- `submission-ready` — только когда независимый evaluator допускает статус, а все обязательные machine gates PASS.
 - `strong-draft-with-blockers` — при любом FAIL; финализатор обязан понизить статус и передать блокеры в `repair_kernel`.
+- Прямой DOCX export также fail-closed: без последнего `workflow-run/v1` со статусом `submission-ready` экспорт блокируется.
 - `one-shot-thesis` сохраняет отчёт в `works/<slug>/thesis/reviews/<дата>-one-shot-report.(md|json)`.
 - `one-shot-dissertation` сохраняет отчёт в `works/<slug>/thesis/reviews/<дата>-one-shot-dissertation-report.(md|json)`.
 
@@ -191,8 +201,8 @@ python3 -m telegram_console.work_cli standards-refresh <profile-id>
 # Autonomous deterministic gates
 python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]
 python3 -m telegram_console.work_cli build-dissertation-artifacts [--work <slug>]
-python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]
-python3 -m telegram_console.work_cli one-shot-dissertation [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]
+python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] --corpus <path> [--work-type <profile>]
+python3 -m telegram_console.work_cli one-shot-dissertation [--work <slug>] --corpus <path> [--work-type <profile>]
 
 # Autonomous daemon
 python3 -m telegram_console.work_cli autonomous daemon run --work <slug> [--stuck-after-minutes 30]

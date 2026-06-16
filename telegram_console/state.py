@@ -13,6 +13,7 @@ class RuntimeStore:
         self.runs_dir = self.runtime_dir / "runs"
         self.agent_tasks_dir = self.runtime_dir / "agent_tasks"
         self.active_run_file = self.runtime_dir / "active_run.json"
+        self.active_runs_dir = self.runtime_dir / "active_runs"
         self.active_agent_task_file = self.runtime_dir / "active_agent_task.json"
         self.notifications_file = self.runtime_dir / "notifications.json"
         self.chat_notifications_file = self.runtime_dir / "chat_notifications.json"
@@ -21,6 +22,7 @@ class RuntimeStore:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.agent_tasks_dir.mkdir(parents=True, exist_ok=True)
+        self.active_runs_dir.mkdir(parents=True, exist_ok=True)
 
     def read_json(self, path: Path, default: Any = None) -> Any:
         if not path.exists():
@@ -43,15 +45,62 @@ class RuntimeStore:
             temp_name = handle.name
         Path(temp_name).replace(path)
 
-    def get_active_run(self) -> dict[str, Any] | None:
-        return self.read_json(self.active_run_file)
+    def get_active_run(self, work_id: str | None = None) -> dict[str, Any] | None:
+        if work_id:
+            payload = self.read_json(self._active_run_path(work_id))
+            if isinstance(payload, dict):
+                return payload
+            legacy = self.read_json(self.active_run_file)
+            if isinstance(legacy, dict) and str(legacy.get("work_id") or "").strip() == work_id:
+                return legacy
+            return None
+        legacy = self.read_json(self.active_run_file)
+        if isinstance(legacy, dict):
+            return legacy
+        runs = self.list_active_runs()
+        return runs[0] if runs else None
 
     def set_active_run(self, payload: dict[str, Any]) -> None:
-        self.write_json(self.active_run_file, payload)
+        work_id = str(payload.get("work_id") or "").strip()
+        if not work_id:
+            self.write_json(self.active_run_file, payload)
+            return
+        self.write_json(self._active_run_path(work_id), payload)
 
-    def clear_active_run(self) -> None:
+    def clear_active_run(self, work_id: str | None = None) -> None:
+        if work_id:
+            path = self._active_run_path(work_id)
+            if path.exists():
+                path.unlink()
+            legacy = self.read_json(self.active_run_file)
+            if isinstance(legacy, dict) and str(legacy.get("work_id") or "").strip() == work_id:
+                self.active_run_file.unlink()
+            return
         if self.active_run_file.exists():
             self.active_run_file.unlink()
+        for path in self.active_runs_dir.glob("*.json"):
+            path.unlink()
+
+    def list_active_runs(self) -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        legacy = self.read_json(self.active_run_file)
+        if isinstance(legacy, dict):
+            runs.append(legacy)
+        seen = {str(item.get("run_id") or "") for item in runs}
+        for path in sorted(self.active_runs_dir.glob("*.json")):
+            payload = self.read_json(path)
+            if not isinstance(payload, dict):
+                continue
+            run_id = str(payload.get("run_id") or "")
+            if run_id in seen:
+                continue
+            seen.add(run_id)
+            runs.append(payload)
+        return runs
+
+    def _active_run_path(self, work_id: str) -> Path:
+        safe = "".join(char if char.isalnum() or char in "-_" else "-" for char in work_id)
+        return self.active_runs_dir / f"{safe or 'default'}.json"
 
     def append_notification(self, payload: dict[str, Any]) -> None:
         items = self.read_json(self.notifications_file, default=[])

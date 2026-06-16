@@ -163,6 +163,13 @@ def audit_skill_source_map(
         for entry in entries.values():
             skill_file = external_root / entry.expected_external_skill_id / "SKILL.md"
             if not skill_file.exists():
+                issues.append(
+                    SkillSourceAuditIssue(
+                        code="missing-external-skill",
+                        skill_name=entry.skill_name,
+                        message=(f"External skill `{entry.expected_external_skill_id}` is missing at `{skill_file}`."),
+                    )
+                )
                 continue
             checked_external_files.append(str(skill_file))
             text = skill_file.read_text(encoding="utf-8")
@@ -204,6 +211,22 @@ def sync_external_skill_sources(
     for entry in entries.values():
         skill_file = external_root / entry.expected_external_skill_id / "SKILL.md"
         if not skill_file.exists():
+            if write:
+                skill_file.parent.mkdir(parents=True, exist_ok=True)
+                skill_file.write_text(_render_external_skill_text("", root, entry), encoding="utf-8")
+                update_candidate_count += 1
+                updated_count += 1
+                items.append(
+                    SkillSourceSyncItem(
+                        skill_name=entry.skill_name,
+                        external_skill_id=entry.expected_external_skill_id,
+                        skill_file=str(skill_file),
+                        status="created",
+                        changed=True,
+                    )
+                )
+                continue
+
             missing_external_count += 1
             items.append(
                 SkillSourceSyncItem(

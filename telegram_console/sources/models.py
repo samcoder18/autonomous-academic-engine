@@ -52,6 +52,7 @@ class VerificationStatus(enum.StrEnum):
     OBSOLETE = "obsolete"
     PRIMARY_MISSING = "primary-missing"
     UNVERIFIABLE = "unverifiable"
+    TEST_ONLY = "test-only"
     UNKNOWN = "unknown"
 
 
@@ -210,3 +211,13 @@ class VerificationRecord:
     def is_blocking_primary(self) -> bool:
         """True if the record must create a ``primary-support`` blocker."""
         return self.status in (VerificationStatus.PRIMARY_MISSING, VerificationStatus.OBSOLETE)
+
+    @property
+    def is_blocking(self) -> bool:
+        """True when the verification verdict cannot support final readiness."""
+        return self.status in (
+            VerificationStatus.PRIMARY_MISSING,
+            VerificationStatus.OBSOLETE,
+            VerificationStatus.UNVERIFIABLE,
+            VerificationStatus.TEST_ONLY,
+        )

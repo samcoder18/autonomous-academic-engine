@@ -1,0 +1,31 @@
+version = 1
+slug = "state-essence-role-coursework"
+title = "Сущность государства и его роль в обществе"
+topic = "Курсовая работа по теории государства и права: сущность государства и его роль в обществе"
+artifact_type = "vkr"
+language = "ru"
+active_lanes = ["thesis"]
+work_canon = "work-canon.md"
+
+[standards]
+thesis_profile = "ru-vkr-university-default"
+
+[thesis]
+root_dir = "thesis"
+chapters_dir = "thesis/chapters"
+sources_dir = "thesis/sources"
+manuscript_dir = "thesis/manuscript"
+manuscript_sections_dir = "thesis/manuscript/sections"
+reviews_dir = "thesis/reviews"
+sync_dir = "thesis/sync"
+full_draft_path = "thesis/manuscript/full-draft.md"
+docx_filename = "state-essence-role-coursework.docx"
+section_order = [
+  "thesis/manuscript/sections/00-title.md",
+  "thesis/manuscript/sections/01-introduction.md",
+  "thesis/manuscript/sections/02-chapter-1.md",
+  "thesis/manuscript/sections/03-chapter-2.md",
+  "thesis/manuscript/sections/04-chapter-3.md",
+  "thesis/manuscript/sections/05-conclusion.md",
+  "thesis/manuscript/sections/06-bibliography.md",
+]

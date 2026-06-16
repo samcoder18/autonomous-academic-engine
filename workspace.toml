@@ -11,4 +11,7 @@ runs_dir = "output/runs"
 docx_dir = "output/docx"
 
 [works]
+martial-law-coursework = "works/martial-law-coursework"
+constitutional-amendments-implementation-coursework = "works/constitutional-amendments-implementation-coursework"
+state-essence-role-coursework = "works/state-essence-role-coursework"
 starter-work = "works/starter-work"

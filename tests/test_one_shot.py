@@ -75,6 +75,11 @@ def _write_metadata(path: Path) -> None:
     )
 
 
+def _empty_corpus(path: Path) -> Path:
+    OriginalityCorpus().save(path)
+    return path
+
+
 def _write_dissertation_metadata(path: Path) -> None:
     author_abstract = "А" * 450
     path.write_text(
@@ -261,7 +266,7 @@ _GOOD_MANUSCRIPT = dedent(
 
 
 class OneShotTests(unittest.TestCase):
-    def test_happy_path_reports_submission_ready(self) -> None:
+    def test_happy_path_reports_machine_gates_passed(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             manuscript = root / "manuscript.md"
@@ -275,9 +280,10 @@ class OneShotTests(unittest.TestCase):
                 docx_path=docx,
                 metadata_path=metadata,
                 frontmatter_destination=frontmatter_dir,
+                corpus_path=_empty_corpus(root / "corpus.json"),
             )
             report = run_one_shot(config)
-            self.assertEqual(report.status, "submission-ready")
+            self.assertEqual(report.status, "machine-gates-passed")
             self.assertTrue(all(g.passed for g in report.gates))
             self.assertTrue((frontmatter_dir / "title-page.md").exists())
 
@@ -293,7 +299,7 @@ class OneShotTests(unittest.TestCase):
                 frontmatter_destination=None,
             )
             report = run_one_shot(config)
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             codes = {b.code for b in report.all_blockers}
             self.assertIn("docx-missing", codes)
 
@@ -318,7 +324,27 @@ class OneShotTests(unittest.TestCase):
                 frontmatter_destination=None,
             )
             report = run_one_shot(config)
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
+
+    def test_missing_corpus_blocks_instead_of_skipping_gate(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_GOOD_MANUSCRIPT, encoding="utf-8")
+
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=None,
+                    metadata_path=None,
+                    frontmatter_destination=None,
+                )
+            )
+
+        self.assertEqual(report.status, "blocked")
+        originality = next(gate for gate in report.gates if gate.name == "originality")
+        self.assertFalse(originality.passed)
+        self.assertEqual(originality.blockers[0].code, "originality-corpus-required")
 
     def test_originality_gate_blocks_on_high_similarity(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -414,7 +440,7 @@ class OneShotTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(report.status, "strong-draft-with-blockers")
+        self.assertEqual(report.status, "blocked")
         gate = next(item for item in report.gates if item.name == "thesis-quality-contract")
         codes = {blocker.code for blocker in gate.blockers}
         self.assertFalse(gate.passed)
@@ -540,7 +566,7 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             codes = {b.code for b in report.all_blockers}
             self.assertIn("artifact-missing", codes)
             gate_names = {gate.name for gate in report.gates if not gate.passed}
@@ -568,7 +594,7 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             gate_names = {gate.name for gate in report.gates if not gate.passed}
             self.assertIn("publication-claim-coverage", gate_names)
 
@@ -593,7 +619,7 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             categories = {b.category for b in report.all_blockers}
             self.assertIn("length-conformance", categories)
 
@@ -619,7 +645,7 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             gate_names = {gate.name for gate in report.gates if not gate.passed}
             self.assertIn("dissertation-artifacts", gate_names)
 
@@ -645,7 +671,7 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             gate_names = {gate.name for gate in report.gates if not gate.passed}
             self.assertIn("publication-evidence", gate_names)
 
@@ -667,10 +693,11 @@ class CandidateDissertationOneShotTests(unittest.TestCase):
                     dissertation_metadata_path=metadata,
                     dissertation_artifacts_destination=dissertation_root / "artifacts",
                     dissertation_root=dissertation_root,
+                    corpus_path=_empty_corpus(root / "corpus.json"),
                     work_type="dissertation-candidate",
                 )
             )
-            self.assertEqual(report.status, "submission-ready")
+            self.assertEqual(report.status, "machine-gates-passed")
             self.assertTrue((dissertation_root / "artifacts" / "author-abstract.md").exists())
             self.assertTrue((dissertation_root / "artifacts" / "defense-checklist.md").exists())
             self.assertTrue((dissertation_root / "publications" / "publication-claim-matrix.md").exists())

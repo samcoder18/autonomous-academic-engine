@@ -4,7 +4,7 @@ Builds a minimal fake workspace in a temporary directory, runs the key
 CLI entrypoints (``build-vkr-frontmatter``, ``one-shot-thesis``) and
 checks:
 
-- the happy path produces ``submission-ready``;
+- the happy path produces ``machine-gates-passed``;
 - deliberately introduced blockers downgrade the status;
 - rerunning the pipeline on the same workspace is idempotent (same
   gates, same blockers).
@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 from textwrap import dedent
 
 from telegram_console.one_shot import OneShotConfig, run_one_shot
+from telegram_console.originality.corpus import OriginalityCorpus
 
 _METADATA_TOML = dedent(
     f"""
@@ -83,24 +84,27 @@ class EndToEndRegressionTests(unittest.TestCase):
         metadata_path = thesis_root / "metadata.toml"
         metadata_path.write_text(_METADATA_TOML, encoding="utf-8")
         frontmatter = thesis_root / "frontmatter"
+        corpus_path = thesis_root / "corpus.json"
+        OriginalityCorpus().save(corpus_path)
         return OneShotConfig(
             manuscript_md=manuscript_path,
             docx_path=None,
             metadata_path=metadata_path,
             frontmatter_destination=frontmatter,
+            corpus_path=corpus_path,
         )
 
-    def test_happy_path_is_submission_ready(self) -> None:
+    def test_happy_path_passes_machine_gates(self) -> None:
         with TemporaryDirectory() as tmp:
             config = self._setup_work(Path(tmp), manuscript=_CLEAN_MANUSCRIPT)
             report = run_one_shot(config)
-            self.assertEqual(report.status, "submission-ready")
+            self.assertEqual(report.status, "machine-gates-passed")
 
     def test_broken_manuscript_is_downgraded(self) -> None:
         with TemporaryDirectory() as tmp:
             config = self._setup_work(Path(tmp), manuscript=_BROKEN_MANUSCRIPT)
             report = run_one_shot(config)
-            self.assertEqual(report.status, "strong-draft-with-blockers")
+            self.assertEqual(report.status, "blocked")
             categories = {b.category for b in report.all_blockers}
             self.assertIn("gost-bibliography", categories)
 
@@ -137,15 +141,18 @@ class EndToEndRegressionTests(unittest.TestCase):
             root = Path(tmp)
             manuscript = root / "manuscript.md"
             manuscript.write_text(_CLEAN_MANUSCRIPT, encoding="utf-8")
+            corpus_path = root / "corpus.json"
+            OriginalityCorpus().save(corpus_path)
             report = run_one_shot(
                 OneShotConfig(
                     manuscript_md=manuscript,
                     docx_path=None,
                     metadata_path=None,
                     frontmatter_destination=None,
+                    corpus_path=corpus_path,
                 )
             )
-            self.assertEqual(report.status, "submission-ready")
+            self.assertEqual(report.status, "machine-gates-passed")
             gate_names = [gate.name for gate in report.gates]
             self.assertNotIn("vkr-frontmatter", gate_names)
 
@@ -167,7 +174,8 @@ class RepairBudgetInvariantsTests(unittest.TestCase):
                     frontmatter_destination=None,
                 )
             )
-            self.assertEqual(len(report.gates), 1)
+            self.assertEqual(len(report.gates), 2)
+            self.assertEqual(report.status, "blocked")
 
 
 if __name__ == "__main__":

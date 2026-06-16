@@ -7,9 +7,11 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from telegram_console.autonomous_daemon import daemon_state_path
+from telegram_console.autonomous_runner import execute_autonomous_command, run_autonomous_plan
 from telegram_console.autonomous_scheduler import multi_daemon_state_path, multi_daemon_stop_path
 from tests.test_telegram_console import (
     TEST_ARTICLE_DRAFT,
@@ -20,10 +22,120 @@ from tests.test_telegram_console import (
     work_cli_module,
     write_file,
     write_raw_manifest,
+    write_submission_ready_workflow,
 )
 
 
 class AutonomousCliTests(unittest.TestCase):
+    def test_autonomous_run_executes_all_completed_steps_up_to_plan_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            plan = SimpleNamespace(
+                to_dict=lambda: {
+                    "kind": "autonomous-plan",
+                    "mode": "autonomous-safe",
+                    "work_id": TEST_WORK_ID,
+                    "status": "ready",
+                    "steps": [
+                        {
+                            "command": "work-status",
+                            "policy": {"decision": "allowed"},
+                        },
+                        {
+                            "command": "standards-status",
+                            "policy": {"decision": "allowed"},
+                        },
+                    ],
+                    "stop_reason": None,
+                }
+            )
+
+            state = run_autonomous_plan(root_dir=root, plan=plan, dry_run=False, execute=True)
+
+            self.assertEqual(state["status"], "completed")
+            self.assertEqual(len(state["executed_steps"]), 2)
+            self.assertEqual(
+                [item["command"] for item in state["executed_steps"]],
+                ["work-status", "standards-status"],
+            )
+
+    def test_autonomous_run_passes_work_id_to_execution(self) -> None:
+        class FakeOrchestrator:
+            def __init__(self) -> None:
+                self.work_ids: list[str | None] = []
+
+            def start_run(
+                self,
+                lane: str,
+                action: str,
+                target: str,
+                *,
+                work_id: str | None = None,
+            ) -> dict[str, str]:
+                self.work_ids.append(work_id)
+                return {"run_id": f"{work_id}:{lane}:{action}", "work_id": str(work_id)}
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            fake = FakeOrchestrator()
+            plan = SimpleNamespace(
+                to_dict=lambda: {
+                    "kind": "autonomous-plan",
+                    "mode": "autonomous-full",
+                    "work_id": "zeta-work",
+                    "status": "ready",
+                    "steps": [
+                        {
+                            "command": "launch-academic review works/zeta-work/articles/drafts/demo.md",
+                            "policy": {"decision": "allowed"},
+                        }
+                    ],
+                    "stop_reason": None,
+                }
+            )
+
+            with patch("telegram_console.autonomous_runner.WorkflowOrchestrator", return_value=fake):
+                state = run_autonomous_plan(root_dir=root, plan=plan, dry_run=False, execute=True)
+
+            self.assertEqual(fake.work_ids, ["zeta-work"])
+            self.assertEqual(state["executed_steps"][0]["status"], "started-run")
+
+    def test_execute_autonomous_command_rejects_invalid_export_result(self) -> None:
+        class FakeOrchestrator:
+            def export_docx(self, subject: str, *, work_id: str | None = None) -> dict[str, str]:
+                return {"subject": subject, "path": ""}
+
+        result = execute_autonomous_command(
+            FakeOrchestrator(),
+            "export-thesis-docx",
+            work_id=TEST_WORK_ID,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "invalid-export-result")
+
+    def test_execute_autonomous_command_rejects_mismatched_started_work(self) -> None:
+        class FakeOrchestrator:
+            def start_run(
+                self,
+                lane: str,
+                action: str,
+                target: str,
+                *,
+                work_id: str | None = None,
+            ) -> dict[str, str]:
+                return {"run_id": "wrong:article:review", "work_id": "wrong-work"}
+
+        result = execute_autonomous_command(
+            FakeOrchestrator(),
+            "launch-academic review works/demo-work/articles/drafts/demo.md",
+            work_id=TEST_WORK_ID,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["reason"], "invalid-start-result")
+
     def test_autonomous_plan_cli_prints_policy_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -111,6 +223,7 @@ class AutonomousCliTests(unittest.TestCase):
             write_raw_manifest(root, "thesis-v1")
             write_raw_manifest(root, "ru-law-article-v1")
             write_file(root / "works" / TEST_WORK_ID / "articles" / "reviews" / "demo.md", "# Review\n")
+            write_submission_ready_workflow(root, "article")
 
             stdout = StringIO()
             stderr = StringIO()
@@ -321,7 +434,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
                         )
 
             self.assertEqual(code, 1)
-            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("daemon/lock-blocked", stderr.getvalue())
             payload = json.loads(stdout.getvalue())
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["stop_reason"], "daemon-already-running")
@@ -558,7 +671,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
                         )
 
             self.assertEqual(code, 1)
-            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("daemon/lock-blocked", stderr.getvalue())
             payload = json.loads(stdout.getvalue())
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["stop_reason"], "daemon-already-running")

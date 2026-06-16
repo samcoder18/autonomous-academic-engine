@@ -150,6 +150,7 @@ def autonomous_daemon_cli(root_dir: Path, args: Any) -> int:
                 poll_seconds=args.poll_seconds,
                 max_cycles=args.max_cycles,
                 max_runtime_minutes=args.max_runtime_minutes,
+                stuck_after_minutes=getattr(args, "stuck_after_minutes", None),
             )
             _print_daemon_payload(payload, as_json=as_json)
             return 1 if payload.get("status") == "blocked" else 0
@@ -249,6 +250,7 @@ def autonomous_multi_daemon_cli(root_dir: Path, args: Any) -> int:
                 poll_seconds=args.poll_seconds,
                 max_cycles=args.max_cycles,
                 max_runtime_minutes=args.max_runtime_minutes,
+                stuck_after_minutes=getattr(args, "stuck_after_minutes", None),
             )
             _print_daemon_payload(payload, as_json=as_json)
             return 1 if payload.get("stop_reason") == "daemon-already-running" else 0
@@ -260,6 +262,7 @@ def autonomous_multi_daemon_cli(root_dir: Path, args: Any) -> int:
                 poll_seconds=args.poll_seconds,
                 max_cycles=args.max_cycles,
                 max_runtime_minutes=args.max_runtime_minutes,
+                stuck_after_minutes=getattr(args, "stuck_after_minutes", None),
             )
             _print_daemon_payload(payload, as_json=as_json)
             return 1 if payload.get("status") == "blocked" else 0

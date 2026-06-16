@@ -259,6 +259,10 @@ class AutonomousDaemonLaunchdManager:
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>{max(10, poll_seconds)}</integer>
   <key>StandardOutPath</key>
   <string>{html.escape(str(self.paths.stdout_log))}</string>
   <key>StandardErrorPath</key>

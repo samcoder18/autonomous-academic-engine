@@ -595,13 +595,14 @@ class ProjectService:
         )
 
     def sync_active_run(self) -> list[RunRecord]:
-        active = self.store.get_active_run()
-        if not active:
-            return []
-        orchestrator = self._resolve_orchestrator_for_payload(active)
-        if not orchestrator:
-            return []
-        return orchestrator.sync_active_run()
+        records: list[RunRecord] = []
+        for active in self.store.list_active_runs():
+            orchestrator = self._resolve_orchestrator_for_payload(active)
+            if not orchestrator:
+                continue
+            work_id = str(active.get("work_id") or "").strip() or None
+            records.extend(orchestrator.sync_active_run(work_id=work_id))
+        return records
 
     def drain_notifications(self) -> list[RunRecord]:
         return [RunRecord(**item) for item in self.store.pop_notifications()]

@@ -48,6 +48,12 @@ agent_path = "agents/style-editor.md"
 expected_external_skill_id = "thesis-style-editor"
 expected_source_of_truth_path = "agents/style-editor.md"
 
+[skills."thesis-submission-evaluator"]
+lane = "thesis"
+agent_path = "agents/thesis-submission-evaluator.md"
+expected_external_skill_id = "thesis-submission-evaluator"
+expected_source_of_truth_path = "agents/thesis-submission-evaluator.md"
+
 [skills."academic-workflow-orchestrator"]
 lane = "article"
 agent_path = "agents/academic-workflow-orchestrator.md"

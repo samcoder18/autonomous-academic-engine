@@ -45,7 +45,9 @@
 6. Автор черновика.
 7. Проверка ссылок и атрибуции.
 8. Критик аргументации.
-9. Редактор стиля и естественности.
+9. Bounded repair при наличии blockers с повторным verifier/checker/evaluator pass.
+10. Редактор стиля и естественности.
+11. Независимый thesis submission evaluator.
 
 Базовая цепочка для article lane:
 
@@ -61,6 +63,22 @@
 10. Finalizer и checklist.
 
 Пропуск этапа допускается только если это безопасно и явно отмечено в рабочем следе соответствующего lane.
+
+### 3.1 Изолированный workflow runtime
+
+- Полный цикл исполняется детерминированным Python DAG; LLM не выбирает порядок обязательных ролей.
+- Каждая роль запускается отдельным Codex-процессом в staging-копии выбранного `works/<slug>/`.
+- Role policy загружается напрямую из `agents/*.md`; внешне установленные Codex skills не являются runtime dependency.
+- Публичные `launch-thesis` / `launch-academic` enqueue-ят background run и сразу возвращают `queued`, `workflow_id` и `run_id`; внутренний worker запускается с заранее назначенным `--workflow-id`.
+- Workflow хранит `workflow.json`, `events.jsonl`, `gates.json`, sandbox, role requests/results и `promotion.json` в `output/runs/<workflow-id>/`.
+- Каждый worker обязан вернуть ровно один `role-result/v1` с точными `workflow_id`, `role_run_id`, `work_id`, status, checkpoints, blockers и SHA-256 artifacts.
+- Checkpoint принимается только при наличии hash-verified artifact evidence. Missing/malformed result, identity mismatch, hash mismatch, deletion или write-scope violation fail closed.
+- Evaluator запускается read-only и получает только role policy, formal contract, artifact/evidence manifest и machine blockers; его попытка изменить sandbox блокирует workflow.
+- Canonical work не изменяется до promotion. Запись вне write scopes, невалидный artifact или hash conflict запрещают promotion.
+- Promotion выполняется под lock со staging, backup и rollback; конфликт canonical baseline сохраняет sandbox и не перезаписывает пользовательские изменения.
+- Технически корректный Markdown/review/checklist draft можно опубликовать при academic blockers, но readiness обязательно понижается, а DOCX не публикуется.
+- Evaluator задает максимально допустимый verdict; deterministic gates могут только сохранить или понизить его.
+- Repair loop ограничен двумя итерациями. Одновременно допускаются workflow максимум для двух разных works; внутри одной work действует exclusive lock.
 
 ## 4. Разделение lane
 
@@ -156,12 +174,14 @@
 Перед тем как объявить любой thesis-результат `submission-ready`, рукопись обязана пройти детерминированный one-shot pipeline:
 
 - `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — собирает title-page, abstract, keywords, task-sheet из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра (автор, научный руководитель, abstract < 200 символов, < 3 ключевых слов RU/EN) блокирует сборку.
-- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] [--corpus <path>] [--skip-docx] [--work-type <profile>]` — запускает гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure`, а для managed thesis bundle еще и `thesis-quality-contract`, и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
+- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] --corpus <path> [--work-type <profile>]` — запускает обязательные гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure`, а для managed thesis bundle еще и `thesis-quality-contract`, и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
 
 Правила статуса:
 
-- при любом FAIL хотя бы одного гейта отчёт получает статус `strong-draft-with-blockers` — финализатор обязан понизить итоговый статус и передать список блокеров в `repair_kernel`;
-- статус `submission-ready` разрешён только если все применимые гейты PASS и `work-type-structure` сошёлся с выбранным профилем (`article`, `vkr-bachelor`, `vkr-specialist`, `master-thesis`, `dissertation-candidate`, `dissertation-doctor`);
+- standalone one-shot возвращает только `machine-gates-passed` или `blocked` и сам не присваивает academic readiness;
+- при любом FAIL или отсутствующем обязательном гейте итог `blocked`; пропуск originality corpus, DOCX, metadata/frontmatter или work-type gate запрещен;
+- legacy `--skip-docx` не отключает DOCX gate в strict mode;
+- `submission-ready` разрешён только через evaluator + machine veto composition: evaluator допускает статус, а все обязательные deterministic gates имеют PASS;
 - `thesis-quality-contract` требует для managed thesis bundle claim ledger, verification log и review artifacts с machine-readable strict fields; отсутствие этих артефактов или неполный claim passport блокируют `submission-ready`;
 - origin-text originality-gate обязан использовать локальный corpus (`telegram_console.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
 

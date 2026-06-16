@@ -433,7 +433,7 @@ class OneShotCliTests(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         stdout = fake_stdout.getvalue()
-        self.assertIn("[one-shot] status: strong-draft-with-blockers", stdout)
+        self.assertIn("[one-shot] status: blocked", stdout)
         self.assertIn("one-shot-dissertation-report.md", stdout)
         report_paths = sorted(
             (self.root / "works" / "candidate-law-2027" / "thesis" / "reviews").glob(

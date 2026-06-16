@@ -29,6 +29,9 @@ class RuntimeRecord:
     lane: str | None = None
     profile: str | None = None
     action: str | None = None
+    workflow_id: str | None = None
+    readiness_status: str | None = None
+    promotion_status: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
     summary: str | None = None
@@ -42,6 +45,8 @@ class RuntimeRecord:
     finalization_check: dict[str, Any] | None = None
     target_resolution: dict[str, Any] | None = None
     checkpoints: tuple[dict[str, Any], ...] = ()
+    role_runs: tuple[dict[str, Any], ...] = ()
+    gate_summary: dict[str, Any] = field(default_factory=dict)
     attachments: dict[str, dict[str, Any]] = field(default_factory=dict)
     runtime_dir: str | None = None
     status_path: str | None = None
@@ -66,6 +71,9 @@ class RuntimeRecord:
             "lane": self.lane,
             "profile": self.profile,
             "action": self.action,
+            "workflow_id": self.workflow_id,
+            "readiness_status": self.readiness_status,
+            "promotion_status": self.promotion_status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "summary": self.summary,
@@ -79,6 +87,8 @@ class RuntimeRecord:
             "finalization_check": self.finalization_check,
             "target_resolution": self.target_resolution,
             "checkpoints": list(self.checkpoints),
+            "role_runs": list(self.role_runs),
+            "gate_summary": dict(self.gate_summary),
             "attachments": self.attachments,
             "runtime_dir": self.runtime_dir,
             "status_path": self.status_path,
@@ -233,11 +243,68 @@ def attachment_path(record: RuntimeRecord, attachment: str) -> Path | None:
 
 
 def load_runtime_record(runtime_dir: Path, entity_kind: str) -> RuntimeRecord | None:
+    workflow_path = runtime_dir / "workflow.json"
+    if workflow_path.exists():
+        workflow_payload = _read_json(workflow_path)
+        if isinstance(workflow_payload, dict) and workflow_payload.get("version") == "workflow-run/v1":
+            return workflow_v1_record(workflow_payload, runtime_dir=runtime_dir)
     status_path = runtime_dir / "status.json"
     payload = read_status(status_path)
     if isinstance(payload, dict):
         return record_from_payload(payload, runtime_dir=runtime_dir, status_path=status_path, source="status")
     return synthesize_runtime_record(runtime_dir, entity_kind)
+
+
+def workflow_v1_record(payload: dict[str, Any], *, runtime_dir: Path) -> RuntimeRecord | None:
+    workflow_id = _optional_text(payload.get("workflow_id"))
+    work_id = _optional_text(payload.get("work_id"))
+    lane = _optional_text(payload.get("lane"))
+    action = _optional_text(payload.get("action"))
+    execution_status = _optional_text(payload.get("execution_status"))
+    if not all((workflow_id, work_id, lane, action, execution_status)):
+        return None
+    role_runs = payload.get("role_runs")
+    if not isinstance(role_runs, list):
+        role_runs = []
+    gates = payload.get("gates")
+    if not isinstance(gates, list):
+        gates = []
+    blockers = payload.get("blockers")
+    if not isinstance(blockers, list):
+        blockers = []
+    gate_summary = payload.get("gate_summary")
+    if not isinstance(gate_summary, dict):
+        gate_summary = {}
+    return RuntimeRecord(
+        record_id=_optional_text(payload.get("run_id")) or workflow_id,
+        entity_kind="workflow-run",
+        status=execution_status,
+        stage="completed" if execution_status == "succeeded" else "failed",
+        work_id=work_id,
+        lane=lane,
+        action=action,
+        workflow_id=workflow_id,
+        readiness_status=_optional_text(payload.get("readiness_status")),
+        promotion_status=_optional_text(payload.get("promotion_status")),
+        started_at=_optional_text(payload.get("started_at")),
+        finished_at=_optional_text(payload.get("finished_at")),
+        summary=f"{lane}/{action}: {execution_status}",
+        blockers=tuple(item for item in blockers if isinstance(item, dict)),
+        contract_gates=tuple(item for item in gates if isinstance(item, dict)),
+        role_runs=tuple(item for item in role_runs if isinstance(item, dict)),
+        gate_summary={str(key): value for key, value in gate_summary.items()},
+        attachments=build_attachments(
+            {
+                "workflow": runtime_dir / "workflow.json",
+                "events": runtime_dir / "events.jsonl",
+                "gates": runtime_dir / "gates.json",
+                "promotion": runtime_dir / "promotion.json",
+            }
+        ),
+        runtime_dir=str(runtime_dir),
+        status_path=str(runtime_dir / "workflow.json"),
+        source="workflow-v1",
+    )
 
 
 def record_from_payload(
@@ -265,6 +332,12 @@ def record_from_payload(
     contract_gates = payload.get("contract_gates")
     if not isinstance(contract_gates, list):
         contract_gates = []
+    role_runs = payload.get("role_runs")
+    if not isinstance(role_runs, list):
+        role_runs = []
+    gate_summary = payload.get("gate_summary")
+    if not isinstance(gate_summary, dict):
+        gate_summary = {}
     repair_iteration = payload.get("repair_iteration")
     if not isinstance(repair_iteration, int):
         repair_iteration = None
@@ -281,6 +354,9 @@ def record_from_payload(
         lane=_optional_text(payload.get("lane")),
         profile=_optional_text(payload.get("profile")),
         action=_optional_text(payload.get("action")),
+        workflow_id=_optional_text(payload.get("workflow_id")),
+        readiness_status=_optional_text(payload.get("readiness_status")),
+        promotion_status=_optional_text(payload.get("promotion_status")),
         started_at=_optional_text(payload.get("started_at")),
         finished_at=_optional_text(payload.get("finished_at")),
         summary=_optional_text(payload.get("summary")),
@@ -300,6 +376,8 @@ def record_from_payload(
         if isinstance(payload.get("target_resolution"), dict)
         else None,
         checkpoints=tuple(item for item in checkpoints if isinstance(item, dict)),
+        role_runs=tuple(item for item in role_runs if isinstance(item, dict)),
+        gate_summary={str(key): value for key, value in gate_summary.items()},
         attachments={str(key): value for key, value in attachments.items() if isinstance(value, dict)},
         runtime_dir=str(runtime_dir) if runtime_dir else None,
         status_path=str(status_path) if status_path else None,

@@ -1,0 +1,35 @@
+title = "Проблемы реализации конституционных поправок"
+university = "НАИМЕНОВАНИЕ ВУЗА"
+faculty = "ФАКУЛЬТЕТ"
+department = "КАФЕДРА"
+year = 2026
+city = "ГОРОД"
+
+[program]
+code = "40.03.01"
+name = "Юриспруденция"
+
+[author]
+full_name = "ФИО СТУДЕНТА"
+group = "ГРУППА"
+
+[supervisor]
+full_name = "ФИО ПРЕПОДАВАТЕЛЯ"
+degree = "УЧЕНАЯ СТЕПЕНЬ"
+position = "ДОЛЖНОСТЬ"
+
+[abstract]
+ru = "Курсовая работа посвящена теоретико-правовому анализу проблем реализации конституционных поправок на примере изменений Конституции Российской Федерации 2020 года. Рассматриваются назначение и пределы конституционных изменений, особенности процедуры принятия поправок, развитие законодательства о публичной власти, Правительстве, Государственном Совете, субъектах Российской Федерации и местном самоуправлении. Особое внимание уделяется правовой определенности, разделению властей, федерализму, социальным гарантиям и критериям эффективности реализации конституционных норм."
+en = "The course paper examines the theoretical and legal problems of implementing constitutional amendments, using the 2020 amendments to the Constitution of the Russian Federation as its principal case. It considers the purposes and limits of constitutional change, the adoption procedure, and the development of legislation on public authority, the Government, the State Council, constituent entities and local self-government. Particular attention is paid to legal certainty, separation of powers, federalism, social guarantees and criteria for effective constitutional implementation."
+
+[keywords]
+ru = ["конституция", "конституционная поправка", "публичная власть", "разделение властей", "федерализм", "местное самоуправление"]
+en = ["constitution", "constitutional amendment", "public authority", "separation of powers", "federalism", "local self-government"]
+
+research_tasks = [
+  "раскрыть теоретико-правовое содержание конституционных поправок",
+  "охарактеризовать особенности принятия поправок к Конституции Российской Федерации в 2020 году",
+  "проанализировать основные направления законодательной реализации поправок",
+  "выявить проблемы правовой определенности, разделения властей, федерализма и местного самоуправления",
+  "сформулировать критерии эффективной реализации конституционных новелл"
+]

@@ -27,6 +27,7 @@ CLI и Telegram runtime могут переключать `active work`.
 - [agents/citation-checker.md](agents/citation-checker.md) - проверяет сноски, силу атрибуции и достаточность первичной опоры.
 - [agents/argument-critic.md](agents/argument-critic.md) - ищет логические дыры, чрезмерные обобщения и слабые выводы.
 - [agents/style-editor.md](agents/style-editor.md) - выравнивает стиль, ритм и академическую естественность без имитации "обхода" проверок.
+- [agents/thesis-submission-evaluator.md](agents/thesis-submission-evaluator.md) - независимо определяет максимально допустимый readiness verdict thesis bundle.
 
 ### Article lane
 
@@ -57,6 +58,7 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 - `$thesis-citation-checker`
 - `$thesis-argument-critic`
 - `$thesis-style-editor`
+- `$thesis-submission-evaluator`
 
 ### Academic article skills
 
@@ -76,6 +78,7 @@ Repo-first mapping между skills и role docs хранится в [meta/skil
 
 - [scripts/codex_thesis.sh](scripts/codex_thesis.sh) - thesis launcher с поддержкой `--work`.
 - [scripts/codex_academic.sh](scripts/codex_academic.sh) - article launcher и thesis proxy с поддержкой `--work`.
+- Публичные `launch-thesis` / `launch-academic` ставят workflow в background queue и возвращают `workflow_id`; `--workflow-id` используется только внутренним worker.
 - [scripts/assemble_thesis.sh](scripts/assemble_thesis.sh) - пересобирает thesis manuscript выбранной работы.
 - [scripts/export_docx.sh](scripts/export_docx.sh) - экспортирует thesis DOCX выбранной работы.
 - [scripts/export_academic_docx.sh](scripts/export_academic_docx.sh) - экспортирует article DOCX выбранной работы.

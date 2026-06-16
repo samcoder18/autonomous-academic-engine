@@ -64,6 +64,9 @@ class AutonomousLaunchdCliTests(unittest.TestCase):
             self.assertEqual(install_payload["readiness_claim"], "none")
             self.assertTrue(install_payload["status"]["installed"])
             self.assertTrue(manager.paths.installed_plist.exists())
+            plist_text = manager.paths.installed_plist.read_text(encoding="utf-8")
+            self.assertIn("<key>KeepAlive</key>\n  <true/>", plist_text)
+            self.assertIn("<key>ThrottleInterval</key>\n  <integer>15</integer>", plist_text)
 
             with patch("telegram_console.work_cli_autonomous.AutonomousDaemonLaunchdManager", return_value=manager):
                 stdout = StringIO()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from argparse import ArgumentParser
@@ -23,6 +24,7 @@ from .article_bundle_state import (
 )
 from .autonomous_policy import AUTONOMOUS_MODES
 from .orchestrator import WorkflowOrchestrator
+from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .standards import (
     StandardProfileResolution,
@@ -41,6 +43,7 @@ from .work_bootstrap import (
 )
 from .work_cli_autonomous import handle_autonomous_cli
 from .work_state import format_work_state_summary
+from .workflow_engine import ROLE_TIMEOUT_SECONDS, WorkflowEngine
 from .workspace import (
     TargetResolution,
     WorkConfig,
@@ -85,6 +88,7 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     thesis.add_argument("--search", dest="search_override", action="store_const", const=True)
     thesis.add_argument("--no-search", dest="search_override", action="store_const", const=False)
     thesis.add_argument("--model")
+    thesis.add_argument("--workflow-id", dest="workflow_id", help="Preassigned workflow-run/v1 identifier.")
 
     academic = subparsers.add_parser("launch-academic")
     academic.add_argument("workflow", choices=ARTICLE_COMMANDS)
@@ -98,6 +102,7 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     academic.add_argument("--search", dest="search_override", action="store_const", const=True)
     academic.add_argument("--no-search", dest="search_override", action="store_const", const=False)
     academic.add_argument("--model")
+    academic.add_argument("--workflow-id", dest="workflow_id", help="Preassigned workflow-run/v1 identifier.")
 
     assemble = subparsers.add_parser("assemble-thesis")
     assemble.add_argument("--work", dest="work_id")
@@ -119,18 +124,18 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
 
     one_shot = subparsers.add_parser(
         "one-shot-thesis",
-        help="Run deterministic VKR gates (frontmatter/GOST/DOCX/originality) and write a report.",
+        help="Run deterministic VKR gates and return machine-gates-passed or blocked.",
     )
     one_shot.add_argument("--work", dest="work_id")
     one_shot.add_argument(
         "--skip-docx",
         action="store_true",
-        help="Skip DOCX conformance gate even if DOCX is present.",
+        help="Legacy compatibility flag; strict mode still requires the DOCX conformance gate.",
     )
     one_shot.add_argument(
         "--corpus",
         dest="corpus_path",
-        help="Optional path to originality corpus JSON. If omitted, the originality gate is skipped.",
+        help="Path to the required originality corpus JSON. If omitted, the run is blocked.",
     )
     one_shot.add_argument(
         "--work-type",
@@ -143,18 +148,18 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
 
     one_shot_dissertation_parser = subparsers.add_parser(
         "one-shot-dissertation",
-        help="Run dissertation-specific deterministic gates and write a report.",
+        help="Run dissertation-specific deterministic gates and return machine-gates-passed or blocked.",
     )
     one_shot_dissertation_parser.add_argument("--work", dest="work_id")
     one_shot_dissertation_parser.add_argument(
         "--skip-docx",
         action="store_true",
-        help="Skip DOCX conformance gate even if DOCX is present.",
+        help="Legacy compatibility flag; strict mode still requires the DOCX conformance gate.",
     )
     one_shot_dissertation_parser.add_argument(
         "--corpus",
         dest="corpus_path",
-        help="Optional path to originality corpus JSON. If omitted, the originality gate is skipped.",
+        help="Path to the required originality corpus JSON. If omitted, the run is blocked.",
     )
     one_shot_dissertation_parser.add_argument(
         "--work-type",
@@ -543,12 +548,41 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
         )
         return 0
 
+    if not args.workflow_id:
+        return _enqueue_role_workflow(
+            root_dir=root_dir,
+            work_id=work.slug,
+            lane="thesis",
+            action=args.preset,
+            target_or_topic=target_rel,
+            notes=args.notes,
+            search_override=args.search_override,
+            model_override=args.model,
+        )
+
     output_dir = work.thesis.paths.output_runs_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_file = output_dir / f"{timestamp}-{args.preset}.md"
     manifest_file = output_dir / f"{timestamp}-{args.preset}.meta.json"
-    _run_codex(root_dir, prompt, out_file, use_search, args.model)
+    workflow_run = _run_role_workflow(
+        workflow_id=args.workflow_id,
+        root_dir=root_dir,
+        work=work,
+        lane="thesis",
+        action=args.preset,
+        contract=contract,
+        prompt=prompt,
+        use_search=use_search,
+        model=args.model,
+        metadata={
+            "target": target_rel,
+            "target_resolution": target_resolution.to_dict(),
+            "profile_id": profile.resolved_profile_id,
+            "profile_conflict_flag": profile.conflict_flag,
+        },
+    )
+    _copy_workflow_output(workflow_run, out_file)
     _write_json(
         manifest_file,
         {
@@ -576,11 +610,19 @@ def launch_thesis(root_dir: Path, args: Any) -> int:
             "sync_hint_file": str(sync_hint_path) if sync_hint_path else None,
             "related_context": [str(path) for path in related_context],
             "execution_contract": contract.to_dict(),
+            "workflow_id": workflow_run.workflow_id,
+            "workflow_path": str(Path(workflow_run.workflow_dir) / "workflow.json"),
+            "execution_status": workflow_run.execution_status,
+            "readiness_status": workflow_run.readiness_status,
+            "promotion_status": workflow_run.promotion.status if workflow_run.promotion else "not-run",
         },
     )
+    print(f"Workflow ID: {workflow_run.workflow_id}")
+    print(f"Execution status: {workflow_run.execution_status}")
+    print(f"Readiness status: {workflow_run.readiness_status}")
     print(f"Saved final message to {out_file}")
     print(f"Saved run manifest to {manifest_file}")
-    return 0
+    return 0 if workflow_run.execution_status == "succeeded" else 1
 
 
 def launch_academic(root_dir: Path, args: Any) -> int:
@@ -748,6 +790,20 @@ def launch_academic(root_dir: Path, args: Any) -> int:
         )
         return 0
 
+    if not args.workflow_id:
+        target_or_topic = target_rel or topic or ""
+        return _enqueue_role_workflow(
+            root_dir=root_dir,
+            work_id=work.slug,
+            lane="article",
+            action=args.workflow,
+            target_or_topic=target_or_topic,
+            notes=args.notes,
+            search_override=args.search_override,
+            model_override=args.model,
+            profile_override=args.profile,
+        )
+
     output_dir = work.article.paths.output_runs_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -806,7 +862,35 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     )
     write_article_bundle_state(bundle_state_path, initial_bundle_state)
     try:
-        _run_codex(root_dir, prompt, out_file, use_search, args.model)
+        workflow_run = _run_role_workflow(
+            workflow_id=args.workflow_id,
+            root_dir=root_dir,
+            work=work,
+            lane="article",
+            action=args.workflow,
+            contract=contract,
+            prompt=prompt,
+            use_search=use_search,
+            model=args.model,
+            metadata={
+                "article_slug": article_slug,
+                "topic": topic,
+                "target": target_rel_value,
+                "target_resolution": target_resolution.to_dict() if target_resolution else None,
+                "profile_id": profile.resolved_profile_id,
+                "profile_conflict_flag": profile.conflict_flag,
+            },
+        )
+        _copy_workflow_output(workflow_run, out_file)
+        manifest_payload.update(
+            {
+                "workflow_id": workflow_run.workflow_id,
+                "workflow_path": str(Path(workflow_run.workflow_dir) / "workflow.json"),
+                "execution_status": workflow_run.execution_status,
+                "readiness_status": workflow_run.readiness_status,
+                "promotion_status": workflow_run.promotion.status if workflow_run.promotion else "not-run",
+            }
+        )
         _write_json(manifest_file, manifest_payload)
         completed_bundle_state = build_article_bundle_state(
             work_id=work.slug,
@@ -814,7 +898,7 @@ def launch_academic(root_dir: Path, args: Any) -> int:
             bundle=bundle,
             profile_id=profile.resolved_profile_id,
             last_action=args.workflow,
-            last_run_status="succeeded",
+            last_run_status=workflow_run.execution_status,
             latest_run_manifest=str(manifest_file),
             latest_output_file=str(out_file),
             execution_contract=contract.to_dict(),
@@ -851,7 +935,10 @@ def launch_academic(root_dir: Path, args: Any) -> int:
     print(f"Saved final message to {out_file}")
     print(f"Saved run manifest to {manifest_file}")
     print(f"Saved article bundle state to {bundle_state_path}")
-    return 0
+    print(f"Workflow ID: {workflow_run.workflow_id}")
+    print(f"Execution status: {workflow_run.execution_status}")
+    print(f"Readiness status: {workflow_run.readiness_status}")
+    return 0 if workflow_run.execution_status == "succeeded" else 1
 
 
 def standards_intake(root_dir: Path, profile_id: str) -> int:
@@ -929,6 +1016,8 @@ def export_thesis_docx(root_dir: Path, work_id: str | None) -> int:
     if not work.thesis:
         raise WorkspaceConfigError(f"Work `{work.slug}` не поддерживает thesis lane.")
 
+    require_submission_ready_workflow(root_dir, work.slug, "thesis")
+    require_machine_gates_passed(work.thesis.reviews_dir)
     assemble_thesis(root_dir, work.slug)
     work.thesis.export_docx_path.parent.mkdir(parents=True, exist_ok=True)
     _run_pandoc(work.thesis.full_draft_path, work.thesis.export_docx_path)
@@ -1065,7 +1154,7 @@ def _run_one_shot_pipeline(
 
     thesis_root = work.thesis.paths.root_dir
     manuscript = work.thesis.full_draft_path
-    docx = None if skip_docx else work.thesis.export_docx_path
+    docx = work.thesis.export_docx_path
     corpus = _resolve_path(root_dir, corpus_path) if corpus_path else None
 
     dissertation = dissertation_paths(work) if is_dissertation else None
@@ -1080,9 +1169,13 @@ def _run_one_shot_pipeline(
         dissertation_artifacts_destination=dissertation.artifacts_dir if dissertation else None,
         dissertation_root=dissertation.root_dir if dissertation else None,
         corpus_path=corpus,
-        require_docx=not skip_docx,
+        require_docx=True,
+        require_frontmatter=True,
+        require_work_type=True,
         work_type=effective_work_type,
     )
+    if skip_docx:
+        print("[one-shot] strict mode: --skip-docx does not skip the mandatory DOCX conformance gate.")
     report = run_one_shot(config)
 
     reviews_dir = thesis_root / "reviews"
@@ -1098,7 +1191,7 @@ def _run_one_shot_pipeline(
         marker = "PASS" if gate.passed else "FAIL"
         print(f"  [{marker}] {gate.name}: {gate.summary}")
     print(f"[one-shot] report: {md_path.relative_to(root_dir)}")
-    return 0 if report.status == "submission-ready" else 1
+    return 0 if report.status == "machine-gates-passed" else 1
 
 
 def _run_thesis_standards_checks(manuscript_md: Path, exported_docx: Path) -> None:
@@ -1137,6 +1230,7 @@ def export_article_docx(root_dir: Path, raw_input: str, raw_output: str | None, 
     workspace = load_workspace_config(root_dir)
     work_selection = resolve_work_selection(workspace, work_id=work_id, target=raw_input)
     work = work_selection.work
+    require_submission_ready_workflow(root_dir, work.slug, "article")
 
     input_rel = normalize_target_path_for_export(workspace, work, raw_input, work_source=work_selection.source)
     input_path = workspace.root_dir / input_rel
@@ -1703,6 +1797,86 @@ def _resolve_search(override: bool | None, default_value: bool) -> bool:
     return override
 
 
+def _run_role_workflow(
+    *,
+    workflow_id: str | None,
+    root_dir: Path,
+    work: WorkConfig,
+    lane: str,
+    action: str,
+    contract: ExecutionContract,
+    prompt: str,
+    use_search: bool,
+    model: str | None,
+    metadata: dict[str, Any],
+) -> Any:
+    engine = WorkflowEngine(root_dir, role_executor=_run_codex)
+    return engine.run(
+        workflow_id=workflow_id,
+        work_id=work.slug,
+        work_dir=work.work_dir,
+        lane=lane,
+        action=action,
+        contract=contract,
+        base_prompt=prompt,
+        use_search=use_search,
+        model=model,
+        metadata=metadata,
+    )
+
+
+def _enqueue_role_workflow(
+    *,
+    root_dir: Path,
+    work_id: str,
+    lane: str,
+    action: str,
+    target_or_topic: str,
+    notes: str | None,
+    search_override: bool | None,
+    model_override: str | None,
+    profile_override: str | None = None,
+) -> int:
+    from .orchestrator import WorkflowOrchestrator
+
+    active = WorkflowOrchestrator(root_dir).start_run(
+        lane,
+        action,
+        target_or_topic,
+        notes=notes,
+        search_override=search_override,
+        model_override=model_override,
+        profile_override=profile_override,
+        work_id=work_id,
+    )
+    print("Enqueue status: queued")
+    print(f"Workflow ID: {active['workflow_id']}")
+    print(f"Run ID: {active['run_id']}")
+    print(f"Work ID: {active['work_id']}")
+    return 0
+
+
+def _copy_workflow_output(workflow_run: Any, destination: Path) -> None:
+    for role in reversed(workflow_run.role_runs):
+        if not role.output_file:
+            continue
+        source = Path(role.output_file)
+        if not source.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        (
+            f"Workflow {workflow_run.workflow_id}\n\n"
+            f"Execution status: {workflow_run.execution_status}\n"
+            f"Readiness status: {workflow_run.readiness_status}\n"
+        ),
+        encoding="utf-8",
+    )
+
+
 def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, model: str | None) -> None:
     codex_bin = _resolve_codex_bin()
     cmd = [codex_bin]
@@ -1713,7 +1887,13 @@ def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, mo
     if chosen_model:
         cmd.extend(["-m", chosen_model])
     try:
-        subprocess.run(cmd + ["-"], input=prompt, text=True, check=True)
+        subprocess.run(
+            cmd + ["-"],
+            input=prompt,
+            text=True,
+            check=True,
+            timeout=ROLE_TIMEOUT_SECONDS,
+        )
     except FileNotFoundError:
         print(
             f"Ошибка: не найден исполняемый файл `{codex_bin}`. "
@@ -1724,6 +1904,12 @@ def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, mo
     except subprocess.CalledProcessError as exc:
         print(
             f"Ошибка: команда Codex завершилась с кодом {exc.returncode}. См. вывод процесса выше.",
+            file=sys.stderr,
+        )
+        raise
+    except subprocess.TimeoutExpired:
+        print(
+            f"Ошибка: роль Codex превысила timeout {ROLE_TIMEOUT_SECONDS} секунд.",
             file=sys.stderr,
         )
         raise

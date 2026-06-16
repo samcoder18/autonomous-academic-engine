@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -518,6 +519,126 @@ def write_raw_manifest(root: Path, profile_id: str, synced_at: str = "2026-04-18
     )
 
 
+def write_submission_ready_workflow(
+    root: Path,
+    lane: str,
+    *,
+    work_id: str = TEST_WORK_ID,
+    workflow_id: str | None = None,
+) -> Path:
+    resolved_workflow_id = workflow_id or f"ready-{work_id}-{lane}"
+    workflow_dir = root / "output" / "runs" / resolved_workflow_id
+    workflow_dir.mkdir(parents=True, exist_ok=True)
+    write_file(
+        workflow_dir / "workflow.json",
+        json.dumps(
+            {
+                "version": "workflow-run/v1",
+                "workflow_id": resolved_workflow_id,
+                "run_id": resolved_workflow_id,
+                "work_id": work_id,
+                "lane": lane,
+                "action": "finalize",
+                "execution_status": "succeeded",
+                "readiness_status": "submission-ready",
+                "started_at": "2026-04-18T10:00:00+00:00",
+                "finished_at": "2026-04-18T11:00:00+00:00",
+                "gates": [],
+                "promotion": {"status": "promoted"},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    )
+    if lane == "thesis":
+        write_file(
+            root / "works" / work_id / "thesis" / "reviews" / "2026-04-18-one-shot-report.json",
+            json.dumps(
+                {
+                    "status": "machine-gates-passed",
+                    "finished_at": "2026-04-18T10:59:00+00:00",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
+    return workflow_dir
+
+
+def write_fake_role_result(sandbox: Path, prompt: str, output: Path) -> None:
+    def field(label: str) -> str:
+        match = re.search(rf"^{re.escape(label)}: (.+)$", prompt, re.MULTILINE)
+        assert match is not None
+        return match.group(1).strip()
+
+    checkpoint_match = re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", prompt)
+    scopes_match = re.search(
+        r"Allowed write scopes:\n(?P<body>\[.*?\])\n\nRequired checkpoints:",
+        prompt,
+        re.DOTALL,
+    )
+    checkpoints = json.loads(checkpoint_match.group("body")) if checkpoint_match else []
+    scopes = json.loads(scopes_match.group("body")) if scopes_match else []
+    evidence: Path | None = None
+    for scope in scopes:
+        candidate = Path(scope["path"])
+        if candidate.is_file():
+            evidence = candidate
+            break
+        if candidate.is_dir():
+            evidence = next((item for item in sorted(candidate.rglob("*")) if item.is_file()), None)
+            if evidence is not None:
+                break
+    if evidence is None:
+        work_root = sandbox / "works" / field("Work ID")
+        evidence = next((item for item in sorted(work_root.rglob("*")) if item.is_file()), None)
+    artifacts: list[dict[str, str]] = []
+    if evidence is not None:
+        artifacts.append(
+            {
+                "path": evidence.resolve().relative_to(sandbox.resolve()).as_posix(),
+                "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }
+        )
+    role_id = field("Role ID")
+    lane, action = field("Lane/action").split("/", 1)
+    verdict = None
+    if role_id.endswith("submission-evaluator"):
+        verdict = {
+            "verdict_version": "1",
+            "lane": lane,
+            "kind": "submission-evaluator",
+            "status": "submission-ready",
+            "summary": "Fake evaluator completed.",
+        }
+    elif role_id.endswith("source-verifier"):
+        verdict = {
+            "verdict_version": "1",
+            "lane": lane,
+            "kind": "source-verifier",
+            "status": "reviewed",
+            "summary": "Fake source verifier completed.",
+        }
+    payload = {
+        "version": "role-result/v1",
+        "workflow_id": field("Workflow ID"),
+        "role_run_id": field("Role Run ID"),
+        "role_id": role_id,
+        "work_id": field("Work ID"),
+        "lane": lane,
+        "action": action,
+        "status": "succeeded",
+        "checkpoints": checkpoints,
+        "checkpoint_evidence": {checkpoint: [artifacts[0]["path"]] for checkpoint in checkpoints if artifacts},
+        "blockers": [],
+        "artifacts": artifacts,
+        "verdict": verdict,
+    }
+    write_file(output, f"role complete\n```role-result\n{json.dumps(payload)}\n```\n")
+
+
 def rewrite_work_profiles(root: Path, *, thesis_profile: str | None = None, article_profile: str | None = None) -> None:
     work_path = root / TEST_WORK_ROOT / "work.toml"
     content = work_path.read_text(encoding="utf-8")
@@ -697,8 +818,10 @@ def build_fake_codex(path: Path) -> None:
             #!/usr/bin/env python3
             from __future__ import annotations
 
+            import hashlib
             import json
             import os
+            import re
             import sys
             import time
             from pathlib import Path
@@ -748,7 +871,85 @@ def build_fake_codex(path: Path) -> None:
                 prefix = f"resume({thread_id})" if resume else f"new({thread_id})"
                 if model:
                     prefix += f" model={model}"
-                reply = f"{prefix}: {prompt}".strip()
+                if "isolated role worker in deterministic workflow" in prompt:
+                    def field(label: str) -> str:
+                        match = re.search(rf"^{re.escape(label)}: (.+)$", prompt, re.MULTILINE)
+                        if match is None:
+                            raise RuntimeError(f"missing role field: {label}")
+                        return match.group(1).strip()
+
+                    checkpoints_match = re.search(r"Required checkpoints:\\n(?P<body>\\[[^\\n]*\\])", prompt)
+                    scopes_match = re.search(
+                        r"Allowed write scopes:\\n(?P<body>\\[.*?\\])\\n\\nRequired checkpoints:",
+                        prompt,
+                        re.DOTALL,
+                    )
+                    checkpoints = json.loads(checkpoints_match.group("body")) if checkpoints_match else []
+                    scopes = json.loads(scopes_match.group("body")) if scopes_match else []
+                    evidence = None
+                    for scope in scopes:
+                        candidate = Path(scope["path"])
+                        if candidate.is_file():
+                            evidence = candidate
+                            break
+                        if candidate.is_dir():
+                            evidence = next((item for item in sorted(candidate.rglob("*")) if item.is_file()), None)
+                            if evidence is not None:
+                                break
+                    if evidence is None:
+                        work_root = Path(project_root) / "works" / field("Work ID")
+                        evidence = next(
+                            (item for item in sorted(work_root.rglob("*")) if item.is_file()),
+                            None,
+                        )
+                    artifacts = []
+                    if evidence is not None:
+                        relative = evidence.resolve().relative_to(Path(project_root).resolve()).as_posix()
+                        artifacts.append(
+                            {
+                                "path": relative,
+                                "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                            }
+                        )
+                    role_id = field("Role ID")
+                    lane, action = field("Lane/action").split("/", 1)
+                    verdict = None
+                    if role_id.endswith("submission-evaluator"):
+                        verdict = {
+                            "verdict_version": "1",
+                            "lane": lane,
+                            "kind": "submission-evaluator",
+                            "status": "submission-ready",
+                            "summary": "Fake independent evaluator completed.",
+                        }
+                    elif role_id.endswith("source-verifier"):
+                        verdict = {
+                            "verdict_version": "1",
+                            "lane": lane,
+                            "kind": "source-verifier",
+                            "status": "reviewed",
+                            "summary": "Fake source verifier completed.",
+                        }
+                    payload = {
+                        "version": "role-result/v1",
+                        "workflow_id": field("Workflow ID"),
+                        "role_run_id": field("Role Run ID"),
+                        "role_id": role_id,
+                        "work_id": field("Work ID"),
+                        "lane": lane,
+                        "action": action,
+                        "status": "succeeded",
+                        "checkpoints": checkpoints,
+                        "checkpoint_evidence": {
+                            checkpoint: [artifacts[0]["path"]] for checkpoint in checkpoints if artifacts
+                        },
+                        "blockers": [],
+                        "artifacts": artifacts,
+                        "verdict": verdict,
+                    }
+                    reply = f"{prefix}: role complete\\n```role-result\\n{json.dumps(payload)}\\n```"
+                else:
+                    reply = f"{prefix}: {prompt}".strip()
 
                 if output_path:
                     Path(output_path).write_text(reply + "\\n", encoding="utf-8")
@@ -1433,6 +1634,8 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(Path(record.output_file).exists())
 
     def test_export_docx_uses_project_scripts(self) -> None:
+        for lane in ("thesis", "article"):
+            write_submission_ready_workflow(self.root, lane)
         thesis = self.orchestrator.export_docx("thesis")
         article = self.orchestrator.export_docx("article:demo")
         self.assertTrue(Path(thesis["path"]).exists())
@@ -2765,6 +2968,7 @@ class DocumentationOwnershipContractTests(unittest.TestCase):
             "thesis-citation-checker",
             "thesis-argument-critic",
             "thesis-style-editor",
+            "thesis-submission-evaluator",
             "academic-source-verifier",
             "academic-citation-checker",
             "academic-counterargument-critic",
@@ -4391,6 +4595,8 @@ class TelegramConsoleBotUiTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
         build_fake_repo(self.root)
+        write_submission_ready_workflow(self.root, "thesis")
+        write_submission_ready_workflow(self.root, "article")
         self.projects = ProjectService(self.root)
         self.api = FakeApi()
         self.chat = FakeChatService()
@@ -4609,6 +4815,7 @@ class TelegramConsoleBotProjectSelectionTests(unittest.TestCase):
         self.repo_b = self.workspace / "beta"
         build_fake_repo(self.repo_a)
         build_fake_repo(self.repo_b)
+        write_submission_ready_workflow(self.repo_b, "thesis")
         write_projects_registry(
             self.bot_home,
             [
@@ -5446,6 +5653,7 @@ class AutonomousDaemonTests(unittest.TestCase):
         write_raw_manifest(self.root, "thesis-v1")
         write_raw_manifest(self.root, "ru-law-article-v1")
         write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        write_submission_ready_workflow(self.root, "article")
 
         payload = run_daemon_tick(
             root_dir=self.root,
@@ -5566,7 +5774,7 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         self.assertEqual(locked_candidate["status"], "waiting")
         self.assertEqual(locked_candidate["stop_reason"], "single-work-daemon-running")
 
-    def test_scheduler_waits_without_selection_when_global_active_run_exists(self) -> None:
+    def test_scheduler_selects_second_work_when_one_workflow_is_active(self) -> None:
         add_demo_work_clone(self.root, "zeta-work")
         self.write_default_raw_manifests()
         self.orchestrator.store.set_active_run(
@@ -5590,9 +5798,12 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
             mode="autonomous-full",
         )
 
-        self.assertEqual(schedule["status"], "waiting")
-        self.assertEqual(schedule["stop_reason"], "active-run")
-        self.assertIsNone(schedule["selected_work_id"])
+        self.assertEqual(schedule["status"], "ready")
+        self.assertIsNone(schedule["stop_reason"])
+        self.assertEqual(schedule["selected_work_id"], "zeta-work")
+        self.assertEqual(schedule["active_run_count"], 1)
+        active_candidate = next(item for item in schedule["candidates"] if item["work_id"] == TEST_WORK_ID)
+        self.assertEqual(active_candidate["status"], "waiting")
         self.assertEqual(schedule["readiness_claim"], "none")
 
     def test_scheduler_selects_another_work_when_first_has_only_blocked_continuation(self) -> None:
@@ -5640,7 +5851,7 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         self.assertEqual(second["round_robin"]["cursor_work_id"], TEST_WORK_ID)
         self.assertEqual(second["round_robin"]["next_cursor_work_id"], "zeta-work")
 
-    def test_multi_work_tick_launches_one_action_and_next_tick_waits(self) -> None:
+    def test_multi_work_tick_launches_up_to_two_distinct_works(self) -> None:
         add_demo_work_clone(self.root, "zeta-work")
         self.write_default_raw_manifests()
 
@@ -5675,13 +5886,15 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         )
 
         self.assertEqual(second["status"], "waiting")
-        self.assertEqual(second["stop_reason"], "active-run")
-        self.assertIsNone(second["selected_work_id"])
+        self.assertEqual(second["stop_reason"], "step-started")
+        self.assertEqual(second["selected_work_id"], "zeta-work")
+        self.assertEqual(second["last_result"]["status"], "started-run")
         self.assertEqual(second["readiness_claim"], "none")
 
     def test_multi_work_tick_exports_only_after_finalization_check_passes(self) -> None:
         self.write_default_raw_manifests()
         write_file(self.root / TEST_WORK_ROOT / "articles" / "reviews" / "demo.md", "# Review\n")
+        write_submission_ready_workflow(self.root, "article")
 
         payload = run_multi_work_daemon_tick(
             root_dir=self.root,
@@ -6121,6 +6334,8 @@ class ArticleBundleLifecycleTests(unittest.TestCase):
                         "--brief",
                         brief_path.relative_to(self.root).as_posix(),
                         "--no-search",
+                        "--workflow-id",
+                        "worker-article-bundle-test",
                     ],
                     root_dir=self.root,
                 )
@@ -6318,15 +6533,27 @@ class TelegramConsoleCliTests(unittest.TestCase):
             write_sample_standards_registry(root)
             write_sample_normalized_profiles(root)
 
-            def fake_run_codex(_: Path, __: str, out_file: Path, ___: bool, ____: str | None) -> None:
-                write_file(out_file, "thesis output\n")
+            def fake_run_codex(
+                sandbox: Path,
+                prompt: str,
+                out_file: Path,
+                _: bool,
+                __: str | None,
+            ) -> None:
+                write_fake_role_result(sandbox, prompt, out_file)
 
             with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
                     code = work_cli_module.main(
-                        ["launch-thesis", "write-section", "manuscript/sections/01-introduction.md"],
+                        [
+                            "launch-thesis",
+                            "write-section",
+                            "manuscript/sections/01-introduction.md",
+                            "--workflow-id",
+                            "worker-thesis-test",
+                        ],
                         root_dir=root,
                     )
 
@@ -6429,8 +6656,14 @@ class TelegramConsoleCliTests(unittest.TestCase):
             write_sample_standards_registry(root)
             write_sample_normalized_profiles(root)
 
-            def fake_run_codex(_: Path, __: str, out_file: Path, ___: bool, ____: str | None) -> None:
-                write_file(out_file, "article output\n")
+            def fake_run_codex(
+                sandbox: Path,
+                prompt: str,
+                out_file: Path,
+                _: bool,
+                __: str | None,
+            ) -> None:
+                write_fake_role_result(sandbox, prompt, out_file)
 
             with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
                 stdout = StringIO()
@@ -6441,6 +6674,8 @@ class TelegramConsoleCliTests(unittest.TestCase):
                             "launch-academic",
                             "review",
                             "articles/drafts/demo.md",
+                            "--workflow-id",
+                            "worker-article-test",
                         ],
                         root_dir=root,
                     )
@@ -6453,6 +6688,42 @@ class TelegramConsoleCliTests(unittest.TestCase):
             self.assertEqual(payload["target_path"], TEST_ARTICLE_DRAFT.as_posix())
             self.assertEqual(payload["target_resolution"]["warning_code"], "legacy-root-target")
             self.assertEqual(payload["target_resolution"]["resolution_mode"], "legacy-root")
+
+    def test_public_launch_enqueues_and_returns_workflow_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_sample_standards_registry(root)
+            write_sample_normalized_profiles(root)
+            queued = {
+                "status": "queued",
+                "workflow_id": "queued-workflow-1",
+                "run_id": "default:queued-workflow-1",
+                "work_id": TEST_WORK_ID,
+            }
+
+            with patch(
+                "telegram_console.orchestrator.WorkflowOrchestrator.start_run",
+                return_value=queued,
+            ) as start_run:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = work_cli_module.main(
+                        [
+                            "launch-academic",
+                            "review",
+                            "articles/drafts/demo.md",
+                            "--profile",
+                            "ru-law-article-v1",
+                        ],
+                        root_dir=root,
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertIn("Enqueue status: queued", stdout.getvalue())
+            self.assertIn("Workflow ID: queued-workflow-1", stdout.getvalue())
+            self.assertEqual(start_run.call_args.kwargs["work_id"], TEST_WORK_ID)
+            self.assertEqual(start_run.call_args.kwargs["profile_override"], "ru-law-article-v1")
 
     def test_launch_academic_dry_run_falls_back_to_generic_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -6487,6 +6758,8 @@ class TelegramConsoleCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
+            write_submission_ready_workflow(root, "thesis")
+            write_submission_ready_workflow(root, "article")
 
             def fake_run_pandoc(input_md: Path, output_docx: Path) -> None:
                 write_file(output_docx, f"docx from {input_md}\n")

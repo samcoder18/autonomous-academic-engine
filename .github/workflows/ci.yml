@@ -29,10 +29,15 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 -m unittest discover -s tests -q
 
-      - name: Skill source map audit
+      - name: Skill source map sync and audit
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python3 -m telegram_console.work_cli skill-source-map audit --json
+        run: |
+          SKILLS_ROOT="$(mktemp -d)"
+          python3 -m telegram_console.work_cli skill-source-map sync-external \
+            --skills-root "$SKILLS_ROOT" --write --json
+          python3 -m telegram_console.work_cli skill-source-map audit \
+            --skills-root "$SKILLS_ROOT" --json
 
       - name: Smoke one-shot pipeline (offline fixture)
         env:

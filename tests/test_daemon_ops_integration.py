@@ -14,7 +14,10 @@ The tests capture alerts via a fake :class:`OpsAlertSink` installed through
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import timedelta
@@ -37,10 +40,14 @@ from telegram_console.autonomous_daemon import (
     write_daemon_lock,
 )
 from telegram_console.autonomous_scheduler import (
+    acquire_multi_daemon_lock,
     build_multi_work_schedule,
+    multi_daemon_lock_path,
     multi_daemon_status_payload,
     multi_daemon_stop_path,
+    release_multi_daemon_lock,
     request_multi_daemon_stop,
+    run_multi_work_daemon_foreground,
     run_multi_work_daemon_tick,
 )
 from telegram_console.ops_alerts import OpsAlert, OpsAlertSink, configure_default_sink
@@ -138,6 +145,54 @@ class DaemonOpsAlertsTests(unittest.TestCase):
         codes = [alert.code for alert in self._sink.events]
         self.assertNotIn("daemon/stale-lock-recovered", codes)
         self.assertNotIn("daemon/lock-blocked", codes)
+
+    def test_lock_is_exclusive_across_processes(self) -> None:
+        first = acquire_daemon_lock(self.root, self.WORK_ID, mode="autonomous-full", pid=os.getpid())
+        self.addCleanup(release_daemon_lock, self.root, self.WORK_ID)
+        self.assertTrue(first["acquired"])
+        script = """
+import json
+import os
+import sys
+from telegram_console.autonomous_daemon import acquire_daemon_lock
+
+result = acquire_daemon_lock(sys.argv[1], sys.argv[2], mode="autonomous-full", pid=os.getpid())
+print(json.dumps(result))
+"""
+
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(self.root), self.WORK_ID],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        result = json.loads(completed.stdout)
+        self.assertFalse(result["acquired"])
+        self.assertEqual(result["stop_reason"], "daemon-already-running")
+
+    def test_multi_work_lock_alerts_on_duplicate(self) -> None:
+        first = acquire_multi_daemon_lock(
+            self.root,
+            works_scope="all",
+            mode="autonomous-full",
+            pid=os.getpid(),
+        )
+        self.addCleanup(release_multi_daemon_lock, self.root)
+        self.assertTrue(first["acquired"])
+
+        blocked = acquire_multi_daemon_lock(
+            self.root,
+            works_scope="all",
+            mode="autonomous-full",
+            pid=os.getpid() + 100000,
+        )
+
+        self.assertFalse(blocked["acquired"])
+        event = next(alert for alert in self._sink.events if alert.code == "daemon/lock-blocked")
+        self.assertEqual(event.work_id, "multi-work")
 
 
 class GuardsConfigTests(unittest.TestCase):
@@ -302,6 +357,63 @@ class DaemonReliabilityTests(unittest.TestCase):
             broken = next(item for item in schedule["candidates"] if item["work_id"] == TEST_WORK_ID)
             self.assertEqual(broken["status"], "blocked")
             self.assertEqual(broken["stop_reason"], "work-state-runtime-error")
+
+    def test_multi_work_foreground_releases_lock_on_guard_stop(self) -> None:
+        class _FailingGuards:
+            def start(self) -> None:
+                return None
+
+            def checkpoint(self, note: str = "") -> None:
+                return None
+
+            def check(self) -> None:
+                raise ResourceGuardError(
+                    code="run-stuck",
+                    message="multi-work daemon progress stalled",
+                    details={"idle_s": 600.0},
+                )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            with patch("telegram_console.autonomous_scheduler._build_foreground_guards", return_value=_FailingGuards()):
+                state = run_multi_work_daemon_foreground(
+                    root_dir=root,
+                    work_ids=[TEST_WORK_ID],
+                    works_scope="all",
+                    mode="autonomous-full",
+                    poll_seconds=0,
+                    max_cycles=5,
+                    max_runtime_minutes=10,
+                    sleep_between_cycles=False,
+                )
+
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["stop_reason"], "run-stuck")
+            self.assertFalse(multi_daemon_lock_path(root).exists())
+
+    def test_multi_work_foreground_releases_lock_on_unhandled_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+
+            with patch(
+                "telegram_console.autonomous_scheduler.run_multi_work_daemon_tick",
+                side_effect=RuntimeError("boom"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    run_multi_work_daemon_foreground(
+                        root_dir=root,
+                        work_ids=[TEST_WORK_ID],
+                        works_scope="all",
+                        mode="autonomous-full",
+                        poll_seconds=0,
+                        max_cycles=5,
+                        max_runtime_minutes=10,
+                        sleep_between_cycles=False,
+                    )
+
+            self.assertFalse(multi_daemon_lock_path(root).exists())
 
 
 if __name__ == "__main__":

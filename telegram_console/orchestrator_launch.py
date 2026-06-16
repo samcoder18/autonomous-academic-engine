@@ -71,14 +71,18 @@ class OrchestratorLaunchMixin:
         notes: str | None = None,
         search_override: bool | None = None,
         model_override: str | None = None,
+        profile_override: str | None = None,
         work_id: str | None = None,
     ) -> dict[str, Any]:
-        self.sync_active_run()
-        active = self.store.get_active_run()
+        work = self._work(work_id, target_or_topic if lane == "thesis" else None)
+        self.sync_active_run(work_id=work.slug)
+        active = self.store.get_active_run(work.slug)
         if active:
             raise RunBusyError(self.describe_active_run(active))
 
-        work = self._work(work_id, target_or_topic if lane == "thesis" else None)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        run_token = f"{timestamp}-{slugify(self.project_id)}-{lane}-{slugify(action)}"
+        record_id = f"{self.project_id}:{timestamp}-{lane}-{slugify(action)}"
         launcher_cmd, request_metadata = self._build_launch_command(
             lane=lane,
             action=action,
@@ -86,18 +90,17 @@ class OrchestratorLaunchMixin:
             notes=notes,
             search_override=search_override,
             model_override=model_override,
+            profile_override=profile_override,
             work_id=work.slug,
         )
-
-        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        run_token = f"{timestamp}-{slugify(self.project_id)}-{lane}-{slugify(action)}"
-        record_id = f"{self.project_id}:{timestamp}-{lane}-{slugify(action)}"
+        launcher_cmd.extend(["--workflow-id", run_token])
         run_dir = self.store.runs_dir / run_token
         run_dir.mkdir(parents=True, exist_ok=True)
 
         request_payload = {
             "run_id": record_id,
             "run_token": run_token,
+            "workflow_id": run_token,
             "run_dir": str(run_dir),
             "lane": lane,
             "action": action,
@@ -110,6 +113,7 @@ class OrchestratorLaunchMixin:
             "notes": notes.strip() if notes and notes.strip() else None,
             "search_override": search_override,
             "model_override": model_override,
+            "profile_override": profile_override,
             "launcher_command": launcher_cmd,
             **request_metadata,
         }
@@ -148,6 +152,8 @@ class OrchestratorLaunchMixin:
 
         active_payload = {
             "run_id": record_id,
+            "workflow_id": run_token,
+            "status": "queued",
             "run_dir": str(run_dir),
             "pid": process.pid,
             "lane": lane,
@@ -189,6 +195,7 @@ class OrchestratorLaunchMixin:
         notes: str | None,
         search_override: bool | None,
         model_override: str | None,
+        profile_override: str | None,
         work_id: str,
     ) -> tuple[list[str], dict[str, Any]]:
         lane = lane.strip().lower()
@@ -255,6 +262,8 @@ class OrchestratorLaunchMixin:
                 base.append("--no-search")
             if model_override:
                 base.extend(["--model", model_override])
+            if profile_override:
+                base.extend(["--profile", profile_override])
             work = self._work(work_id)
             metadata["work_id"] = work.slug
             metadata["work_title"] = work.title

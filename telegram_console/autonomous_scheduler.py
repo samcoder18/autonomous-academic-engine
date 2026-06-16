@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,9 @@ from typing import Any
 from .autonomous_daemon import (
     DAEMON_STATE_VERSION,
     DAEMON_TERMINAL_STATUSES,
+    _build_foreground_guards,
+    _emit_daemon_terminal_alert,
+    _resolve_stuck_after_minutes,
     evaluate_daemon_action,
     read_daemon_lock,
 )
@@ -18,15 +22,22 @@ from .autonomous_planner import build_autonomous_plan
 from .autonomous_runner import execute_autonomous_command
 from .autonomous_runtime_errors import SchedulerWorkCandidateError, classify_scheduler_candidate_error
 from .autonomous_runtime_store import (
+    acquire_runtime_lock,
     build_lock_payload,
     build_stop_request_payload,
+    detach_runtime_lock,
+    inherited_runtime_lock_env,
     read_json_payload,
+    release_runtime_lock,
     remove_runtime_file,
     runtime_file_path,
+    runtime_lock_fd,
     write_json_payload,
 )
+from .ops_alerts import AlertSeverity, emit_alert
 from .orchestrator import WorkflowOrchestrator
 from .orchestrator_support import WorkflowError
+from .resource_guards import ResourceGuardError
 from .utils import parse_datetime, utc_now
 from .workspace import WorkspaceConfig, WorkspaceConfigError, load_workspace_config
 
@@ -71,24 +82,28 @@ def build_multi_work_schedule(
     rotated_work_ids = _rotated_work_ids(unique_work_ids, round_robin_cursor)
     runner = orchestrator or WorkflowOrchestrator(root_path)
     runner.sync_active_run()
-    active_run = runner.store.get_active_run()
-    if isinstance(active_run, dict):
-        candidates = [_waiting_candidate(work_id, active_run=active_run, mode=mode) for work_id in unique_work_ids]
-        return _schedule_payload(
-            mode=mode,
-            works_scope=works_scope,
-            work_ids=unique_work_ids,
-            rotated_work_ids=rotated_work_ids,
-            round_robin_cursor=round_robin_cursor,
-            candidates=candidates,
-            selected=None,
-            status="waiting",
-            stop_reason="active-run",
-            active_run=active_run,
-        )
+    active_runs = runner.store.list_active_runs()
+    active_by_work = {
+        str(item.get("work_id") or "").strip(): item for item in active_runs if str(item.get("work_id") or "").strip()
+    }
+    concurrency_available = len(active_runs) < 2
 
     candidates: list[dict[str, Any]] = []
     for work_id in unique_work_ids:
+        active_run = active_by_work.get(work_id)
+        if active_run is not None:
+            candidates.append(_waiting_candidate(work_id, active_run=active_run, mode=mode))
+            continue
+        if not concurrency_available:
+            candidates.append(
+                _waiting_candidate(
+                    work_id,
+                    active_run=active_runs[0],
+                    mode=mode,
+                )
+                | {"stop_reason": "workflow-concurrency-limit"}
+            )
+            continue
         try:
             candidate = _build_work_candidate(root_dir=root_path, orchestrator=runner, work_id=work_id, mode=mode)
         except Exception as exc:  # noqa: BLE001 — isolate one work without collapsing the whole schedule pass
@@ -110,7 +125,7 @@ def build_multi_work_schedule(
     else:
         status = "blocked"
         stop_reason = "no-safe-concrete-action"
-    return _schedule_payload(
+    payload = _schedule_payload(
         mode=mode,
         works_scope=works_scope,
         work_ids=unique_work_ids,
@@ -122,8 +137,12 @@ def build_multi_work_schedule(
         selected=selected,
         status=status,
         stop_reason=stop_reason,
-        active_run=None,
+        active_run=active_runs[0] if active_runs else None,
     )
+    payload["active_runs"] = active_runs
+    payload["active_run_count"] = len(active_runs)
+    payload["workflow_concurrency_limit"] = 2
+    return payload
 
 
 def multi_daemon_state_path(root_dir: str | Path) -> Path:
@@ -136,6 +155,10 @@ def multi_daemon_lock_path(root_dir: str | Path) -> Path:
 
 def multi_daemon_stop_path(root_dir: str | Path) -> Path:
     return runtime_file_path(root_dir, f"{MULTI_WORK_DAEMON_ID}.daemon.stop.json")
+
+
+def multi_daemon_log_path(root_dir: str | Path) -> Path:
+    return runtime_file_path(root_dir, f"{MULTI_WORK_DAEMON_ID}.daemon.log")
 
 
 def read_multi_daemon_state(root_dir: str | Path) -> dict[str, Any] | None:
@@ -154,6 +177,10 @@ def read_multi_daemon_lock(root_dir: str | Path) -> dict[str, Any] | None:
 
 
 def write_multi_daemon_lock(root_dir: str | Path, payload: dict[str, Any]) -> Path:
+    extra_fields = {
+        "works_scope": _optional_text(payload.get("works_scope")) or "all",
+        **{key: payload[key] for key in ("transfer_pending", "launcher_pid") if payload.get(key) is not None},
+    }
     lock = build_lock_payload(
         root_dir,
         MULTI_WORK_DAEMON_ID,
@@ -162,7 +189,7 @@ def write_multi_daemon_lock(root_dir: str | Path, payload: dict[str, Any]) -> Pa
         pid=_optional_int(payload.get("pid")),
         started_at=_optional_text(payload.get("started_at")),
         heartbeat_at=_optional_text(payload.get("heartbeat_at")),
-        extra_fields={"works_scope": _optional_text(payload.get("works_scope")) or "all"},
+        extra_fields=extra_fields,
     )
     path = multi_daemon_lock_path(root_dir)
     write_json_payload(path, lock)
@@ -178,30 +205,47 @@ def acquire_multi_daemon_lock(
     stale_after_seconds: int = 300,
 ) -> dict[str, Any]:
     owner_pid = pid or os.getpid()
-    existing = read_multi_daemon_lock(root_dir)
+    path = multi_daemon_lock_path(root_dir)
+    lock_result = acquire_runtime_lock(path, owner_pid=owner_pid)
+    existing = lock_result.get("existing_lock")
+    inherited = bool(lock_result.get("inherited"))
     recovered = False
+    if not lock_result.get("acquired"):
+        _emit_multi_lock_blocked_alert(
+            owner_pid=owner_pid,
+            existing=existing,
+            mode=mode,
+            works_scope=works_scope,
+        )
+        return _blocked_multi_lock_result(
+            owner_pid=owner_pid,
+            existing=existing,
+            mode=mode,
+            works_scope=works_scope,
+        )
     if isinstance(existing, dict):
         existing_pid = _optional_int(existing.get("pid"))
-        if existing_pid == owner_pid:
+        transfer_pending = bool(existing.get("transfer_pending"))
+        if existing_pid == owner_pid and not transfer_pending:
             return heartbeat_multi_daemon_lock(root_dir, works_scope=works_scope, pid=owner_pid) | {
                 "acquired": True,
                 "recovered_stale_lock": False,
             }
-        if not _multi_daemon_lock_is_stale(existing, stale_after_seconds=stale_after_seconds):
-            return {
-                "kind": "autonomous-daemon-lock-result",
-                "version": DAEMON_STATE_VERSION,
-                "acquired": False,
-                "status": "blocked",
-                "stop_reason": "daemon-already-running",
-                "work_id": MULTI_WORK_DAEMON_ID,
-                "works_scope": works_scope,
-                "mode": mode,
-                "pid": owner_pid,
-                "existing_lock": existing,
-                "readiness_claim": "none",
-            }
-        recovered = True
+        if not inherited and not _multi_daemon_lock_is_stale(existing, stale_after_seconds=stale_after_seconds):
+            release_runtime_lock(path, remove_metadata=False)
+            _emit_multi_lock_blocked_alert(
+                owner_pid=owner_pid,
+                existing=existing,
+                mode=mode,
+                works_scope=works_scope,
+            )
+            return _blocked_multi_lock_result(
+                owner_pid=owner_pid,
+                existing=existing,
+                mode=mode,
+                works_scope=works_scope,
+            )
+        recovered = not inherited
 
     now = utc_now()
     lock = {
@@ -216,7 +260,66 @@ def acquire_multi_daemon_lock(
         "heartbeat_at": now,
     }
     write_multi_daemon_lock(root_dir, lock)
+    if recovered:
+        emit_alert(
+            severity=AlertSeverity.WARNING,
+            code="daemon/stale-lock-recovered",
+            message="Autonomous multi-work daemon recovered a stale lock and took ownership.",
+            component="autonomous-daemon",
+            work_id=MULTI_WORK_DAEMON_ID,
+            details={
+                "owner_pid": owner_pid,
+                "stale_after_seconds": stale_after_seconds,
+                "previous_pid": _optional_int(existing.get("pid")) if isinstance(existing, dict) else None,
+                "mode": mode,
+                "works_scope": works_scope,
+            },
+        )
     return {**lock, "acquired": True, "recovered_stale_lock": recovered, "readiness_claim": "none"}
+
+
+def _blocked_multi_lock_result(
+    *,
+    owner_pid: int,
+    existing: object,
+    mode: str,
+    works_scope: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "autonomous-daemon-lock-result",
+        "version": DAEMON_STATE_VERSION,
+        "acquired": False,
+        "status": "blocked",
+        "stop_reason": "daemon-already-running",
+        "work_id": MULTI_WORK_DAEMON_ID,
+        "works_scope": works_scope,
+        "mode": mode,
+        "pid": owner_pid,
+        "existing_lock": existing if isinstance(existing, dict) else None,
+        "readiness_claim": "none",
+    }
+
+
+def _emit_multi_lock_blocked_alert(
+    *,
+    owner_pid: int,
+    existing: object,
+    mode: str,
+    works_scope: str,
+) -> None:
+    emit_alert(
+        severity=AlertSeverity.WARNING,
+        code="daemon/lock-blocked",
+        message="Autonomous multi-work daemon refused to start: lock held by another pid.",
+        component="autonomous-daemon",
+        work_id=MULTI_WORK_DAEMON_ID,
+        details={
+            "owner_pid": owner_pid,
+            "existing_pid": _optional_int(existing.get("pid")) if isinstance(existing, dict) else None,
+            "mode": mode,
+            "works_scope": works_scope,
+        },
+    )
 
 
 def heartbeat_multi_daemon_lock(root_dir: str | Path, *, works_scope: str, pid: int | None = None) -> dict[str, Any]:
@@ -237,7 +340,7 @@ def heartbeat_multi_daemon_lock(root_dir: str | Path, *, works_scope: str, pid: 
 
 
 def release_multi_daemon_lock(root_dir: str | Path) -> None:
-    remove_runtime_file(multi_daemon_lock_path(root_dir))
+    release_runtime_lock(multi_daemon_lock_path(root_dir))
 
 
 def request_multi_daemon_stop(root_dir: str | Path, *, works_scope: str = "all", reason: str = "operator-stop") -> Path:
@@ -435,6 +538,7 @@ def run_multi_work_daemon_foreground(
     max_runtime_minutes: int = 240,
     pid: int | None = None,
     sleep_between_cycles: bool = True,
+    stuck_after_minutes: int | None = None,
 ) -> dict[str, Any]:
     owner_pid = pid or os.getpid()
     lock = acquire_multi_daemon_lock(root_dir, works_scope=works_scope, mode=mode, pid=owner_pid)
@@ -454,22 +558,44 @@ def run_multi_work_daemon_foreground(
             result=None,
         )
 
-    started_at = datetime.now(UTC)
-    state = _write_multi_daemon_cycle_state(
-        root_dir=root_dir,
-        mode=mode,
-        works_scope=works_scope,
-        work_ids=list(work_ids),
-        status="running",
-        pid=owner_pid,
-        max_cycles=max_cycles,
-        poll_seconds=poll_seconds,
-        max_runtime_minutes=max_runtime_minutes,
-        stop_reason=None,
-        schedule=None,
-        result=None,
-        increment_cycle=False,
-    )
+    try:
+        started_at = datetime.now(UTC)
+        guards = _build_foreground_guards(
+            max_runtime_minutes=max_runtime_minutes,
+            stuck_after_minutes=_resolve_stuck_after_minutes(stuck_after_minutes),
+        )
+        guards.start()
+        last_command: str | None = None
+        state = _write_multi_daemon_cycle_state(
+            root_dir=root_dir,
+            mode=mode,
+            works_scope=works_scope,
+            work_ids=list(work_ids),
+            status="running",
+            pid=owner_pid,
+            max_cycles=max_cycles,
+            poll_seconds=poll_seconds,
+            max_runtime_minutes=max_runtime_minutes,
+            stop_reason=None,
+            schedule=None,
+            result=None,
+            increment_cycle=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — acquired locks must be released on setup failures
+        emit_alert(
+            severity=AlertSeverity.CRITICAL,
+            code="daemon/unhandled-exception",
+            message=f"Autonomous multi-work daemon crashed during setup: {type(exc).__name__}: {exc}",
+            component="autonomous-daemon",
+            work_id=MULTI_WORK_DAEMON_ID,
+            details={
+                "mode": mode,
+                "works_scope": works_scope,
+                "traceback": traceback.format_exc(limit=6),
+            },
+        )
+        release_multi_daemon_lock(root_dir)
+        raise
     try:
         while True:
             current_cycles = int(state.get("cycle_count") or 0)
@@ -490,6 +616,16 @@ def run_multi_work_daemon_foreground(
                     result=None,
                     increment_cycle=False,
                 )
+                _emit_daemon_terminal_alert(
+                    work_id=MULTI_WORK_DAEMON_ID,
+                    reason="max-cycles",
+                    details={
+                        "mode": mode,
+                        "works_scope": works_scope,
+                        "max_cycles": max_cycles,
+                        "cycle_count": current_cycles,
+                    },
+                )
                 break
             if elapsed.total_seconds() >= max_runtime_minutes * 60:
                 state = _write_multi_daemon_cycle_state(
@@ -507,6 +643,42 @@ def run_multi_work_daemon_foreground(
                     result=None,
                     increment_cycle=False,
                 )
+                _emit_daemon_terminal_alert(
+                    work_id=MULTI_WORK_DAEMON_ID,
+                    reason="max-runtime",
+                    details={
+                        "mode": mode,
+                        "works_scope": works_scope,
+                        "max_runtime_minutes": max_runtime_minutes,
+                    },
+                )
+                break
+            try:
+                guards.check()
+            except ResourceGuardError as guard_error:
+                state = _write_multi_daemon_cycle_state(
+                    root_dir=root_dir,
+                    mode=mode,
+                    works_scope=works_scope,
+                    work_ids=list(work_ids),
+                    status="stopped",
+                    pid=owner_pid,
+                    max_cycles=max_cycles,
+                    poll_seconds=poll_seconds,
+                    max_runtime_minutes=max_runtime_minutes,
+                    stop_reason=guard_error.code,
+                    schedule=None,
+                    result={"status": "stopped", "guard": guard_error.to_dict()},
+                    increment_cycle=False,
+                )
+                emit_alert(
+                    severity=AlertSeverity.CRITICAL,
+                    code=f"daemon/{guard_error.code}",
+                    message=str(guard_error),
+                    component="autonomous-daemon",
+                    work_id=MULTI_WORK_DAEMON_ID,
+                    details={"mode": mode, "works_scope": works_scope, **guard_error.details},
+                )
                 break
             state = run_multi_work_daemon_tick(
                 root_dir=root_dir,
@@ -520,10 +692,47 @@ def run_multi_work_daemon_foreground(
                 lock_already_acquired=True,
                 keep_lock=True,
             )
+            cycle_command = _optional_text(state.get("selected_command"))
+            if cycle_command and cycle_command != last_command:
+                guards.checkpoint(f"command:{cycle_command}")
+                last_command = cycle_command
             if state.get("status") in DAEMON_TERMINAL_STATUSES:
                 break
             if sleep_between_cycles and poll_seconds > 0:
                 time.sleep(poll_seconds)
+    except Exception as exc:  # noqa: BLE001 — long-running loop must not vanish silently
+        state = _write_multi_daemon_cycle_state(
+            root_dir=root_dir,
+            mode=mode,
+            works_scope=works_scope,
+            work_ids=list(work_ids),
+            status="failed",
+            pid=owner_pid,
+            max_cycles=max_cycles,
+            poll_seconds=poll_seconds,
+            max_runtime_minutes=max_runtime_minutes,
+            stop_reason="unhandled-exception",
+            schedule=None,
+            result={
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+            increment_cycle=False,
+        )
+        emit_alert(
+            severity=AlertSeverity.CRITICAL,
+            code="daemon/unhandled-exception",
+            message=f"Autonomous multi-work daemon crashed: {type(exc).__name__}: {exc}",
+            component="autonomous-daemon",
+            work_id=MULTI_WORK_DAEMON_ID,
+            details={
+                "mode": mode,
+                "works_scope": works_scope,
+                "traceback": traceback.format_exc(limit=6),
+            },
+        )
+        raise
     finally:
         release_multi_daemon_lock(root_dir)
     return state
@@ -537,24 +746,28 @@ def start_multi_work_daemon_process(
     poll_seconds: int = 30,
     max_cycles: int = 50,
     max_runtime_minutes: int = 240,
+    stuck_after_minutes: int | None = None,
 ) -> dict[str, Any]:
-    existing = read_multi_daemon_lock(root_dir)
-    if isinstance(existing, dict) and not _multi_daemon_lock_is_stale(
-        existing, stale_after_seconds=max(60, poll_seconds * 3)
-    ):
+    launcher_pid = os.getpid()
+    lock = acquire_multi_daemon_lock(
+        root_dir,
+        works_scope=works_scope,
+        mode=mode,
+        pid=launcher_pid,
+        stale_after_seconds=max(60, poll_seconds * 3),
+    )
+    if not lock.get("acquired"):
         return _normalize_multi_daemon_state(
             root_dir,
             {
                 "status": "blocked",
                 "mode": mode,
                 "works_scope": works_scope,
-                "pid": os.getpid(),
+                "pid": launcher_pid,
                 "stop_reason": "daemon-already-running",
                 "last_schedule": None,
             },
         )
-    if isinstance(existing, dict):
-        release_multi_daemon_lock(root_dir)
 
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
@@ -583,46 +796,83 @@ def start_multi_work_daemon_process(
         str(max_cycles),
         "--max-runtime-minutes",
         str(max_runtime_minutes),
-        "--json",
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=str(Path(root_dir).resolve()),
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    now = utc_now()
+    if stuck_after_minutes is not None:
+        command.extend(["--stuck-after-minutes", str(stuck_after_minutes)])
+    command.append("--json")
+
+    lock_path = multi_daemon_lock_path(root_dir)
+    lock_fd = runtime_lock_fd(lock_path)
+    if lock_fd is None:
+        release_multi_daemon_lock(root_dir)
+        raise RuntimeError("Autonomous multi-work daemon lock fd is unavailable after acquisition.")
+    ready_read_fd, ready_write_fd = os.pipe()
+    env.update(inherited_runtime_lock_env(lock_path, ready_fd=ready_read_fd))
     write_multi_daemon_lock(
         root_dir,
         {
             "works_scope": works_scope,
             "mode": mode,
-            "pid": process.pid,
-            "started_at": now,
-            "heartbeat_at": now,
+            "pid": launcher_pid,
+            "started_at": lock.get("started_at"),
+            "heartbeat_at": utc_now(),
+            "transfer_pending": True,
+            "launcher_pid": launcher_pid,
         },
     )
-    work_ids = _resolve_work_ids_for_state(root_dir, works_scope)
-    state = _normalize_multi_daemon_state(
-        root_dir,
-        {
-            "status": "running",
-            "mode": mode,
-            "works_scope": works_scope,
-            "work_ids": work_ids,
-            "pid": process.pid,
-            "started_at": now,
-            "heartbeat_at": now,
-            "cycle_count": 0,
-            "max_cycles": max_cycles,
-            "poll_seconds": poll_seconds,
-            "max_runtime_minutes": max_runtime_minutes,
-        },
-    )
-    write_multi_daemon_state(root_dir, state)
+    log_path = multi_daemon_log_path(root_dir)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with log_path.open("ab") as log_handle:
+            process = subprocess.Popen(
+                command,
+                cwd=str(Path(root_dir).resolve()),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                pass_fds=(lock_fd, ready_read_fd),
+            )
+        write_multi_daemon_lock(
+            root_dir,
+            {
+                "works_scope": works_scope,
+                "mode": mode,
+                "pid": process.pid,
+                "started_at": lock.get("started_at"),
+                "heartbeat_at": utc_now(),
+                "transfer_pending": True,
+                "launcher_pid": launcher_pid,
+            },
+        )
+        now = utc_now()
+        work_ids = _resolve_work_ids_for_state(root_dir, works_scope)
+        state = _normalize_multi_daemon_state(
+            root_dir,
+            {
+                "status": "running",
+                "mode": mode,
+                "works_scope": works_scope,
+                "work_ids": work_ids,
+                "pid": process.pid,
+                "started_at": now,
+                "heartbeat_at": now,
+                "cycle_count": 0,
+                "max_cycles": max_cycles,
+                "poll_seconds": poll_seconds,
+                "max_runtime_minutes": max_runtime_minutes,
+            },
+        )
+        write_multi_daemon_state(root_dir, state)
+        os.write(ready_write_fd, b"1")
+    except Exception:
+        release_multi_daemon_lock(root_dir)
+        raise
+    finally:
+        os.close(ready_read_fd)
+        os.close(ready_write_fd)
+    detach_runtime_lock(lock_path)
     return state
 
 

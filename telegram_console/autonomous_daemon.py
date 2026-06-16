@@ -13,12 +13,17 @@ from typing import Any
 from .autonomous_planner import build_autonomous_plan
 from .autonomous_runner import execute_autonomous_command
 from .autonomous_runtime_store import (
+    acquire_runtime_lock,
     autonomous_runtime_dir,
     build_lock_payload,
     build_stop_request_payload,
+    detach_runtime_lock,
+    inherited_runtime_lock_env,
     read_json_payload,
+    release_runtime_lock,
     remove_runtime_file,
     runtime_file_path,
+    runtime_lock_fd,
     write_json_payload,
 )
 from .ops_alerts import AlertSeverity, emit_alert
@@ -48,6 +53,10 @@ def daemon_stop_path(root_dir: str | Path, work_id: str) -> Path:
     return runtime_file_path(root_dir, f"{work_id}.daemon.stop.json")
 
 
+def daemon_log_path(root_dir: str | Path, work_id: str) -> Path:
+    return runtime_file_path(root_dir, f"{work_id}.daemon.log")
+
+
 def read_daemon_state(root_dir: str | Path, work_id: str) -> dict[str, Any] | None:
     return read_json_payload(daemon_state_path(root_dir, work_id))
 
@@ -64,6 +73,7 @@ def read_daemon_lock(root_dir: str | Path, work_id: str) -> dict[str, Any] | Non
 
 
 def write_daemon_lock(root_dir: str | Path, work_id: str, payload: dict[str, Any]) -> Path:
+    extra_fields = {key: payload[key] for key in ("transfer_pending", "launcher_pid") if payload.get(key) is not None}
     lock = build_lock_payload(
         root_dir,
         work_id,
@@ -72,6 +82,7 @@ def write_daemon_lock(root_dir: str | Path, work_id: str, payload: dict[str, Any
         pid=_optional_int(payload.get("pid")),
         started_at=_optional_text(payload.get("started_at")),
         heartbeat_at=_optional_text(payload.get("heartbeat_at")),
+        extra_fields=extra_fields,
     )
     path = daemon_lock_path(root_dir, work_id)
     write_json_payload(path, lock)
@@ -87,41 +98,47 @@ def acquire_daemon_lock(
     stale_after_seconds: int = 300,
 ) -> dict[str, Any]:
     owner_pid = pid or os.getpid()
-    existing = read_daemon_lock(root_dir, work_id)
+    path = daemon_lock_path(root_dir, work_id)
+    lock_result = acquire_runtime_lock(path, owner_pid=owner_pid)
+    existing = lock_result.get("existing_lock")
+    inherited = bool(lock_result.get("inherited"))
     recovered = False
+    if not lock_result.get("acquired"):
+        _emit_lock_blocked_alert(
+            work_id=work_id,
+            owner_pid=owner_pid,
+            existing=existing,
+            mode=mode,
+        )
+        return _blocked_lock_result(
+            work_id=work_id,
+            owner_pid=owner_pid,
+            existing=existing,
+            mode=mode,
+        )
     if isinstance(existing, dict):
         existing_pid = _optional_int(existing.get("pid"))
-        if existing_pid == owner_pid:
+        transfer_pending = bool(existing.get("transfer_pending"))
+        if existing_pid == owner_pid and not transfer_pending:
             return heartbeat_daemon_lock(root_dir, work_id, pid=owner_pid) | {
                 "acquired": True,
                 "recovered_stale_lock": False,
             }
-        if not _daemon_lock_is_stale(existing, stale_after_seconds=stale_after_seconds):
-            emit_alert(
-                severity=AlertSeverity.WARNING,
-                code="daemon/lock-blocked",
-                message="Autonomous daemon refused to start: lock held by another pid.",
-                component="autonomous-daemon",
+        if not inherited and not _daemon_lock_is_stale(existing, stale_after_seconds=stale_after_seconds):
+            release_runtime_lock(path, remove_metadata=False)
+            _emit_lock_blocked_alert(
                 work_id=work_id,
-                details={
-                    "owner_pid": owner_pid,
-                    "existing_pid": existing_pid,
-                    "mode": mode,
-                },
+                owner_pid=owner_pid,
+                existing=existing,
+                mode=mode,
             )
-            return {
-                "kind": "autonomous-daemon-lock-result",
-                "version": DAEMON_STATE_VERSION,
-                "acquired": False,
-                "status": "blocked",
-                "stop_reason": "daemon-already-running",
-                "work_id": work_id,
-                "mode": mode,
-                "pid": owner_pid,
-                "existing_lock": existing,
-                "readiness_claim": "none",
-            }
-        recovered = True
+            return _blocked_lock_result(
+                work_id=work_id,
+                owner_pid=owner_pid,
+                existing=existing,
+                mode=mode,
+            )
+        recovered = not inherited
 
     now = utc_now()
     lock = {
@@ -157,6 +174,48 @@ def acquire_daemon_lock(
     }
 
 
+def _blocked_lock_result(
+    *,
+    work_id: str,
+    owner_pid: int,
+    existing: object,
+    mode: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "autonomous-daemon-lock-result",
+        "version": DAEMON_STATE_VERSION,
+        "acquired": False,
+        "status": "blocked",
+        "stop_reason": "daemon-already-running",
+        "work_id": work_id,
+        "mode": mode,
+        "pid": owner_pid,
+        "existing_lock": existing if isinstance(existing, dict) else None,
+        "readiness_claim": "none",
+    }
+
+
+def _emit_lock_blocked_alert(
+    *,
+    work_id: str,
+    owner_pid: int,
+    existing: object,
+    mode: str,
+) -> None:
+    emit_alert(
+        severity=AlertSeverity.WARNING,
+        code="daemon/lock-blocked",
+        message="Autonomous daemon refused to start: lock held by another pid.",
+        component="autonomous-daemon",
+        work_id=work_id,
+        details={
+            "owner_pid": owner_pid,
+            "existing_pid": _optional_int(existing.get("pid")) if isinstance(existing, dict) else None,
+            "mode": mode,
+        },
+    )
+
+
 def heartbeat_daemon_lock(root_dir: str | Path, work_id: str, *, pid: int | None = None) -> dict[str, Any]:
     lock = read_daemon_lock(root_dir, work_id) or {}
     owner_pid = pid or _optional_int(lock.get("pid")) or os.getpid()
@@ -174,7 +233,7 @@ def heartbeat_daemon_lock(root_dir: str | Path, work_id: str, *, pid: int | None
 
 
 def release_daemon_lock(root_dir: str | Path, work_id: str) -> None:
-    remove_runtime_file(daemon_lock_path(root_dir, work_id))
+    release_runtime_lock(daemon_lock_path(root_dir, work_id))
 
 
 def request_daemon_stop(root_dir: str | Path, work_id: str, *, reason: str = "operator-stop") -> Path:
@@ -566,29 +625,41 @@ def run_daemon_foreground(
             result=None,
         )
 
-    started_at = datetime.now(UTC)
-    guards = _build_foreground_guards(
-        max_runtime_minutes=max_runtime_minutes,
-        stuck_after_minutes=_resolve_stuck_after_minutes(stuck_after_minutes),
-    )
-    guards.start()
-    last_command: str | None = None
-    state = _write_daemon_cycle_state(
-        root_dir=root_dir,
-        work_id=work_id,
-        mode=mode,
-        status="running",
-        pid=owner_pid,
-        max_cycles=max_cycles,
-        poll_seconds=poll_seconds,
-        max_runtime_minutes=max_runtime_minutes,
-        stop_reason=None,
-        decision=None,
-        plan=None,
-        command=None,
-        result=None,
-        increment_cycle=False,
-    )
+    try:
+        started_at = datetime.now(UTC)
+        guards = _build_foreground_guards(
+            max_runtime_minutes=max_runtime_minutes,
+            stuck_after_minutes=_resolve_stuck_after_minutes(stuck_after_minutes),
+        )
+        guards.start()
+        last_command: str | None = None
+        state = _write_daemon_cycle_state(
+            root_dir=root_dir,
+            work_id=work_id,
+            mode=mode,
+            status="running",
+            pid=owner_pid,
+            max_cycles=max_cycles,
+            poll_seconds=poll_seconds,
+            max_runtime_minutes=max_runtime_minutes,
+            stop_reason=None,
+            decision=None,
+            plan=None,
+            command=None,
+            result=None,
+            increment_cycle=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — acquired locks must be released on setup failures
+        emit_alert(
+            severity=AlertSeverity.CRITICAL,
+            code="daemon/unhandled-exception",
+            message=f"Autonomous daemon crashed during setup: {type(exc).__name__}: {exc}",
+            component="autonomous-daemon",
+            work_id=work_id,
+            details={"mode": mode, "traceback": traceback.format_exc(limit=6)},
+        )
+        release_daemon_lock(root_dir, work_id)
+        raise
     try:
         while True:
             current_cycles = int(state.get("cycle_count") or 0)
@@ -691,6 +762,32 @@ def run_daemon_foreground(
             if sleep_between_cycles and poll_seconds > 0:
                 time.sleep(poll_seconds)
     except Exception as exc:  # noqa: BLE001 — long-running loop must not vanish silently
+        state = _write_daemon_cycle_state(
+            root_dir=root_dir,
+            work_id=work_id,
+            mode=mode,
+            status="failed",
+            pid=owner_pid,
+            max_cycles=max_cycles,
+            poll_seconds=poll_seconds,
+            max_runtime_minutes=max_runtime_minutes,
+            stop_reason="unhandled-exception",
+            decision={
+                "decision": "blocked",
+                "stop_reason": "unhandled-exception",
+                "blocking_categories": ["runtime-error"],
+                "blocking_gate_ids": [],
+                "readiness_claim": "none",
+            },
+            plan=None,
+            command=last_command,
+            result={
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+            increment_cycle=False,
+        )
         emit_alert(
             severity=AlertSeverity.CRITICAL,
             code="daemon/unhandled-exception",
@@ -761,18 +858,24 @@ def start_daemon_process(
     poll_seconds: int = 30,
     max_cycles: int = 50,
     max_runtime_minutes: int = 240,
+    stuck_after_minutes: int | None = None,
 ) -> dict[str, Any]:
-    existing = read_daemon_lock(root_dir, work_id)
-    if isinstance(existing, dict) and not _daemon_lock_is_stale(
-        existing, stale_after_seconds=max(60, poll_seconds * 3)
-    ):
+    launcher_pid = os.getpid()
+    lock = acquire_daemon_lock(
+        root_dir,
+        work_id,
+        mode=mode,
+        pid=launcher_pid,
+        stale_after_seconds=max(60, poll_seconds * 3),
+    )
+    if not lock.get("acquired"):
         return _normalize_daemon_state(
             root_dir,
             work_id,
             {
                 "status": "blocked",
                 "mode": mode,
-                "pid": os.getpid(),
+                "pid": launcher_pid,
                 "stop_reason": "daemon-already-running",
                 "last_decision": {
                     "decision": "blocked",
@@ -783,8 +886,6 @@ def start_daemon_process(
                 },
             },
         )
-    if isinstance(existing, dict):
-        release_daemon_lock(root_dir, work_id)
 
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
@@ -813,45 +914,82 @@ def start_daemon_process(
         str(max_cycles),
         "--max-runtime-minutes",
         str(max_runtime_minutes),
-        "--json",
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=str(Path(root_dir).resolve()),
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    now = utc_now()
+    if stuck_after_minutes is not None:
+        command.extend(["--stuck-after-minutes", str(stuck_after_minutes)])
+    command.append("--json")
+
+    lock_path = daemon_lock_path(root_dir, work_id)
+    lock_fd = runtime_lock_fd(lock_path)
+    if lock_fd is None:
+        release_daemon_lock(root_dir, work_id)
+        raise RuntimeError("Autonomous daemon lock fd is unavailable after acquisition.")
+    ready_read_fd, ready_write_fd = os.pipe()
+    env.update(inherited_runtime_lock_env(lock_path, ready_fd=ready_read_fd))
     write_daemon_lock(
         root_dir,
         work_id,
         {
             "mode": mode,
-            "pid": process.pid,
-            "started_at": now,
-            "heartbeat_at": now,
+            "pid": launcher_pid,
+            "started_at": lock.get("started_at"),
+            "heartbeat_at": utc_now(),
+            "transfer_pending": True,
+            "launcher_pid": launcher_pid,
         },
     )
-    state = _normalize_daemon_state(
-        root_dir,
-        work_id,
-        {
-            "status": "running",
-            "mode": mode,
-            "work_id": work_id,
-            "pid": process.pid,
-            "started_at": now,
-            "heartbeat_at": now,
-            "cycle_count": 0,
-            "max_cycles": max_cycles,
-            "poll_seconds": poll_seconds,
-            "max_runtime_minutes": max_runtime_minutes,
-        },
-    )
-    write_daemon_state(root_dir, work_id, state)
+    log_path = daemon_log_path(root_dir, work_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with log_path.open("ab") as log_handle:
+            process = subprocess.Popen(
+                command,
+                cwd=str(Path(root_dir).resolve()),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                pass_fds=(lock_fd, ready_read_fd),
+            )
+        write_daemon_lock(
+            root_dir,
+            work_id,
+            {
+                "mode": mode,
+                "pid": process.pid,
+                "started_at": lock.get("started_at"),
+                "heartbeat_at": utc_now(),
+                "transfer_pending": True,
+                "launcher_pid": launcher_pid,
+            },
+        )
+        now = utc_now()
+        state = _normalize_daemon_state(
+            root_dir,
+            work_id,
+            {
+                "status": "running",
+                "mode": mode,
+                "work_id": work_id,
+                "pid": process.pid,
+                "started_at": now,
+                "heartbeat_at": now,
+                "cycle_count": 0,
+                "max_cycles": max_cycles,
+                "poll_seconds": poll_seconds,
+                "max_runtime_minutes": max_runtime_minutes,
+            },
+        )
+        write_daemon_state(root_dir, work_id, state)
+        os.write(ready_write_fd, b"1")
+    except Exception:
+        release_daemon_lock(root_dir, work_id)
+        raise
+    finally:
+        os.close(ready_read_fd)
+        os.close(ready_write_fd)
+    detach_runtime_lock(lock_path)
     return state
 
 

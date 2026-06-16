@@ -3,9 +3,8 @@
 Runs the full chain of machine-driven gates on an already drafted thesis
 manuscript and produces a structured report with an honest status:
 
-- ``submission-ready`` — all gates passed;
-- ``strong-draft-with-blockers`` — one or more gates produced blockers;
-- ``blocked-runtime`` — pipeline itself failed (I/O, pandoc missing, etc.).
+- ``machine-gates-passed`` — every configured machine gate passed;
+- ``blocked`` — one or more gates failed or a mandatory gate was not configured.
 
 This is **not** a replacement for the Codex-driven workflow. It assumes
 that drafting, source verification at the agent level, and bibliography
@@ -130,6 +129,8 @@ class OneShotConfig:
     originality_threshold: float = 0.35
     conformance_profile: ConformanceProfile = field(default_factory=ConformanceProfile)
     require_docx: bool = True
+    require_frontmatter: bool = False
+    require_work_type: bool = False
     work_type: str | None = None
 
 
@@ -151,12 +152,30 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
                 )
             )
             artifacts["dissertation_artifacts"] = str(config.dissertation_artifacts_destination)
+        elif config.require_frontmatter:
+            gates.append(
+                _missing_required_gate(
+                    "dissertation-artifacts",
+                    "Dissertation metadata/artifact destination is required.",
+                    category="artifact",
+                    code="dissertation-artifacts-required",
+                )
+            )
         if config.dissertation_root:
             gates.extend(_dissertation_contour_gates(config.dissertation_root, profile))
             artifacts["dissertation_root"] = str(config.dissertation_root)
     elif config.metadata_path and config.frontmatter_destination:
         gates.append(_gate_frontmatter(config.metadata_path, config.frontmatter_destination))
         artifacts["frontmatter"] = str(config.frontmatter_destination)
+    elif config.require_frontmatter:
+        gates.append(
+            _missing_required_gate(
+                "vkr-frontmatter",
+                "VKR metadata/frontmatter destination is required.",
+                category="artifact",
+                code="vkr-frontmatter-required",
+            )
+        )
 
     gates.append(_gate_bibliography(config.manuscript_md))
     artifacts["manuscript"] = str(config.manuscript_md)
@@ -177,7 +196,17 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
                 )
                 config.originality_threshold = profile.maximum_originality_similarity
     elif config.work_type:
-        notes.append(f"unknown work_type '{config.work_type}' — structural gate skipped")
+        if config.require_work_type:
+            gates.append(
+                _missing_required_gate(
+                    "work-type-structure",
+                    f"Unknown work_type {config.work_type!r}; structural gate cannot run.",
+                    category="process",
+                    code="work-type-unknown",
+                )
+            )
+        else:
+            notes.append(f"unknown work_type '{config.work_type}' — structural gate skipped")
 
     if config.docx_path is not None:
         gates.append(
@@ -189,7 +218,24 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
         )
         artifacts["docx"] = str(config.docx_path)
 
-    if config.corpus_path is not None:
+    if config.corpus_path is None:
+        gates.append(
+            GateResult(
+                name="originality",
+                passed=False,
+                summary="Originality corpus is required; the gate cannot be skipped.",
+                blockers=(
+                    Blocker(
+                        category="originality",
+                        code="originality-corpus-required",
+                        message="Configure corpus_path and rerun the mandatory originality gate.",
+                        repairable=True,
+                        blocks_statuses=("submission-ready",),
+                    ),
+                ),
+            )
+        )
+    else:
         gates.append(
             _gate_originality(
                 config.manuscript_md,
@@ -197,11 +243,9 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
                 threshold=config.originality_threshold,
             )
         )
-    else:
-        notes.append("originality gate skipped: corpus_path not configured")
 
     finished = datetime.now(UTC)
-    status = "submission-ready" if all(g.passed for g in gates) else "strong-draft-with-blockers"
+    status = "machine-gates-passed" if all(g.passed for g in gates) else "blocked"
     return OneShotReport(
         status=status,
         started_at=started,
@@ -209,6 +253,29 @@ def run_one_shot(config: OneShotConfig) -> OneShotReport:
         gates=tuple(gates),
         artifacts=artifacts,
         notes=tuple(notes),
+    )
+
+
+def _missing_required_gate(
+    name: str,
+    summary: str,
+    *,
+    category: str,
+    code: str,
+) -> GateResult:
+    return GateResult(
+        name=name,
+        passed=False,
+        summary=summary,
+        blockers=(
+            Blocker(
+                category=category,
+                code=code,
+                message=summary,
+                repairable=True,
+                blocks_statuses=("submission-ready",),
+            ),
+        ),
     )
 
 
@@ -560,6 +627,21 @@ def _gate_originality(
     corpus_path: Path,
     threshold: float,
 ) -> GateResult:
+    if not corpus_path.exists():
+        return GateResult(
+            name="originality",
+            passed=False,
+            summary=f"Originality corpus is missing at {corpus_path}.",
+            blockers=(
+                Blocker(
+                    category="originality",
+                    code="originality-corpus-missing",
+                    message=f"Originality corpus not found: {corpus_path}",
+                    repairable=True,
+                    blocks_statuses=("submission-ready",),
+                ),
+            ),
+        )
     try:
         corpus = OriginalityCorpus.load(corpus_path)
     except (OSError, ValueError) as exc:
