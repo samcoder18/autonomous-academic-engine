@@ -59,7 +59,7 @@ ready for an unconditional release-quality claim**.
 - citation adequacy внутри глав;
 - legal/research quality verdict по содержанию `works/biometrics-vkr/thesis/`;
 - live network source acquisition;
-- production Telegram/Codex runs с реальными секретами.
+- production legacy-chat/Codex runs с реальными секретами.
 
 ## Baseline Snapshot
 

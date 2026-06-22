@@ -10,7 +10,7 @@
 
 ## 1. Резюме
 
-Проект представляет собой **оркестрируемый workspace**: регламенты (`meta/master-protocol.md`), роли (`agents/*.md`), шаблоны (`templates/`), CLI для Codex (`scripts/*.sh` → `telegram_console.work_cli`), Telegram-рантайм и автономный daemon поверх `WorkflowOrchestrator`. Канонический текст живёт в `works/<slug>/`; производные DOCX и трассы — в `output/`.
+Проект представляет собой **оркестрируемый workspace**: регламенты (`meta/master-protocol.md`), роли (`agents/*.md`), шаблоны (`templates/`), CLI для Codex (`scripts/*.sh` → `telegram_console.work_cli`), legacy chat/runtime слой и автономный daemon поверх `WorkflowOrchestrator`. Канонический текст живёт в `works/<slug>/`; производные DOCX и трассы — в `output/`.
 
 **Сильные стороны:** чёткая иерархия источников истины; разделение thesis/article; execution contracts и quality gates в коде; runtime reliability wave с общим persistence слоем для daemon/autonomous state; выделенные CLI/runtime regression packs; candidate dissertation contour с отдельными maps/reviews/publication artifacts; `skill-source-map audit` без расхождений для объявленных 19 skills; профили `work.toml` согласованы с `meta/standards/registry.toml`.
 
@@ -65,7 +65,7 @@ autonomous planner и CLI страхуются отдельными тестов
 ### 3.3 Subprocess и секреты
 
 - `**shell=True`**: в просмотренных вызовах `subprocess` в `telegram_console` **не обнаружено** — используются списки аргументов и `text=True` где уместно.
-- **Секреты**: `[telegram_console/config.py](../telegram_console/config.py)` читает `TELEGRAM_BOT_TOKEN`, SMTP, `CODEX_*` из окружения; отдельного логирования значений токенов в grep по паттернам не выявлено.
+- **Секреты**: `[telegram_console/config.py](../telegram_console/config.py)` читает legacy chat token, SMTP, `CODEX_*` из окружения; отдельного логирования значений токенов в grep по паттернам не выявлено.
 - **Широкие исключения**: после runtime wave intentional `except Exception` в touched scope остались в `[telegram_console/autonomous_daemon.py](../telegram_console/autonomous_daemon.py)` (top-level failsafe foreground loop) и `[telegram_console/autonomous_scheduler.py](../telegram_console/autonomous_scheduler.py)` (single-work failure isolation inside multi-work scheduling). Это скорее reliability containment, чем случайный broad catch, но для будущей типизации здесь всё ещё есть работа.
 
 ---
@@ -158,7 +158,7 @@ autonomous planner и CLI страхуются отдельными тестов
 | P2        | Постепенно снижать долю E501/I001 через `ruff format` / `--fix` в отдельных PR                                                         | Улучшает читаемость и pre-commit гигиену                |
 | P2        | Продолжать точечную полировку mixin-модулей оркестратора, а не возвращаться к монолиту                                                 | Поддерживаемость после завершённой декомпозиции         |
 | P3        | Заменить абсолютные URL в внутренних markdown-ссылках на относительные от корня репо                                                   | Переносимость документации                              |
-| P3        | Сужение `except Exception` в bot/work_cli к ожидаемым типам                                                                            | Проще отлаживать сбои Telegram/CLI                      |
+| P3        | Сужение `except Exception` в legacy bot/work_cli к ожидаемым типам                                                                     | Проще отлаживать сбои legacy runtime/CLI                |
 
 
 ---
@@ -179,5 +179,5 @@ python3 -m telegram_console.work_cli skill-source-map audit --json
 ## 10. Ограничения аудита
 
 - Не проводился предметный юридический разбор текстов в `works/biometrics-vkr/thesis/manuscript/`.
-- Не запускались реальные `codex exec` и Telegram-бот против продакшен-секретов.
+- Не запускались реальные `codex exec` и legacy bot layer против продакшен-секретов.
 - Внешние файлы `.codex/skills/*.md` вне репозитория в `skill-source-map audit` не передавались.

@@ -193,9 +193,9 @@
 
 ### 11.2 Операционный канал daemon'а
 
-- Долгоживущие компоненты (`autonomous_daemon.run_daemon_foreground`, Telegram bot) эмитят структурированные ops-alerts через [`telegram_console.ops_alerts`](../telegram_console/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
-- Конфигурация доставки: `OPS_ALERT_CHAT_ID` (Telegram-чат для ops-событий, **не** совпадающий с пользовательским чатом проекта) и `OPS_ALERT_LOG_PATH` (файл для offline-tee). Если ни одно не выставлено, алерты идут в stderr и в Python `logging` — local-run остаётся тихим, но событие не теряется.
+- Долгоживущий `autonomous_daemon.run_daemon_foreground` эмитит структурированные ops-alerts через [`telegram_console.ops_alerts`](../telegram_console/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
+- Конфигурация доставки: `OPS_ALERT_LOG_PATH` (файл для offline-tee). Если он не выставлен, алерты идут в stderr и в Python `logging` — local-run остаётся тихим, но событие не теряется.
 - Stuck-detector активируется флагом `--stuck-after-minutes` у `autonomous daemon run` или переменной `DAEMON_STUCK_AFTER_MINUTES`. При срабатывании daemon пишет terminal-state `run-stuck`, эмитит `daemon/run-stuck` (severity CRITICAL) и завершается штатно.
-- Ops-канал намеренно отделён от продуктовых уведомлений: сбой одного не блокирует другой. Любое изменение kind-ов алертов фиксируется в [tests/test_daemon_ops_integration.py](../tests/test_daemon_ops_integration.py) и в §6 unknowns.
+- Ops-канал намеренно отделён от пользовательского управления. Legacy compatibility layer не является поддерживаемой surface управления проектом. Любое изменение kind-ов алертов фиксируется в [tests/test_daemon_ops_integration.py](../tests/test_daemon_ops_integration.py) и в §6 unknowns.
 
 Известные пределы pipeline документированы в [meta/autonomous-engine-unknowns-2026-04-19.md](autonomous-engine-unknowns-2026-04-19.md). Любые pragmatic boundaries обновляются там, а не в прозе work-canon.

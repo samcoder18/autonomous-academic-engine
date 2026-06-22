@@ -9,11 +9,11 @@
 - Канонический deterministic entrypoint для локальной проверки и CI — именно `unittest discover`, а не один "главный" модуль.
 - Regression pack уже split по подсистемам:
   - [`test_daemon_ops_integration.py`](test_daemon_ops_integration.py), [`test_daemon_smoke.py`](test_daemon_smoke.py) — daemon, ops-alerts и runtime containment;
-  - [`test_work_cli_autonomous.py`](test_work_cli_autonomous.py), [`test_work_cli_launchd.py`](test_work_cli_launchd.py), [`test_work_cli_runtime.py`](test_work_cli_runtime.py) — JSON-first CLI surfaces, launchd/runtime status и machine-readable contracts;
+  - [`test_work_cli_autonomous.py`](test_work_cli_autonomous.py), [`test_work_cli_launchd.py`](test_work_cli_launchd.py), [`test_work_cli_runtime.py`](test_work_cli_runtime.py) — JSON-first CLI surfaces, legacy macOS service-manager compatibility, runtime status и machine-readable contracts;
   - [`test_work_bootstrap.py`](test_work_bootstrap.py), [`test_work_state.py`](test_work_state.py), [`test_work_type.py`](test_work_type.py) — work bundle bootstrap, next-action/state logic и profile coupling;
   - [`test_dissertation_artifacts.py`](test_dissertation_artifacts.py), [`test_dissertation_standards.py`](test_dissertation_standards.py), [`test_one_shot.py`](test_one_shot.py) — dissertation contour, standards gating и one-shot flows;
   - [`test_regression_harness.py`](test_regression_harness.py) — offline smoke вокруг публичных workflow surfaces.
-- Legacy coverage в [`test_telegram_console.py`](test_telegram_console.py) всё ещё есть, но это уже не единственный и не главный интеграционный центр.
+- Legacy coverage в [`test_telegram_console.py`](test_telegram_console.py) всё ещё есть, но имя файла историческое: актуальная supported surface — CLI/file-first, а не bot control surface.
 - Базовые тематические группы по-прежнему покрывают:
   - [`test_verdict_parser.py`](test_verdict_parser.py) — структурированные verdict-блоки;
   - [`test_ops_alerts.py`](test_ops_alerts.py), [`test_resource_guards.py`](test_resource_guards.py) — ops-каналы и resource guards;

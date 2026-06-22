@@ -14,7 +14,10 @@
 - Сборочные thesis-файлы и DOCX не редактируются вручную как основные документы.
 
 По умолчанию активная работа workspace: `starter-work`.
-CLI и Telegram runtime могут переключать `active work`.
+Актуальная surface управления — CLI/file-first. Историческое имя Python-пакета
+`telegram_console` сохраняется в import paths и командах `python3 -m
+telegram_console.work_cli`, но legacy compatibility layer не является
+поддерживаемым способом управления проектом.
 
 ## Агентные роли
 
