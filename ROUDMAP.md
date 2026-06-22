@@ -23,6 +23,7 @@
 - [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `telegram_console.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 7 completed.** Thesis works now bind to official `sogu-vkr-2025` with raw bundle available; the old `thesis-standards-raw-missing` blocker is gone, while the profile's honest conflict/applicability flag remains visible.
 - [x] **2026-06-22: Task 8 completed.** Added executable `scripts/audit_workspace_hygiene.sh` and a regression smoke test; the script prints git, ignored-path, standards, and skill-source-map hygiene signals without modifying files.
+- [x] **2026-06-22: Task 9 completed.** Final verification passed with 437 unittest tests, `ruff check`, `ruff format --check`, skill-source-map audit `ok=true`, and hygiene audit exit code 0.
 
 ## Initial Audit Baseline
 
@@ -573,7 +574,7 @@ Actual: script completed with exit code 0 and printed git status, tracked `outpu
 - Possibly modify: `README.md`
 - Possibly modify: `CHANGELOG.md`
 
-- [ ] **Step 1: Run full verification matrix**
+- [x] **Step 1: Run full verification matrix**
 
 Run:
 
@@ -586,7 +587,9 @@ python3 -m telegram_console.work_cli skill-source-map audit --json
 
 Expected: all checks pass and skill audit reports `ok: true`.
 
-- [ ] **Step 2: Confirm clean git state shape**
+Actual: 437 unittest tests passed; `ruff check telegram_console tests scripts/render_docx_preview.py` passed; `ruff format --check telegram_console tests scripts/render_docx_preview.py` passed; skill-source-map audit reported `"ok": true`; hygiene audit exited 0.
+
+- [x] **Step 2: Confirm clean git state shape**
 
 Run:
 
@@ -596,11 +599,15 @@ git status --short
 
 Expected: only intended source/doc changes are present; no `frontend/`, `output/runtime/`, `academic_engine/`, `.next/`, `node_modules/`, or one-shot JSON traces appear.
 
-- [ ] **Step 3: Update this roadmap**
+Actual: pre-closeout hygiene audit printed an empty `git status`; ignored generated paths are covered by `.gitignore`.
+
+- [x] **Step 3: Update this roadmap**
 
 Mark completed tasks with `[x]`, add final verification output summary to `Progress Log`, and leave any intentionally deferred items unchecked with a reason.
 
-- [ ] **Step 4: Commit closeout**
+Actual: completed tasks are checked off and resolved decisions are recorded below.
+
+- [x] **Step 4: Commit closeout**
 
 ```bash
 git add ROUDMAP.md .gitignore output/README.md telegram_console tests scripts works meta README.md CHANGELOG.md
@@ -615,14 +622,14 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 2. Task 2: local generated junk cleanup.
 3. Task 5: CLI traceback fix.
 4. Task 4: one-shot report versioning and legacy cleanup.
-5. Task 7: standards profile drift.
-6. Task 3: output/docx policy.
-7. Task 6: duplicate DOCX helper consolidation.
+5. Task 3: output/docx policy.
+6. Task 6: duplicate DOCX helper consolidation.
+7. Task 7: standards profile drift.
 8. Task 8: hygiene audit script.
 9. Task 9: final verification and closeout.
 
-## Deferred Decisions
+## Resolved Decisions
 
-- Whether versioned PDF/PNG snapshots under `output/docx/` are legitimate evidence snapshots or should be removed from git.
-- Whether thesis works should use `sogu-vkr-2025` or keep a repo-defined `ru-vkr-university-default` profile with a real raw bundle.
-- Whether `frontend/` is a future app root or only accidental local build output. Current evidence shows no tracked source files under `frontend/`.
+- Versioned PDF/PNG snapshots under `output/docx/` are generated output and were removed from git index.
+- Existing thesis works now use official `sogu-vkr-2025`; the profile's conflict/applicability flag remains visible instead of being hidden.
+- `frontend/` had no tracked source and is treated as local generated/build output until a real frontend app is intentionally added.
