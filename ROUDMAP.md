@@ -21,6 +21,7 @@
 - [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `telegram_console.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
+- [x] **2026-06-22: Task 7 completed.** Thesis works now bind to official `sogu-vkr-2025` with raw bundle available; the old `thesis-standards-raw-missing` blocker is gone, while the profile's honest conflict/applicability flag remains visible.
 
 ## Initial Audit Baseline
 
@@ -455,7 +456,7 @@ Actual: `tests.test_docx_preview`, `tests.test_docx_conformance`, full unittest 
 - Modify or add raw bundle: `meta/standards/raw/ru-vkr-university-default/manifest.json`
 - Possibly modify: `meta/standards/registry.toml`
 
-- [ ] **Step 1: Decide profile strategy**
+- [x] **Step 1: Decide profile strategy**
 
 For each thesis work, choose one:
 
@@ -471,7 +472,9 @@ thesis_profile = "ru-vkr-university-default"
 
 Expected: every thesis work uses a profile whose raw/normalized authority status is intentional.
 
-- [ ] **Step 2: If using `sogu-vkr-2025`, update work configs**
+Actual: chose `sogu-vkr-2025` rather than creating a synthetic raw manifest for provisional `ru-vkr-university-default`.
+
+- [x] **Step 2: If using `sogu-vkr-2025`, update work configs**
 
 Modify:
 
@@ -483,7 +486,9 @@ works/state-essence-role-coursework/work.toml
 
 Expected: `standards.thesis_profile` points to the selected official profile.
 
-- [ ] **Step 3: If keeping `ru-vkr-university-default`, add raw manifest**
+Actual: updated all three thesis work configs and the constitutional amendments work canon note that referenced the old profile.
+
+- [x] **Step 3: If keeping `ru-vkr-university-default`, add raw manifest**
 
 Create:
 
@@ -493,7 +498,9 @@ meta/standards/raw/ru-vkr-university-default/manifest.json
 
 Expected: `standards-status ru-vkr-university-default` no longer reports `raw=missing`.
 
-- [ ] **Step 4: Verify work status**
+Actual: not applicable because the selected strategy is `sogu-vkr-2025`.
+
+- [x] **Step 4: Verify work status**
 
 Run:
 
@@ -504,6 +511,8 @@ python3 -m telegram_console.work_cli work-status --work state-essence-role-cours
 ```
 
 Expected: no `thesis-standards-raw-missing` blocker remains unless the profile is intentionally provisional.
+
+Actual: all three work-status checks resolve thesis profile `sogu-vkr-2025` with `raw_status=available`. The remaining standards blocker is `thesis-standards-conflict`, preserving the official profile's conflict/applicability warning.
 
 ---
 

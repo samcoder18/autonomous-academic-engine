@@ -8,7 +8,7 @@ active_lanes = ["thesis"]
 work_canon = "work-canon.md"
 
 [standards]
-thesis_profile = "ru-vkr-university-default"
+thesis_profile = "sogu-vkr-2025"
 
 [thesis]
 root_dir = "thesis"
