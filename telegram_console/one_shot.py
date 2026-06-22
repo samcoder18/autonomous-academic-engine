@@ -32,6 +32,8 @@ from .thesis_runtime_signals import extract_thesis_runtime_signals
 from .vkr_artifacts import build_bundle, write_bundle
 from .work_type import WorkTypeProfile, resolve_profile, validate_structure
 
+ONE_SHOT_REPORT_VERSION = "one-shot-report/v2"
+
 
 @dataclass(frozen=True)
 class GateResult:
@@ -69,6 +71,7 @@ class OneShotReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "version": ONE_SHOT_REPORT_VERSION,
             "status": self.status,
             "started_at": self.started_at.isoformat(),
             "finished_at": self.finished_at.isoformat(),

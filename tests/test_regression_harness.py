@@ -15,6 +15,8 @@ manually so that this harness runs offline in CI.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -176,6 +178,26 @@ class RepairBudgetInvariantsTests(unittest.TestCase):
             )
             self.assertEqual(len(report.gates), 2)
             self.assertEqual(report.status, "blocked")
+
+
+class WorkspaceHygieneAuditTests(unittest.TestCase):
+    def test_workspace_hygiene_audit_script_runs(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = root / "scripts" / "audit_workspace_hygiene.sh"
+
+        self.assertTrue(script.exists())
+        self.assertTrue(os.access(script, os.X_OK))
+        proc = subprocess.run(
+            [str(script)],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Registry path:", proc.stdout)
+        self.assertIn('"ok": true', proc.stdout)
 
 
 if __name__ == "__main__":

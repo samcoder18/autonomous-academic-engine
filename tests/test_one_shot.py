@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import unittest
 import zipfile
 from pathlib import Path
@@ -13,6 +14,8 @@ from telegram_console.one_shot import (
     run_one_shot,
     write_report,
 )
+from telegram_console.orchestrator_exports import require_machine_gates_passed
+from telegram_console.orchestrator_support import WorkflowError
 from telegram_console.originality.corpus import OriginalityCorpus
 
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -287,6 +290,26 @@ class OneShotTests(unittest.TestCase):
             self.assertTrue(all(g.passed for g in report.gates))
             self.assertTrue((frontmatter_dir / "title-page.md").exists())
 
+    def test_report_dict_contains_v2_version(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manuscript = root / "manuscript.md"
+            manuscript.write_text(_GOOD_MANUSCRIPT, encoding="utf-8")
+            docx = _minimal_docx(root / "thesis.docx")
+            metadata = root / "metadata.toml"
+            _write_metadata(metadata)
+            report = run_one_shot(
+                OneShotConfig(
+                    manuscript_md=manuscript,
+                    docx_path=docx,
+                    metadata_path=metadata,
+                    frontmatter_destination=root / "frontmatter",
+                    corpus_path=_empty_corpus(root / "corpus.json"),
+                )
+            )
+
+        self.assertEqual(report.to_dict().get("version"), "one-shot-report/v2")
+
     def test_missing_docx_is_blocker(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -395,6 +418,40 @@ class OneShotTests(unittest.TestCase):
             self.assertTrue(md_path.exists())
             self.assertTrue(json_path.exists())
             self.assertIn("One-shot thesis report", md_path.read_text(encoding="utf-8"))
+
+    def test_legacy_submission_ready_report_does_not_unlock_export(self) -> None:
+        with TemporaryDirectory() as tmp:
+            reviews_dir = Path(tmp)
+            (reviews_dir / "2026-06-14-one-shot-report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "submission-ready",
+                        "finished_at": "2026-06-14T00:00:00+00:00",
+                        "gates": [{"gate": "originality", "passed": True}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "machine gates"):
+                require_machine_gates_passed(reviews_dir)
+
+    def test_legacy_machine_gate_report_without_v2_version_does_not_unlock_export(self) -> None:
+        with TemporaryDirectory() as tmp:
+            reviews_dir = Path(tmp)
+            (reviews_dir / "2026-06-14-one-shot-report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "machine-gates-passed",
+                        "finished_at": "2026-06-14T00:00:00+00:00",
+                        "gates": [{"gate": "originality", "passed": True}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(WorkflowError, "machine gates"):
+                require_machine_gates_passed(reviews_dir)
 
     def test_managed_thesis_bundle_blocks_incomplete_quality_contract(self) -> None:
         with TemporaryDirectory() as tmp:

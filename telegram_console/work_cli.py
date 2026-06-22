@@ -25,6 +25,7 @@ from .article_bundle_state import (
 from .autonomous_policy import AUTONOMOUS_MODES
 from .orchestrator import WorkflowOrchestrator
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
+from .orchestrator_support import WorkflowError
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
 from .standards import (
     StandardProfileResolution,
@@ -345,7 +346,7 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return skill_source_map_cli(root_path, args)
         if args.command == "autonomous":
             return handle_autonomous_cli(root_path, args)
-    except WorkspaceConfigError as exc:
+    except (WorkspaceConfigError, WorkflowError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 1

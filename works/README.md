@@ -10,3 +10,6 @@
 - `articles/` - article lane bundle, если работа включает статьи.
 
 Корневой `workspace.toml` выбирает `default_work` и связывает workspace с отдельными work bundle.
+
+В clean snapshot репозитория содержательные научные работы не хранятся. Оставлен
+только `starter-work` как пустой технический якорь для CLI и новых work-bundle.

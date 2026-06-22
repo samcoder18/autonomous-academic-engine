@@ -9,11 +9,17 @@ __pycache__/
 .eggs/
 .ruff_cache/
 
-# Собранные DOCX — производные артефакты (источник истины — Markdown в works/)
-output/docx/**/*.docx
+# Собранные DOCX/PDF/render previews — производные артефакты (источник истины — Markdown в works/)
+output/docx/
 
 output/telegram/projects.json
 output/telegram/runtime/
+
+# Local runtime databases
+output/runtime/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Автогенерируемые артефакты автономного движка
 output/sources-cache/

@@ -199,7 +199,7 @@ class TelegramConsoleBot:
             return
         self.safe_send(
             chat_id,
-            "Это старое меню уже устарело. Открываю актуальную панель ✨",
+            "Это старое меню уже устарело. Открываю актуальное меню.",
             reply_markup=self.main_menu_markup,
         )
         self._show_dashboard(chat_id)
