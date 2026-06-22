@@ -20,6 +20,7 @@
 - [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
+- [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `telegram_console.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
 
 ## Initial Audit Baseline
 
@@ -382,7 +383,7 @@ Expected: all tests pass.
 - Remove after replacement: work-local `thesis/format_docx.py` scripts
 - Test: `tests/test_docx_conformance.py` or a new focused test file
 
-- [ ] **Step 1: Diff existing helpers**
+- [x] **Step 1: Diff existing helpers**
 
 Run:
 
@@ -392,7 +393,9 @@ diff -u works/martial-law-coursework/thesis/format_docx.py works/constitutional-
 
 Expected: identify which behavior is shared and which behavior is work-specific.
 
-- [ ] **Step 2: Extract shared behavior**
+Actual: shared font/page/numbering/metadata behavior was extracted; work-specific title spacing, major titles, contents-table handling, and metadata were moved to config.
+
+- [x] **Step 2: Extract shared behavior**
 
 Create a single helper with a work argument:
 
@@ -403,7 +406,9 @@ python3 scripts/render_docx_preview.py --work constitutional-amendments-implemen
 
 Expected: no work-specific script is needed under `works/<slug>/thesis/`.
 
-- [ ] **Step 3: Preserve work-specific settings as config**
+Actual: created `telegram_console/docx_preview.py` and `scripts/render_docx_preview.py`. CLI smoke checks load real work config and return a clean input/dependency error instead of a traceback when rendering prerequisites are absent.
+
+- [x] **Step 3: Preserve work-specific settings as config**
 
 If settings differ, put them in `work.toml` under a narrow section:
 
@@ -414,7 +419,9 @@ enabled = true
 
 Expected: behavior is data-driven, not copied script-driven.
 
-- [ ] **Step 4: Remove duplicate helpers**
+Actual: added `[thesis.docx_preview]` settings to the two affected work bundles.
+
+- [x] **Step 4: Remove duplicate helpers**
 
 Run:
 
@@ -424,7 +431,9 @@ git rm works/martial-law-coursework/thesis/format_docx.py works/constitutional-a
 
 Expected: duplicate scripts are gone after the shared helper passes equivalent checks.
 
-- [ ] **Step 5: Verify**
+Actual: removed both work-local `thesis/format_docx.py` scripts.
+
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -434,6 +443,8 @@ python3 -m unittest discover -s tests -q
 ```
 
 Expected: DOCX conformance tests and full suite pass.
+
+Actual: `tests.test_docx_preview`, `tests.test_docx_conformance`, full unittest discovery, `ruff check`, and `ruff format --check` passed. `python-docx` is optional and not installed in the current environment, so runtime formatting itself was not executed.
 
 ---
 
