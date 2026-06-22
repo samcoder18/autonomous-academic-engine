@@ -649,13 +649,15 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 
 ## Addendum: Documentation Control-Surface Cleanup
 
-- [x] Removed stale remote-chat management wording from active repository
+- [x] Removed stale external-control management wording from active repository
   documentation.
-- [x] Reframed `telegram_console` as a historical Python package name for the
-  supported local CLI/file-first workflow.
+- [x] Reframed the historical internal package name behind a supported local
+  CLI/file-first workflow.
 - [x] Rewrote runtime and ops-alert docs around local CLI, generated files, and
   `OPS_ALERT_LOG_PATH`.
 - [x] Added notes where historical audit files mention removed runtime layers,
   so old snapshots are not mistaken for current operating instructions.
-- [x] Verified Markdown/TOML/shell docs no longer advertise remote-chat-based
+- [x] Verified Markdown/TOML/shell docs no longer advertise external-control
   project management.
+- [x] Added `scripts/work_cli.sh` as the user-facing CLI wrapper and removed
+  visible legacy package/runtime names from GitHub-facing README commands.
