@@ -19,8 +19,9 @@
 - [x] **2026-06-22: Task 2 completed.** Ignored generated directories `frontend/`, `output/runtime/`, and `academic_engine/` were removed after dry-run confirmation; git status stayed clean afterward.
 - [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
+- [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
 
-## Current Baseline
+## Initial Audit Baseline
 
 - Test suite: `python3 -m unittest discover -s tests -q` passed with 429 tests.
 - Lint: `ruff check telegram_console tests` passed.
@@ -164,7 +165,7 @@ Expected: cleanup does not create source deletions outside the intended `.gitign
 - Possibly remove from git index: generated files under `output/docx/constitutional-amendments-implementation-coursework/`
 - Possibly keep: explicitly documented evidence snapshots
 
-- [ ] **Step 1: Inventory tracked output files**
+- [x] **Step 1: Inventory tracked output files**
 
 Run:
 
@@ -174,7 +175,9 @@ git ls-files output/docx
 
 Expected: list all currently versioned PDF, PNG, and render-tool files under `output/docx/`.
 
-- [ ] **Step 2: Choose one policy**
+Actual: 136 tracked files were found before cleanup: 135 generated PDF/PNG render files under `output/docx/constitutional-amendments-implementation-coursework/` plus legacy `output/docx/state-essence-role-coursework/render-tools/render_docx.py`.
+
+- [x] **Step 2: Choose one policy**
 
 Use one of these two policies and write it into `output/README.md`:
 
@@ -194,7 +197,9 @@ or:
 `output/docx/` is generated output and must not be committed. Canonical text lives under `works/<slug>/`. Visual render checks should be regenerated locally and excluded from git.
 ```
 
-- [ ] **Step 3: If generated snapshots should not be versioned, remove them from git index**
+Chosen: strict generated-output policy. `output/docx/` is ignored as generated output; reusable renderer code must move to `scripts/` or `telegram_console/` in Task 6.
+
+- [x] **Step 3: If generated snapshots should not be versioned, remove them from git index**
 
 Run:
 
@@ -204,7 +209,9 @@ git rm -r output/docx/constitutional-amendments-implementation-coursework
 
 Expected: generated snapshots are staged for removal, while `output/README.md` remains tracked.
 
-- [ ] **Step 4: If evidence snapshots should stay versioned, add an evidence note**
+Actual: removed the constitutional render bundle with `git rm -r --cached output/docx/constitutional-amendments-implementation-coursework`, so local files remain available but are no longer tracked.
+
+- [x] **Step 4: If evidence snapshots should stay versioned, add an evidence note**
 
 Create:
 
@@ -222,7 +229,9 @@ These files are retained as visual evidence snapshots for the constitutional-ame
 Regenerate only from the canonical Markdown and record the command used in the relevant review artifact.
 ```
 
-- [ ] **Step 5: Verify**
+Actual: not applicable because snapshots should not stay versioned under the chosen strict policy.
+
+- [x] **Step 5: Verify**
 
 Run:
 
