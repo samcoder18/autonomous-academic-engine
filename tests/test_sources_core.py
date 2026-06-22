@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console.sources import (
+from academic_engine.sources import (
     AccessProvenance,
     ConnectorRegistry,
     FetchResult,
@@ -13,7 +13,7 @@ from telegram_console.sources import (
     SourceCache,
     SourceKind,
 )
-from telegram_console.sources.cache import default_ttl_for
+from academic_engine.sources.cache import default_ttl_for
 
 
 class _FakeConnector:

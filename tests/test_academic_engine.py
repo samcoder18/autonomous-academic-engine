@@ -13,23 +13,23 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from telegram_console import chat_wrapper as chat_wrapper_module
-from telegram_console import run_wrapper as run_wrapper_module
-from telegram_console import work_cli as work_cli_module
-from telegram_console.action_specs import (
+from academic_engine import chat_wrapper as chat_wrapper_module
+from academic_engine import run_wrapper as run_wrapper_module
+from academic_engine import work_cli as work_cli_module
+from academic_engine.action_specs import (
     build_article_execution_contract,
     build_thesis_execution_contract,
     list_action_specs,
 )
-from telegram_console.agent_chat import (
+from academic_engine.agent_chat import (
     AgentBusyError,
     AgentChatService,
     AgentTurnNotification,
     ProjectChatState,
 )
-from telegram_console.article_bundle_state import article_bundle_manifest_path
-from telegram_console.article_runtime_signals import extract_article_artifact_signals
-from telegram_console.autonomous_daemon import (
+from academic_engine.article_bundle_state import article_bundle_manifest_path
+from academic_engine.article_runtime_signals import extract_article_artifact_signals
+from academic_engine.autonomous_daemon import (
     acquire_daemon_lock,
     daemon_lock_path,
     daemon_state_path,
@@ -45,13 +45,13 @@ from telegram_console.autonomous_daemon import (
     write_daemon_lock,
     write_daemon_state,
 )
-from telegram_console.autonomous_launchd import (
+from academic_engine.autonomous_launchd import (
     DEFAULT_AUTONOMOUS_DAEMON_LABEL,
     AutonomousDaemonLaunchdManager,
 )
-from telegram_console.autonomous_planner import build_autonomous_plan
-from telegram_console.autonomous_policy import evaluate_autonomous_policy
-from telegram_console.autonomous_scheduler import (
+from academic_engine.autonomous_planner import build_autonomous_plan
+from academic_engine.autonomous_policy import evaluate_autonomous_policy
+from academic_engine.autonomous_scheduler import (
     build_multi_work_schedule,
     multi_daemon_lock_path,
     multi_daemon_state_path,
@@ -60,37 +60,37 @@ from telegram_console.autonomous_scheduler import (
     run_multi_work_daemon_tick,
     start_multi_work_daemon_process,
 )
-from telegram_console.bot import MAIN_MENU, TelegramConsoleBot, main
-from telegram_console.config import TelegramConsoleConfig
-from telegram_console.contract_gates import evaluate_contract_gates
-from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
-from telegram_console.finalization_engine import evaluate_article_finalization
-from telegram_console.guarded_prose import load_guarded_prose_rules
-from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
-from telegram_console.one_shot import ONE_SHOT_REPORT_VERSION
-from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
-from telegram_console.projects import ProjectService
-from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
-from telegram_console.quality_advisories import build_quality_advisories
-from telegram_console.repair_kernel import (
+from academic_engine.bot import MAIN_MENU, TelegramConsoleBot, main
+from academic_engine.config import TelegramConsoleConfig
+from academic_engine.contract_gates import evaluate_contract_gates
+from academic_engine.email_delivery import EmailDeliveryError, SmtpDocxSender, SmtpSettings
+from academic_engine.finalization_engine import evaluate_article_finalization
+from academic_engine.guarded_prose import load_guarded_prose_rules
+from academic_engine.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
+from academic_engine.one_shot import ONE_SHOT_REPORT_VERSION
+from academic_engine.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
+from academic_engine.projects import ProjectService
+from academic_engine.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
+from academic_engine.quality_advisories import build_quality_advisories
+from academic_engine.repair_kernel import (
     Blocker,
     build_repair_plan,
     run_bounded_repair_loop,
 )
-from telegram_console.runtime_status import build_runtime_status, record_from_payload
-from telegram_console.skill_source_map import (
+from academic_engine.runtime_status import build_runtime_status, record_from_payload
+from academic_engine.skill_source_map import (
     audit_skill_source_map,
     load_skill_source_map,
     skills_declared_in_agents,
     sync_external_skill_sources,
 )
-from telegram_console.standards import load_standards_registry, resolve_standard_profile
-from telegram_console.telegram_api import TelegramApiError, TelegramBotApi
-from telegram_console.thesis_evidence_ledger import audit_thesis_ledgers
-from telegram_console.thesis_repair_planner import build_thesis_repair_plan
-from telegram_console.thesis_runtime_signals import extract_thesis_runtime_signals
-from telegram_console.work_state import build_work_state
-from telegram_console.workspace import (
+from academic_engine.standards import load_standards_registry, resolve_standard_profile
+from academic_engine.telegram_api import TelegramApiError, TelegramBotApi
+from academic_engine.thesis_evidence_ledger import audit_thesis_ledgers
+from academic_engine.thesis_repair_planner import build_thesis_repair_plan
+from academic_engine.thesis_runtime_signals import extract_thesis_runtime_signals
+from academic_engine.work_state import build_work_state
+from academic_engine.workspace import (
     article_bundle_paths,
     legacy_target_entries,
     legacy_target_prefixes,
@@ -781,12 +781,12 @@ def add_demo_work_clone(root: Path, slug: str, *, include_review: bool = False) 
 
 def build_fake_launchd_files(root: Path) -> None:
     write_file(
-        root / "scripts/run_telegram_console_launchd.sh",
+        root / "scripts/run_academic_engine_launchd.sh",
         "#!/usr/bin/env bash\nexit 0\n",
         executable=True,
     )
     write_file(
-        root / "deploy/local-telegram-console.plist",
+        root / "deploy/local-academic-engine.plist",
         textwrap.dedent(
             """\
             <?xml version="1.0" encoding="UTF-8"?>
@@ -1352,7 +1352,7 @@ class SmtpDocxSenderTests(unittest.TestCase):
         )
 
         with patch(
-            "telegram_console.email_delivery.smtplib.SMTP",
+            "academic_engine.email_delivery.smtplib.SMTP",
             side_effect=lambda host, port, timeout: DummySmtpClient(
                 host,
                 port,
@@ -1380,11 +1380,11 @@ class SmtpDocxSenderTests(unittest.TestCase):
         )
 
         with patch(
-            "telegram_console.email_delivery.smtplib.SMTP",
+            "academic_engine.email_delivery.smtplib.SMTP",
             side_effect=AssertionError("SMTP should not be used for SSL"),
         ):
             with patch(
-                "telegram_console.email_delivery.smtplib.SMTP_SSL",
+                "academic_engine.email_delivery.smtplib.SMTP_SSL",
                 side_effect=lambda host, port, timeout: DummySmtpClient(
                     host,
                     port,
@@ -5412,7 +5412,7 @@ class AutonomousDaemonTests(unittest.TestCase):
         write_sample_standards_registry(self.root)
         write_sample_normalized_profiles(self.root)
         self.orchestrator = WorkflowOrchestrator(self.root)
-        from telegram_console import ops_alerts as _ops_alerts
+        from academic_engine import ops_alerts as _ops_alerts
 
         self._prev_sink = _ops_alerts._default_sink
         _ops_alerts.configure_default_sink(
@@ -5420,7 +5420,7 @@ class AutonomousDaemonTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
-        from telegram_console import ops_alerts as _ops_alerts
+        from academic_engine import ops_alerts as _ops_alerts
 
         _ops_alerts._default_sink = self._prev_sink
         self.tempdir.cleanup()
@@ -5678,8 +5678,8 @@ class AutonomousDaemonTests(unittest.TestCase):
         class FakeProcess:
             pid = 4321
 
-        with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()) as popen:
-            with patch("telegram_console.autonomous_daemon._pid_is_alive", return_value=True):
+        with patch("academic_engine.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with patch("academic_engine.autonomous_daemon._pid_is_alive", return_value=True):
                 first = start_daemon_process(
                     root_dir=self.root,
                     work_id=TEST_WORK_ID,
@@ -5919,8 +5919,8 @@ class AutonomousMultiWorkDaemonSchedulerTests(unittest.TestCase):
         class FakeProcess:
             pid = 7654
 
-        with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()) as popen:
-            with patch("telegram_console.autonomous_scheduler._pid_is_alive", return_value=True):
+        with patch("academic_engine.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with patch("academic_engine.autonomous_scheduler._pid_is_alive", return_value=True):
                 first = start_multi_work_daemon_process(
                     root_dir=self.root,
                     works_scope="all",
@@ -6422,7 +6422,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
             with patch(
-                "telegram_console.standards.fetch_url_bytes",
+                "academic_engine.standards.fetch_url_bytes",
                 side_effect=lambda url: fetch_payloads[url],
             ):
                 with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -6447,7 +6447,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
             with patch(
-                "telegram_console.standards.fetch_url_bytes",
+                "academic_engine.standards.fetch_url_bytes",
                 side_effect=[
                     (b"first-home", "https://example.test/jrp-home.html", "text/html"),
                     (b"first-rules", "https://example.test/jrp-rules.html", "text/html"),
@@ -6705,7 +6705,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             }
 
             with patch(
-                "telegram_console.orchestrator.WorkflowOrchestrator.start_run",
+                "academic_engine.orchestrator.WorkflowOrchestrator.start_run",
                 return_value=queued,
             ) as start_run:
                 stdout = StringIO()
@@ -6905,7 +6905,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
 
-            with patch("telegram_console.bot.LaunchdServiceManager", return_value=manager):
+            with patch("academic_engine.bot.LaunchdServiceManager", return_value=manager):
                 with redirect_stdout(stdout), redirect_stderr(stderr):
                     code = main(["--root", str(bot_home), "service", "install"])
 
@@ -6929,7 +6929,7 @@ class TelegramConsoleCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
 
-            with patch("telegram_console.bot.LaunchdServiceManager", return_value=manager):
+            with patch("academic_engine.bot.LaunchdServiceManager", return_value=manager):
                 with redirect_stdout(stdout), redirect_stderr(stderr):
                     code = main(["--root", str(bot_home), "service", "status"])
 
@@ -7064,7 +7064,7 @@ class AutonomousDaemonLaunchdManagerTests(unittest.TestCase):
         self.assertEqual(result.status.label, DEFAULT_AUTONOMOUS_DAEMON_LABEL)
         self.assertTrue(manager.paths.installed_plist.exists())
         plist_text = manager.paths.installed_plist.read_text(encoding="utf-8")
-        self.assertIn("telegram_console.work_cli", plist_text)
+        self.assertIn("academic_engine.work_cli", plist_text)
         self.assertIn("autonomous", plist_text)
         self.assertIn("daemon", plist_text)
         self.assertIn("--works", plist_text)
@@ -7090,7 +7090,7 @@ class AutonomousDaemonLaunchdManagerTests(unittest.TestCase):
 class TelegramApiTests(unittest.TestCase):
     def test_timeout_is_wrapped_into_telegram_api_error(self) -> None:
         api = TelegramBotApi("test-token")
-        with patch("telegram_console.telegram_api.request.urlopen", side_effect=TimeoutError("boom")):
+        with patch("academic_engine.telegram_api.request.urlopen", side_effect=TimeoutError("boom")):
             with self.assertRaisesRegex(TelegramApiError, "timeout"):
                 api.get_updates(timeout=1)
 

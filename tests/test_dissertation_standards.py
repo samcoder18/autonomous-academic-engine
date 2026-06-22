@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from telegram_console.standards import load_standards_registry
+from academic_engine.standards import load_standards_registry
 
 
 class DissertationStandardsRegistryTests(unittest.TestCase):

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console.originality import (
+from academic_engine.originality import (
     OriginalityChecker,
     OriginalityCorpus,
     fingerprint,

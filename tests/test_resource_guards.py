@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from telegram_console.resource_guards import (
+from academic_engine.resource_guards import (
     ResourceGuardError,
     RetryBudget,
     RunGuards,

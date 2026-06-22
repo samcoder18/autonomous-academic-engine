@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI wrapper for telegram_console.docx_preview."""
+"""CLI wrapper for academic_engine.docx_preview."""
 
 from __future__ import annotations
 
@@ -11,6 +11,6 @@ sys.path.insert(0, str(ROOT_DIR))
 
 
 if __name__ == "__main__":
-    from telegram_console.docx_preview import main
+    from academic_engine.docx_preview import main
 
     raise SystemExit(main())

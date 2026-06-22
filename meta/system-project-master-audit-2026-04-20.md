@@ -26,9 +26,9 @@ ready for an unconditional release-quality claim**.
 
 - deterministic offline verification matrix зелёный:
   - `python3 -m unittest discover -s tests -q` -> `385 tests OK`;
-  - `ruff check telegram_console/ tests/` -> OK;
-  - `ruff format --check telegram_console/ tests/` -> OK;
-  - `python3 -m telegram_console.work_cli skill-source-map audit --json` -> `ok=true`.
+  - `ruff check academic_engine/ tests/` -> OK;
+  - `ruff format --check academic_engine/ tests/` -> OK;
+  - `python3 -m academic_engine.work_cli skill-source-map audit --json` -> `ok=true`.
 - public CLI smoke для `work init`, `work-status --json`,
   `build-dissertation-artifacts`, `one-shot-thesis`, `one-shot-dissertation`
   проходит без runtime crash и удерживает ожидаемый contract.
@@ -47,7 +47,7 @@ ready for an unconditional release-quality claim**.
 
 Включено:
 
-- `telegram_console/`, `scripts/`, `tests/`, `meta/`, `README.md`, `AGENTS.md`,
+- `academic_engine/`, `scripts/`, `tests/`, `meta/`, `README.md`, `AGENTS.md`,
   `.github/workflows/ci.yml`, `workspace.toml`, `works/biometrics-vkr/work.toml`;
 - runtime, daemon, launchd, CLI/public contracts, dissertation contour,
   work-state/work-type logic, standards registry, docs-truth, CI/test reality;
@@ -67,7 +67,7 @@ ready for an unconditional release-quality claim**.
 
 - `git status --short` показывает **65 changed entries**.
 - Разрез по верхним зонам:
-  - `telegram_console`: 24
+  - `academic_engine`: 24
   - `meta`: 12
   - `tests`: 12
   - `templates`: 7
@@ -86,16 +86,16 @@ release-quality claim.
 Подтверждённые локальные проверки этой волны:
 
 - `python3 -m unittest discover -s tests -q` -> `385 tests OK`
-- `ruff check telegram_console/ tests/` -> OK
-- `ruff format --check telegram_console/ tests/` -> OK
-- `python3 -m telegram_console.work_cli skill-source-map audit --json` ->
+- `ruff check academic_engine/ tests/` -> OK
+- `ruff format --check academic_engine/ tests/` -> OK
+- `python3 -m academic_engine.work_cli skill-source-map audit --json` ->
   `declared_skill_count=19`, `manifest_skill_count=19`, `issues=[]`
 
 CI currently runs:
 
-- `ruff check telegram_console tests`
+- `ruff check academic_engine tests`
 - `python3 -m unittest discover -s tests -q`
-- `python3 -m telegram_console.work_cli skill-source-map audit --json`
+- `python3 -m academic_engine.work_cli skill-source-map audit --json`
 - `tests.test_regression_harness`
 - fake verdict parser smoke
 
@@ -112,7 +112,7 @@ Work config from historical `works/biometrics-vkr/work.toml` (bundle removed fro
 - thesis profile: `sogu-vkr-2025`
 - article profile: `ru-law-article-v1`
 
-Read-only status snapshot via `python3 -m telegram_console.work_cli work-status --json`:
+Read-only status snapshot via `python3 -m academic_engine.work_cli work-status --json`:
 
 - no active run;
 - next safe action: `launch-thesis review-section works/biometrics-vkr/thesis/manuscript/sections/00-title.md`
@@ -146,14 +146,14 @@ Confidence: `confirmed`
 Evidence:
 
 - [tests/README.md](../tests/README.md) still says the “main integration module” is
-  `test_telegram_console.py` and frames test splitting as a future option.
+  `test_academic_engine.py` and frames test splitting as a future option.
 - The current tree already contains dedicated modules such as
   `tests/test_work_cli_autonomous.py`, `tests/test_work_cli_launchd.py`,
   `tests/test_work_cli_runtime.py`, `tests/test_daemon_smoke.py`,
   `tests/test_work_state.py`.
 - [runtime-reliability-backlog-2026-04-20.md](runtime-reliability-backlog-2026-04-20.md)
   explicitly marks the split of overloaded CLI/runtime tests out of
-  `tests/test_telegram_console.py` as **closed**.
+  `tests/test_academic_engine.py` as **closed**.
 
 Why this matters:
 
@@ -171,7 +171,7 @@ Evidence:
 - [README.md](../README.md) states that one-shot reports are written to
   `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
 - Live smoke for
-  `python3 -m telegram_console.work_cli one-shot-dissertation --work demo-candidate --skip-docx`
+  `python3 -m academic_engine.work_cli one-shot-dissertation --work demo-candidate --skip-docx`
   writes:
   `works/demo-candidate/thesis/reviews/2026-04-20-one-shot-dissertation-report.md`.
 
@@ -185,7 +185,7 @@ Why this matters:
 Severity: `high`  
 Confidence: `confirmed`
 
-Evidence from `python3 -m telegram_console.work_cli work-status --json`:
+Evidence from `python3 -m academic_engine.work_cli work-status --json`:
 
 - article standards raw bundle is missing for `ru-law-article-v1`;
 - thesis profile `sogu-vkr-2025` retains a visible conflict flag;
@@ -206,7 +206,7 @@ Confidence: `confirmed`
 Evidence:
 
 - `git status --short` -> `65` changed entries;
-- diff concentration across `telegram_console`, `tests`, `meta`, `templates`,
+- diff concentration across `academic_engine`, `tests`, `meta`, `templates`,
   `scripts`, and `works`.
 
 Why this matters:
@@ -349,9 +349,9 @@ manuscript content.
 ```bash
 export PYTHONPATH=.
 python3 -m unittest discover -s tests -q
-ruff check telegram_console/ tests/
-ruff format --check telegram_console/ tests/
-python3 -m telegram_console.work_cli skill-source-map audit --json
-python3 -m telegram_console.work_cli work-status --json
-python3 -m telegram_console.work_cli one-shot-dissertation --work biometrics-vkr --skip-docx
+ruff check academic_engine/ tests/
+ruff format --check academic_engine/ tests/
+python3 -m academic_engine.work_cli skill-source-map audit --json
+python3 -m academic_engine.work_cli work-status --json
+python3 -m academic_engine.work_cli one-shot-dissertation --work biometrics-vkr --skip-docx
 ```

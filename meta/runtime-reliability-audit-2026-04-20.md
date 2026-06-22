@@ -1,9 +1,9 @@
 # Runtime Reliability Audit (2026-04-20)
 
-Scope: `telegram_console/work_cli.py`, `telegram_console/work_cli_autonomous.py`,
-`telegram_console/autonomous_daemon.py`,
-`telegram_console/autonomous_scheduler.py`,
-`telegram_console/autonomous_runtime_store.py`,
+Scope: `academic_engine/work_cli.py`, `academic_engine/work_cli_autonomous.py`,
+`academic_engine/autonomous_daemon.py`,
+`academic_engine/autonomous_scheduler.py`,
+`academic_engine/autonomous_runtime_store.py`,
 runtime JSON files under `output/telegram/runtime/autonomous/`,
 daemon/launchd CLI surfaces, and targeted tests/docs around them.
 
@@ -15,17 +15,17 @@ daemon/launchd CLI surfaces, and targeted tests/docs around them.
 Что закрыто этой волной:
 
 - общий runtime persistence слой вынесен в
-  `telegram_console/autonomous_runtime_store.py`;
+  `academic_engine/autonomous_runtime_store.py`;
 - `work_cli.py` разгружен за счёт выноса autonomous/daemon/launchd
-  handlers в `telegram_console/work_cli_autonomous.py`;
+  handlers в `academic_engine/work_cli_autonomous.py`;
 - JSON-first contract для runtime surfaces нормализован через
-  `telegram_console/work_cli_output.py`;
+  `academic_engine/work_cli_output.py`;
 - single-work и multi-work daemon теперь детерминированно
   потребляют stop request и освобождают lock на terminal branches;
 - corrupted runtime JSON больше не валит CLI status surfaces:
   вместо traceback возвращается стабильный fallback payload;
 - CLI/runtime тесты выделены в отдельные модули вместо удержания
-  всего покрытия в `tests/test_telegram_console.py`.
+  всего покрытия в `tests/test_academic_engine.py`.
 
 ## Findings
 
@@ -39,12 +39,12 @@ runtime JSON через локальные helpers и дублировали pat
 
 - единые helpers для runtime dir, file paths, atomic JSON writes,
   lock payload и stop payload теперь живут в
-  `telegram_console/autonomous_runtime_store.py`;
+  `academic_engine/autonomous_runtime_store.py`;
 - публичные filenames и расположение файлов не изменены.
 
 ### 2. CLI autonomous surfaces were too monolithic
 
-`telegram_console/work_cli.py` оставался основным parser + handler модулем
+`academic_engine/work_cli.py` оставался основным parser + handler модулем
 одновременно. Это затрудняло локальную правку JSON/error contracts и
 расширение тестов.
 
@@ -84,7 +84,7 @@ runtime JSON через локальные helpers и дублировали pat
 
 ### 5. Test architecture around daemon/CLI was too concentrated
 
-Большой `tests/test_telegram_console.py` оставался перегруженным именно
+Большой `tests/test_academic_engine.py` оставался перегруженным именно
 CLI/runtime кейсами, что усложняло сопровождение.
 
 Текущее состояние:
@@ -133,6 +133,6 @@ CLI/runtime кейсами, что усложняло сопровождение
 ```bash
 python3 -m unittest tests.test_daemon_smoke tests.test_daemon_ops_integration tests.test_work_cli_autonomous tests.test_work_cli_launchd tests.test_work_cli_runtime -q
 python3 -m unittest discover -s tests -q
-python3 -m ruff check telegram_console tests
-python3 -m telegram_console.work_cli skill-source-map audit --json
+python3 -m ruff check academic_engine tests
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```

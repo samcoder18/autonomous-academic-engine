@@ -8,7 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from tests.test_telegram_console import (
+from tests.test_academic_engine import (
     TEST_ARTICLE_CHECKLIST,
     TEST_THESIS_SECTION,
     TEST_WORK_ID,

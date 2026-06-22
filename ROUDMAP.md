@@ -4,7 +4,7 @@
 
 **Goal:** Clean the repository, remove generated junk and stale artifacts, consolidate duplicate workflow utilities, and make the pipeline easier to operate without weakening safety gates.
 
-**Architecture:** Keep canonical source text and configuration under `works/<slug>/`, `telegram_console/`, `agents/`, `templates/`, `meta/`, and launcher scripts. Treat `output/`, local caches, runtime databases, and one-shot JSON traces as generated state unless a file is explicitly documented as a versioned evidence snapshot. Make every cleanup step reversible through git review and verify with the existing offline CI matrix.
+**Architecture:** Keep canonical source text and configuration under `works/<slug>/`, `academic_engine/`, `agents/`, `templates/`, `meta/`, and launcher scripts. Treat `output/`, local caches, runtime databases, and one-shot JSON traces as generated state unless a file is explicitly documented as a versioned evidence snapshot. Make every cleanup step reversible through git review and verify with the existing offline CI matrix.
 
 **Tech Stack:** Python 3.11+ stdlib, unittest, ruff, shell launchers, TOML/Markdown workspace contracts, git.
 
@@ -12,7 +12,7 @@
 
 ## Progress Log
 
-- [x] **2026-06-22: Baseline audit completed.** Evidence gathered with `git status --short`, `python3 -m unittest discover -s tests -q`, `ruff check telegram_console tests`, `ruff format --check telegram_console tests`, `work-status`, `standards-status`, and targeted file inventory commands.
+- [x] **2026-06-22: Baseline audit completed.** Evidence gathered with `git status --short`, `python3 -m unittest discover -s tests -q`, `ruff check academic_engine tests`, `ruff format --check academic_engine tests`, `work-status`, `standards-status`, and targeted file inventory commands.
 - [x] **2026-06-22: Roadmap file created.** This plan is saved as `ROUDMAP.md`, matching the requested filename.
 - [x] **2026-06-22: Execution branch prepared.** Work moved from `main` to `cleanup-roadmap-20260622`; baseline verification passed with 429 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local runtime SQLite files; `git check-ignore` verified the targeted runtime path.
@@ -20,7 +20,7 @@
 - [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
-- [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `telegram_console.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
+- [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `academic_engine.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 7 completed.** Thesis works now bind to official `sogu-vkr-2025` with raw bundle available; the old `thesis-standards-raw-missing` blocker is gone, while the profile's honest conflict/applicability flag remains visible.
 - [x] **2026-06-22: Task 8 completed.** Added executable `scripts/audit_workspace_hygiene.sh` and a regression smoke test; the script prints git, ignored-path, standards, and skill-source-map hygiene signals without modifying files.
 - [x] **2026-06-22: Task 9 completed.** Final verification passed with 437 unittest tests, `ruff check`, `ruff format --check`, skill-source-map audit `ok=true`, and hygiene audit exit code 0.
@@ -28,12 +28,13 @@
 ## Initial Audit Baseline
 
 - Test suite: `python3 -m unittest discover -s tests -q` passed with 429 tests.
-- Lint: `ruff check telegram_console tests` passed.
-- Format: `ruff format --check telegram_console tests` passed.
-- Skill map: `python3 -m telegram_console.work_cli skill-source-map audit --json` reported `ok: true`.
+- Lint: `ruff check academic_engine tests` passed.
+- Format: `ruff format --check academic_engine tests` passed.
+- Skill map: `python3 -m academic_engine.work_cli skill-source-map audit --json` reported `ok: true`.
 - Dirty tree before cleanup: untracked local runtime/cache output.
 - Runtime junk: `output/runtime/` contains local SQLite files.
-- Ignored local duplicate package cache: `academic_engine/` is ignored and contains `__pycache__` files.
+- Ignored local duplicate package cache existed before the package rename; the current
+  source package is `academic_engine/` and must not be cleaned as junk.
 - Versioned generated output exists under `output/docx/`, including PDF and rendered PNG snapshots.
 - Work-local DOCX helper scripts exist at:
   - `works/martial-law-coursework/thesis/format_docx.py`
@@ -53,8 +54,8 @@
 
 ```bash
 python3 -m unittest discover -s tests -q
-ruff check telegram_console tests
-ruff format --check telegram_console tests
+ruff check academic_engine tests
+ruff format --check academic_engine tests
 ```
 
 ---
@@ -109,7 +110,8 @@ git commit -m "chore: ignore local runtime artifacts"
 ## Task 2: Remove Local Generated Junk From the Working Tree
 
 **Files:**
-- Remove locally only: `output/runtime/`, `academic_engine/`
+- Remove locally only: `output/runtime/` and the pre-rename ignored duplicate
+  package cache.
 - Do not remove tracked source files.
 
 - [x] **Step 1: Preview ignored cleanup**
@@ -117,7 +119,7 @@ git commit -m "chore: ignore local runtime artifacts"
 Run:
 
 ```bash
-git clean -ndX output/runtime academic_engine
+git clean -ndX output/runtime
 ```
 
 Expected: the preview lists only ignored generated files and cache directories.
@@ -127,7 +129,7 @@ Expected: the preview lists only ignored generated files and cache directories.
 Run:
 
 ```bash
-git clean -fdX output/runtime academic_engine
+git clean -fdX output/runtime
 ```
 
 Expected: the same ignored generated files are removed.
@@ -137,10 +139,10 @@ Expected: the same ignored generated files are removed.
 Run:
 
 ```bash
-du -sh output/runtime academic_engine
+du -sh output/runtime
 ```
 
-Expected: removed paths are absent or much smaller; no source directory under `telegram_console/`, `works/`, `meta/`, `agents/`, `templates/`, or `tests/` is affected.
+Expected: removed paths are absent or much smaller; no source directory under `academic_engine/`, `works/`, `meta/`, `agents/`, `templates/`, or `tests/` is affected.
 
 - [x] **Step 4: Verify git tree**
 
@@ -194,7 +196,7 @@ or:
 `output/docx/` is generated output and must not be committed. Canonical text lives under `works/<slug>/`. Visual render checks should be regenerated locally and excluded from git.
 ```
 
-Chosen: strict generated-output policy. `output/docx/` is ignored as generated output; reusable renderer code must move to `scripts/` or `telegram_console/` in Task 6.
+Chosen: strict generated-output policy. `output/docx/` is ignored as generated output; reusable renderer code must move to `scripts/` or `academic_engine/` in Task 6.
 
 - [x] **Step 3: If generated snapshots should not be versioned, remove them from git index**
 
@@ -234,8 +236,8 @@ Run:
 
 ```bash
 python3 -m unittest discover -s tests -q
-ruff check telegram_console tests
-ruff format --check telegram_console tests
+ruff check academic_engine tests
+ruff format --check academic_engine tests
 ```
 
 Expected: all commands pass.
@@ -245,15 +247,15 @@ Expected: all commands pass.
 ## Task 4: Normalize Legacy One-Shot Reports
 
 **Files:**
-- Modify: `telegram_console/one_shot.py`
-- Modify: `telegram_console/orchestrator_exports.py`
+- Modify: `academic_engine/one_shot.py`
+- Modify: `academic_engine/orchestrator_exports.py`
 - Modify: `tests/test_one_shot.py`
 - Modify or archive: `works/*/thesis/reviews/*one-shot-report.md`
 - Remove from git index if generated: `works/*/thesis/reviews/*one-shot-report.json`
 
 - [x] **Step 1: Add report version to new one-shot JSON**
 
-Modify `OneShotReport.to_dict()` in `telegram_console/one_shot.py` so it emits:
+Modify `OneShotReport.to_dict()` in `academic_engine/one_shot.py` so it emits:
 
 ```python
 "version": "one-shot-report/v2",
@@ -263,7 +265,7 @@ Expected: new reports are machine-identifiable and old reports can be rejected e
 
 - [x] **Step 2: Require v2 machine gate reports for export**
 
-Modify `require_machine_gates_passed()` in `telegram_console/orchestrator_exports.py` to accept only:
+Modify `require_machine_gates_passed()` in `academic_engine/orchestrator_exports.py` to accept only:
 
 ```python
 payload.get("version") == "one-shot-report/v2"
@@ -328,12 +330,12 @@ Expected: all tests pass.
 ## Task 5: Fix CLI Error Handling for Export Blocks
 
 **Files:**
-- Modify: `telegram_console/work_cli.py`
+- Modify: `academic_engine/work_cli.py`
 - Test: add coverage to `tests/test_work_cli_runtime.py` or `tests/test_work_cli_autonomous.py`
 
 - [x] **Step 1: Catch `WorkflowError` in CLI main**
 
-Import `WorkflowError` from `telegram_console.orchestrator_support` in `telegram_console/work_cli.py` and extend the existing exception handler:
+Import `WorkflowError` from `academic_engine.orchestrator_support` in `academic_engine/work_cli.py` and extend the existing exception handler:
 
 ```python
 from .orchestrator_support import WorkflowError
@@ -352,7 +354,7 @@ Expected: blocked export prints a clean one-line error instead of a traceback.
 Add a test that calls:
 
 ```bash
-python3 -m telegram_console.work_cli export-thesis-docx --work martial-law-coursework
+python3 -m academic_engine.work_cli export-thesis-docx --work martial-law-coursework
 ```
 
 Expected: exit code `1`, stderr contains `DOCX export blocked`, stderr does not contain `Traceback`.
@@ -375,7 +377,7 @@ Expected: all tests pass.
 **Files:**
 - Inspect: `works/martial-law-coursework/thesis/format_docx.py`
 - Inspect: `works/constitutional-amendments-implementation-coursework/thesis/format_docx.py`
-- Create: `scripts/render_docx_preview.py` or `telegram_console/docx_preview.py`
+- Create: `scripts/render_docx_preview.py` or `academic_engine/docx_preview.py`
 - Remove after replacement: work-local `thesis/format_docx.py` scripts
 - Test: `tests/test_docx_conformance.py` or a new focused test file
 
@@ -402,7 +404,7 @@ python3 scripts/render_docx_preview.py --work constitutional-amendments-implemen
 
 Expected: no work-specific script is needed under `works/<slug>/thesis/`.
 
-Actual: created `telegram_console/docx_preview.py` and `scripts/render_docx_preview.py`. CLI smoke checks load real work config and return a clean input/dependency error instead of a traceback when rendering prerequisites are absent.
+Actual: created `academic_engine/docx_preview.py` and `scripts/render_docx_preview.py`. CLI smoke checks load real work config and return a clean input/dependency error instead of a traceback when rendering prerequisites are absent.
 
 - [x] **Step 3: Preserve work-specific settings as config**
 
@@ -500,9 +502,9 @@ Actual: not applicable because the selected strategy is `sogu-vkr-2025`.
 Run:
 
 ```bash
-python3 -m telegram_console.work_cli work-status --work martial-law-coursework --json
-python3 -m telegram_console.work_cli work-status --work constitutional-amendments-implementation-coursework --json
-python3 -m telegram_console.work_cli work-status --work state-essence-role-coursework --json
+python3 -m academic_engine.work_cli work-status --work martial-law-coursework --json
+python3 -m academic_engine.work_cli work-status --work constitutional-amendments-implementation-coursework --json
+python3 -m academic_engine.work_cli work-status --work state-essence-role-coursework --json
 ```
 
 Expected: no `thesis-standards-raw-missing` blocker remains unless the profile is intentionally provisional.
@@ -528,8 +530,8 @@ set -euo pipefail
 git status --short
 git ls-files output/docx
 git check-ignore -v output/runtime/local.sqlite3
-python3 -m telegram_console.work_cli standards-status
-python3 -m telegram_console.work_cli skill-source-map audit --json
+python3 -m academic_engine.work_cli standards-status
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```
 
 Actual: created `scripts/audit_workspace_hygiene.sh` with section labels and the same deterministic hygiene commands.
@@ -571,14 +573,14 @@ Run:
 
 ```bash
 python3 -m unittest discover -s tests -q
-ruff check telegram_console tests
-ruff format --check telegram_console tests
-python3 -m telegram_console.work_cli skill-source-map audit --json
+ruff check academic_engine tests
+ruff format --check academic_engine tests
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```
 
 Expected: all checks pass and skill audit reports `ok: true`.
 
-Actual: 437 unittest tests passed; `ruff check telegram_console tests scripts/render_docx_preview.py` passed; `ruff format --check telegram_console tests scripts/render_docx_preview.py` passed; skill-source-map audit reported `"ok": true`; hygiene audit exited 0.
+Actual: 437 unittest tests passed; `ruff check academic_engine tests scripts/render_docx_preview.py` passed; `ruff format --check academic_engine tests scripts/render_docx_preview.py` passed; skill-source-map audit reported `"ok": true`; hygiene audit exited 0.
 
 - [x] **Step 2: Confirm clean git state shape**
 
@@ -588,7 +590,8 @@ Run:
 git status --short
 ```
 
-Expected: only intended source/doc changes are present; no `output/runtime/`, `academic_engine/`, or one-shot JSON traces appear.
+Expected: only intended source/doc changes are present; no `output/runtime/`,
+old ignored package cache, or one-shot JSON traces appear.
 
 Actual: pre-closeout hygiene audit printed an empty `git status`; ignored generated paths are covered by `.gitignore`.
 
@@ -601,7 +604,7 @@ Actual: completed tasks are checked off and resolved decisions are recorded belo
 - [x] **Step 4: Commit closeout**
 
 ```bash
-git add ROUDMAP.md .gitignore output/README.md telegram_console tests scripts works meta README.md CHANGELOG.md
+git add ROUDMAP.md .gitignore output/README.md academic_engine tests scripts works meta README.md CHANGELOG.md
 git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 ```
 
@@ -661,3 +664,13 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
   project management.
 - [x] Added `scripts/work_cli.sh` as the user-facing CLI wrapper and removed
   visible legacy package/runtime names from GitHub-facing README commands.
+
+## Addendum: Package Root Rename
+
+- [x] Added a regression test that requires `academic_engine/` to be the primary
+  package and the old package root to be absent.
+- [x] Renamed the tracked Python package root to `academic_engine/`.
+- [x] Updated imports, patch paths, pyproject package discovery, shell launchers,
+  launchd wrapper names, and active docs to use `academic_engine`.
+- [x] Verified the CLI wrapper and direct module entrypoint both call
+  `academic_engine.work_cli`.

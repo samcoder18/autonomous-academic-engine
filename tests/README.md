@@ -1,4 +1,4 @@
-# Тесты `telegram_console`
+# Тесты `academic_engine`
 
 - Полный прогон (из корня репозитория):
 
@@ -13,7 +13,7 @@
   - [`test_work_bootstrap.py`](test_work_bootstrap.py), [`test_work_state.py`](test_work_state.py), [`test_work_type.py`](test_work_type.py) — work bundle bootstrap, next-action/state logic и profile coupling;
   - [`test_dissertation_artifacts.py`](test_dissertation_artifacts.py), [`test_dissertation_standards.py`](test_dissertation_standards.py), [`test_one_shot.py`](test_one_shot.py) — dissertation contour, standards gating и one-shot flows;
   - [`test_regression_harness.py`](test_regression_harness.py) — offline smoke вокруг публичных workflow surfaces.
-- Legacy coverage в [`test_telegram_console.py`](test_telegram_console.py) всё ещё есть, но имя файла историческое: актуальная supported surface — CLI/file-first, а не bot control surface.
+- Legacy coverage в [`test_academic_engine.py`](test_academic_engine.py) всё ещё есть, но имя файла историческое: актуальная supported surface — CLI/file-first, а не bot control surface.
 - Базовые тематические группы по-прежнему покрывают:
   - [`test_verdict_parser.py`](test_verdict_parser.py) — структурированные verdict-блоки;
   - [`test_ops_alerts.py`](test_ops_alerts.py), [`test_resource_guards.py`](test_resource_guards.py) — ops-каналы и resource guards;

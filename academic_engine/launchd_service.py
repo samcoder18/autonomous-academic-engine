@@ -80,8 +80,8 @@ class LaunchdServiceManager:
             runtime_dir=runtime_dir,
             stdout_log=runtime_dir / "bot.stdout.log",
             stderr_log=runtime_dir / "bot.stderr.log",
-            wrapper_script=resolved_home / "scripts" / "run_telegram_console_launchd.sh",
-            template_file=resolved_home / "deploy" / "local-telegram-console.plist",
+            wrapper_script=resolved_home / "scripts" / "run_academic_engine_launchd.sh",
+            template_file=resolved_home / "deploy" / "local-academic-engine.plist",
             launch_agents_dir=launch_agents_dir,
             installed_plist=installed_plist,
         )
@@ -288,7 +288,7 @@ class LaunchdServiceManager:
                     [
                         "LaunchAgent пока не установлен.",
                         f"Ожидаемый plist: {self.paths.installed_plist}",
-                        "Сначала выполни `python3 scripts/telegram_console.py service install`.",
+                        "Сначала выполни `python3 scripts/academic_engine.py service install`.",
                     ]
                 )
             )

@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.test_telegram_console import (
+from tests.test_academic_engine import (
     AutonomousDaemonLaunchdManager,
     FakeLaunchctl,
     build_fake_repo,
@@ -30,7 +30,7 @@ class AutonomousLaunchdCliTests(unittest.TestCase):
                 python_executable="/usr/bin/python3",
             )
 
-            with patch("telegram_console.work_cli_autonomous.AutonomousDaemonLaunchdManager", return_value=manager):
+            with patch("academic_engine.work_cli_autonomous.AutonomousDaemonLaunchdManager", return_value=manager):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -68,7 +68,7 @@ class AutonomousLaunchdCliTests(unittest.TestCase):
             self.assertIn("<key>KeepAlive</key>\n  <true/>", plist_text)
             self.assertIn("<key>ThrottleInterval</key>\n  <integer>15</integer>", plist_text)
 
-            with patch("telegram_console.work_cli_autonomous.AutonomousDaemonLaunchdManager", return_value=manager):
+            with patch("academic_engine.work_cli_autonomous.AutonomousDaemonLaunchdManager", return_value=manager):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):

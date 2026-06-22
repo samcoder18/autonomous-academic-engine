@@ -10,4 +10,4 @@ if [[ "${1:-}" == "thesis" ]]; then
   exec bash "$ROOT_DIR/scripts/codex_thesis.sh" "$@"
 fi
 
-python3 -m telegram_console.work_cli launch-academic "$@"
+python3 -m academic_engine.work_cli launch-academic "$@"

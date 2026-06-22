@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from telegram_console.verdict_parser import (
+from academic_engine.verdict_parser import (
     StructuredVerdict,
     VerdictParseError,
     extract_structured_verdicts,

@@ -16,7 +16,7 @@ repo-only remediation wave closed and what intentionally remains open.
 
 - `DOC-001` — `tests/README.md` rewritten around the current split regression architecture and deterministic `unittest discover` entrypoint.
 - `DOC-002` — `README.md` now distinguishes thesis one-shot reports from dissertation one-shot reports and aligns output-path wording with live CLI behavior.
-- `CI-001` — `.github/workflows/ci.yml` now runs `ruff format --check telegram_console tests`, closing the formatting blind spot between local verification and CI.
+- `CI-001` — `.github/workflows/ci.yml` now runs `ruff format --check academic_engine tests`, closing the formatting blind spot between local verification and CI.
 - `BASELINE-001` (process guardrail only) — `meta/master-protocol.md` now states that any strong repo-level `release-quality` / `fully final` claim requires a clean git snapshot and a fully green verification matrix.
 
 ## Still Open By Design
@@ -30,7 +30,7 @@ repo-only remediation wave closed and what intentionally remains open.
 
 ```bash
 python3 -m unittest discover -s tests -q
-ruff check telegram_console/ tests/
-ruff format --check telegram_console/ tests/
-python3 -m telegram_console.work_cli skill-source-map audit --json
+ruff check academic_engine/ tests/
+ruff format --check academic_engine/ tests/
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```

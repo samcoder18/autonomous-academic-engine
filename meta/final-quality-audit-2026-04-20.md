@@ -2,22 +2,22 @@
 
 ## Scope
 
-- Repo-wide final audit across `telegram_console`, tests, CLI/runtime surfaces, dissertation contour, and docs-truth.
+- Repo-wide final audit across `academic_engine`, tests, CLI/runtime surfaces, dissertation contour, and docs-truth.
 - Conservative repair pass only: no broad refactor wave, no manuscript prose edits, no changes to public CLI names or payload contracts.
 
 ## Baseline Before Fixes
 
 - `python3 -m unittest discover -s tests -q` — `384 tests OK`.
-- `ruff check telegram_console/ tests/` — passed.
-- `ruff format --check telegram_console/ tests/` — failed on 7 Python files.
+- `ruff check academic_engine/ tests/` — passed.
+- `ruff format --check academic_engine/ tests/` — failed on 7 Python files.
 - Manual temp-workspace CLI smoke found a public-command regression:
-  - `python3 -m telegram_console.work_cli one-shot-dissertation --work <candidate> --skip-docx`
+  - `python3 -m academic_engine.work_cli one-shot-dissertation --work <candidate> --skip-docx`
   - actual behavior before fix: crashed with `TypeError: 'ArgumentParser' object is not callable`
   - expected behavior: return a normal dissertation one-shot result with blocker status and a written report.
 
 ## Fixed Now
 
-1. Restored the `one-shot-dissertation` CLI contract in `telegram_console/work_cli.py`.
+1. Restored the `one-shot-dissertation` CLI contract in `academic_engine/work_cli.py`.
    - Root cause: the local parser variable `one_shot_dissertation` shadowed the function of the same name inside `main()`.
    - Fix: renamed the parser binding to `one_shot_dissertation_parser`, preserving the public command and arguments.
 
@@ -33,8 +33,8 @@
 ## Verification After Fixes
 
 - `python3 -m unittest discover -s tests -q` — `385 tests OK`.
-- `ruff check telegram_console/ tests/` — passed.
-- `ruff format --check telegram_console/ tests/` — passed.
+- `ruff check academic_engine/ tests/` — passed.
+- `ruff format --check academic_engine/ tests/` — passed.
 - Manual command-surface smoke in a temp workspace:
   - `work init` for `vkr-bachelor`, `dissertation-candidate`, `dissertation-doctor` — OK.
   - `work-status --json` — OK, payload shape preserved.
@@ -42,7 +42,7 @@
   - `one-shot-thesis --skip-docx` — returns blocker status with report, no crash.
   - `one-shot-dissertation --skip-docx` — now returns blocker status with report, no crash.
 - Read-only status check on active work:
-  - `python3 -m telegram_console.work_cli work-status --json` — OK, no mutation required.
+  - `python3 -m academic_engine.work_cli work-status --json` — OK, no mutation required.
 
 ## Residual Risks / Safe Defer
 

@@ -10,7 +10,7 @@
 
 ## 1. Резюме
 
-Проект представляет собой **оркестрируемый workspace**: регламенты (`meta/master-protocol.md`), роли (`agents/*.md`), шаблоны (`templates/`), CLI для Codex (`scripts/*.sh` → `telegram_console.work_cli`), legacy chat/runtime слой и автономный daemon поверх `WorkflowOrchestrator`. Канонический текст живёт в `works/<slug>/`; производные DOCX и трассы — в `output/`.
+Проект представляет собой **оркестрируемый workspace**: регламенты (`meta/master-protocol.md`), роли (`agents/*.md`), шаблоны (`templates/`), CLI для Codex (`scripts/*.sh` → `academic_engine.work_cli`), legacy chat/runtime слой и автономный daemon поверх `WorkflowOrchestrator`. Канонический текст живёт в `works/<slug>/`; производные DOCX и трассы — в `output/`.
 
 **Сильные стороны:** чёткая иерархия источников истины; разделение thesis/article; execution contracts и quality gates в коде; runtime reliability wave с общим persistence слоем для daemon/autonomous state; выделенные CLI/runtime regression packs; candidate dissertation contour с отдельными maps/reviews/publication artifacts; `skill-source-map audit` без расхождений для объявленных 19 skills; профили `work.toml` согласованы с `meta/standards/registry.toml`.
 
@@ -27,8 +27,8 @@
 | ----------------------- | --------------------- | ----------------------------------------------------- |
 | `agents/`               | 19                    | Роли thesis + article                                 |
 | `scripts/`              | 10                    | Тонкие оболочки над `work_cli`                        |
-| `telegram_console/`     | 150                   | Python-ядро, dissertation contour, runtime support    |
-| `telegram_console/*.py` | 75                    | Ядро Python                                           |
+| `academic_engine/`     | 150                   | Python-ядро, dissertation contour, runtime support    |
+| `academic_engine/*.py` | 75                    | Ядро Python                                           |
 | `meta/`                 | 44                    | Протокол, стандарты, архив, audit docs                |
 | `templates/`            | 20                    | Формы brief, review, dissertation scaffold            |
 | `works/`                | 38                    | Активный work bundle + контент                        |
@@ -36,7 +36,7 @@
 | `tests/`                | 39                    | Отдельные regression-модули по workspace и gates      |
 
 
-Классификация: **ядро движка** — `workspace.toml`, `agents/`, `meta/master-protocol.md`, `meta/skill-source-map.toml`, `templates/`, `telegram_console/`, `scripts/`; **контент** — `works/biometrics-vkr/`; **производное** — `output/docx`, `output/runs`, `output/telegram`, `output/codex`.
+Классификация: **ядро движка** — `workspace.toml`, `agents/`, `meta/master-protocol.md`, `meta/skill-source-map.toml`, `templates/`, `academic_engine/`, `scripts/`; **контент** — `works/biometrics-vkr/`; **производное** — `output/docx`, `output/runs`, `output/telegram`, `output/codex`.
 
 ---
 
@@ -44,9 +44,9 @@
 
 ### 3.1 Ruff
 
-Команда: `python3 -m ruff check telegram_console tests`.
+Команда: `python3 -m ruff check academic_engine tests`.
 
-Итог на 2026-04-20: `python3 -m ruff check telegram_console tests` — **чисто**.
+Итог на 2026-04-20: `python3 -m ruff check academic_engine tests` — **чисто**.
 
 Вывод: candidate-adjacent python/test scope приведён к zero-issue состоянию.
 Repo-wide cleanup вне этого скоупа по-прежнему стоит делать отдельными узкими
@@ -64,9 +64,9 @@ autonomous planner и CLI страхуются отдельными тестов
 
 ### 3.3 Subprocess и секреты
 
-- `**shell=True`**: в просмотренных вызовах `subprocess` в `telegram_console` **не обнаружено** — используются списки аргументов и `text=True` где уместно.
-- **Секреты**: `[telegram_console/config.py](../telegram_console/config.py)` читает legacy chat token, SMTP, `CODEX_*` из окружения; отдельного логирования значений токенов в grep по паттернам не выявлено.
-- **Широкие исключения**: после runtime wave intentional `except Exception` в touched scope остались в `[telegram_console/autonomous_daemon.py](../telegram_console/autonomous_daemon.py)` (top-level failsafe foreground loop) и `[telegram_console/autonomous_scheduler.py](../telegram_console/autonomous_scheduler.py)` (single-work failure isolation inside multi-work scheduling). Это скорее reliability containment, чем случайный broad catch, но для будущей типизации здесь всё ещё есть работа.
+- `**shell=True`**: в просмотренных вызовах `subprocess` в `academic_engine` **не обнаружено** — используются списки аргументов и `text=True` где уместно.
+- **Секреты**: `[academic_engine/config.py](../academic_engine/config.py)` читает legacy chat token, SMTP, `CODEX_*` из окружения; отдельного логирования значений токенов в grep по паттернам не выявлено.
+- **Широкие исключения**: после runtime wave intentional `except Exception` в touched scope остались в `[academic_engine/autonomous_daemon.py](../academic_engine/autonomous_daemon.py)` (top-level failsafe foreground loop) и `[academic_engine/autonomous_scheduler.py](../academic_engine/autonomous_scheduler.py)` (single-work failure isolation inside multi-work scheduling). Это скорее reliability containment, чем случайный broad catch, но для будущей типизации здесь всё ещё есть работа.
 
 ---
 
@@ -74,8 +74,8 @@ autonomous planner и CLI страхуются отдельными тестов
 
 ### 4.1 Thesis lane
 
-1. `scripts/codex_thesis.sh` → `python3 -m telegram_console.work_cli launch-thesis "$@"`.
-2. `[launch_thesis](../telegram_console/work_cli.py)`: загрузка `workspace.toml`, `resolve_work_selection`, `resolve_target_for_action`, профиль через `resolve_standard_profile`.
+1. `scripts/codex_thesis.sh` → `python3 -m academic_engine.work_cli launch-thesis "$@"`.
+2. `[launch_thesis](../academic_engine/work_cli.py)`: загрузка `workspace.toml`, `resolve_work_selection`, `resolve_target_for_action`, профиль через `resolve_standard_profile`.
 3. `build_thesis_execution_contract` + `_build_thesis_prompt`.
 4. `**_run_codex`**: `codex exec -C <root> --skip-git-repo-check --full-auto -o <out_file> [-m model]`, stdin = prompt; при необходимости флаг `--search`.
 5. **Артефакты прогона**: Markdown-ответ в `work.thesis.paths.output_runs_dir` (из `work.toml` относительно work root), метаданные `*.meta.json` с контрактом, путями target, профилем.
@@ -100,11 +100,11 @@ autonomous planner и CLI страхуются отдельными тестов
 
 ### 5.1 Компоненты
 
-- **План:** `[autonomous_planner.build_autonomous_plan](../telegram_console/autonomous_planner.py)` — кандидаты из work state, фильтр `[evaluate_autonomous_policy](../telegram_console/autonomous_policy.py)`, ограничение `max_steps`.
-- **Исполнение:** `[autonomous_runner.execute_autonomous_command](../telegram_console/autonomous_runner.py)` — whitelist: `work-status`, `standards-status`, `export-thesis-docx`, `export-article-docx <slug>`, `launch-thesis <preset> <target>`, `launch-academic <workflow> …`.
-- **Daemon:** `[autonomous_daemon](../telegram_console/autonomous_daemon.py)` — lock-файлы (`*.daemon.lock.json`), stale lock по heartbeat, `run_daemon_tick` проверяет **active_run** и уходит в `waiting`, иначе строит план, `evaluate_daemon_action`, затем `execute_autonomous_command`. Лимиты: `max_cycles`, `max_runtime_minutes`.
-- **Runtime store:** `[autonomous_runtime_store](../telegram_console/autonomous_runtime_store.py)` — общий слой для runtime dir, atomic JSON writes, lock/stop payload builders и fallback-safe read path.
-- **CLI autonomous surface:** `[work_cli_autonomous](../telegram_console/work_cli_autonomous.py)` + `[work_cli_output](../telegram_console/work_cli_output.py)` — вынесенные handlers и JSON/error rendering helpers без смены публичного syntax `work_cli`.
+- **План:** `[autonomous_planner.build_autonomous_plan](../academic_engine/autonomous_planner.py)` — кандидаты из work state, фильтр `[evaluate_autonomous_policy](../academic_engine/autonomous_policy.py)`, ограничение `max_steps`.
+- **Исполнение:** `[autonomous_runner.execute_autonomous_command](../academic_engine/autonomous_runner.py)` — whitelist: `work-status`, `standards-status`, `export-thesis-docx`, `export-article-docx <slug>`, `launch-thesis <preset> <target>`, `launch-academic <workflow> …`.
+- **Daemon:** `[autonomous_daemon](../academic_engine/autonomous_daemon.py)` — lock-файлы (`*.daemon.lock.json`), stale lock по heartbeat, `run_daemon_tick` проверяет **active_run** и уходит в `waiting`, иначе строит план, `evaluate_daemon_action`, затем `execute_autonomous_command`. Лимиты: `max_cycles`, `max_runtime_minutes`.
+- **Runtime store:** `[autonomous_runtime_store](../academic_engine/autonomous_runtime_store.py)` — общий слой для runtime dir, atomic JSON writes, lock/stop payload builders и fallback-safe read path.
+- **CLI autonomous surface:** `[work_cli_autonomous](../academic_engine/work_cli_autonomous.py)` + `[work_cli_output](../academic_engine/work_cli_output.py)` — вынесенные handlers и JSON/error rendering helpers без смены публичного syntax `work_cli`.
 
 ### 5.2 Выводы по надёжности
 
@@ -120,7 +120,7 @@ autonomous planner и CLI страхуются отдельными тестов
 
 ### 6.1 skill-source-map
 
-Выполнено: `python3 -m telegram_console.work_cli skill-source-map audit --json`.
+Выполнено: `python3 -m academic_engine.work_cli skill-source-map audit --json`.
 
 Результат: `declared_skill_count` 19, `manifest_skill_count` 19, `**issues`: []**, внешние SKILL-файлы в этом прогоне не проверялись (`external_skill_files_checked`: []).
 
@@ -169,9 +169,9 @@ autonomous planner и CLI страхуются отдельными тестов
 cd /path/to/repo
 export PYTHONPATH=.
 
-python3 -m ruff check telegram_console tests --statistics
+python3 -m ruff check academic_engine tests --statistics
 python3 -m unittest discover -s tests -q
-python3 -m telegram_console.work_cli skill-source-map audit --json
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```
 
 ---

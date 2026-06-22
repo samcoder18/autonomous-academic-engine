@@ -10,10 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from telegram_console.autonomous_daemon import daemon_state_path
-from telegram_console.autonomous_runner import execute_autonomous_command, run_autonomous_plan
-from telegram_console.autonomous_scheduler import multi_daemon_state_path, multi_daemon_stop_path
-from tests.test_telegram_console import (
+from academic_engine.autonomous_daemon import daemon_state_path
+from academic_engine.autonomous_runner import execute_autonomous_command, run_autonomous_plan
+from academic_engine.autonomous_scheduler import multi_daemon_state_path, multi_daemon_stop_path
+from tests.test_academic_engine import (
     TEST_ARTICLE_DRAFT,
     TEST_WORK_ID,
     WorkflowOrchestrator,
@@ -95,7 +95,7 @@ class AutonomousCliTests(unittest.TestCase):
                 }
             )
 
-            with patch("telegram_console.autonomous_runner.WorkflowOrchestrator", return_value=fake):
+            with patch("academic_engine.autonomous_runner.WorkflowOrchestrator", return_value=fake):
                 state = run_autonomous_plan(root_dir=root, plan=plan, dry_run=False, execute=True)
 
             self.assertEqual(fake.work_ids, ["zeta-work"])
@@ -333,7 +333,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
+            with patch("academic_engine.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -399,7 +399,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            with patch("telegram_console.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
+            with patch("academic_engine.autonomous_daemon.subprocess.Popen", return_value=FakeProcess()):
                 with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                     work_cli_module.main(
                         [
@@ -415,7 +415,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
                         root_dir=root,
                     )
 
-                with patch("telegram_console.autonomous_daemon._pid_is_alive", return_value=True):
+                with patch("academic_engine.autonomous_daemon._pid_is_alive", return_value=True):
                     stdout = StringIO()
                     stderr = StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -566,7 +566,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
             root = Path(tempdir)
             build_fake_repo(root)
             add_demo_work_clone(root, "zeta-work")
-            with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
+            with patch("academic_engine.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -636,7 +636,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            with patch("telegram_console.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
+            with patch("academic_engine.autonomous_scheduler.subprocess.Popen", return_value=FakeProcess()):
                 with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                     work_cli_module.main(
                         [
@@ -652,7 +652,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
                         root_dir=root,
                     )
 
-                with patch("telegram_console.autonomous_scheduler._pid_is_alive", return_value=True):
+                with patch("academic_engine.autonomous_scheduler._pid_is_alive", return_value=True):
                     stdout = StringIO()
                     stderr = StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):

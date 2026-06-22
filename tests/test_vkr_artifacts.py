@@ -1,4 +1,4 @@
-"""Tests for telegram_console.vkr_artifacts."""
+"""Tests for academic_engine.vkr_artifacts."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 
-from telegram_console.vkr_artifacts import (
+from academic_engine.vkr_artifacts import (
     build_bundle,
     load_metadata,
     render_bundle,

@@ -24,11 +24,11 @@
 Verification:
 
 - `python3 -m unittest discover -s tests -q` — `395 tests OK` два раза подряд;
-- `ruff check telegram_console/ tests/` — OK;
-- `ruff format --check telegram_console/ tests/` — OK;
-- `python3 -m telegram_console.work_cli skill-source-map audit --json` — OK;
-- `python3 -m telegram_console.work_cli skill-source-map audit --skills-root /Users/albina/.codex/skills --json` — OK;
-- `python3 -m telegram_console.work_cli work-status --json` — OK.
+- `ruff check academic_engine/ tests/` — OK;
+- `ruff format --check academic_engine/ tests/` — OK;
+- `python3 -m academic_engine.work_cli skill-source-map audit --json` — OK;
+- `python3 -m academic_engine.work_cli skill-source-map audit --skills-root /Users/albina/.codex/skills --json` — OK;
+- `python3 -m academic_engine.work_cli work-status --json` — OK.
 
 Release boundary:
 

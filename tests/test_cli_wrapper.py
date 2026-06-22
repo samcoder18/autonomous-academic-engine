@@ -19,4 +19,4 @@ class WorkCliWrapperTests(unittest.TestCase):
             content,
         )
         self.assertIn('export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"', content)
-        self.assertIn('python3 -m telegram_console.work_cli "$@"', content)
+        self.assertIn('python3 -m academic_engine.work_cli "$@"', content)

@@ -72,9 +72,9 @@
 ## Интеграция с machine-verifier
 
 В дополнение к ручной проверке используется детерминированный
-`telegram_console/source_verifier.py`. Его задача — получить финальный
+`academic_engine/source_verifier.py`. Его задача — получить финальный
 verdict вида `current / stale / obsolete / primary-missing / unverifiable`
-через коннекторы (`telegram_console/sources/connectors/*`).
+через коннекторы (`academic_engine/sources/connectors/*`).
 
 Агент обязан:
 

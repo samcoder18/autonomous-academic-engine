@@ -15,7 +15,7 @@ Design goals:
   block rather than silently swallowing the failure.
 - **Dependency-free**: no PyYAML / jsonschema packages; we use the
   standard ``json`` module and hand-rolled validation against the same
-  taxonomy defined in :mod:`telegram_console.repair_kernel`.
+  taxonomy defined in :mod:`academic_engine.repair_kernel`.
 """
 
 from __future__ import annotations

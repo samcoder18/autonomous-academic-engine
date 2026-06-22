@@ -5,4 +5,4 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-python3 -m telegram_console.work_cli assemble-thesis "$@"
+python3 -m academic_engine.work_cli assemble-thesis "$@"

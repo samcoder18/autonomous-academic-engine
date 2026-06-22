@@ -46,14 +46,14 @@ length conformance.
 ## Verification Snapshot
 
 - `python3 -m unittest tests.test_work_state tests.test_one_shot tests.test_work_bootstrap tests.test_work_type tests.test_dissertation_standards tests.test_dissertation_artifacts -q`
-- `python3 -m ruff check telegram_console tests`
+- `python3 -m ruff check academic_engine tests`
 - `python3 -m unittest discover -s tests -q`
-- `python3 -m telegram_console.work_cli skill-source-map audit --json`
+- `python3 -m academic_engine.work_cli skill-source-map audit --json`
 
 Результат на 2026-04-20:
 
 - targeted tests: green;
-- `ruff`: clean for `telegram_console` + `tests`;
+- `ruff`: clean for `academic_engine` + `tests`;
 - full unittest suite: `384 tests OK`;
 - `skill-source-map audit`: `ok=true`, `issues=[]`.
 

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console.work_state import build_work_state
+from academic_engine.work_state import build_work_state
 
 
 def _artifact(path: Path, *, exists: bool, artifact_id: str | None = None) -> dict[str, object]:

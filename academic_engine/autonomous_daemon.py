@@ -892,7 +892,7 @@ def start_daemon_process(
     existing_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(repo_root) if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
     child_code = (
-        "from telegram_console.work_cli import main; "
+        "from academic_engine.work_cli import main; "
         "import sys; "
         "raise SystemExit(main(sys.argv[2:], root_dir=sys.argv[1]))"
     )

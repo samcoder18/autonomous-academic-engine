@@ -20,13 +20,13 @@ Legend:
 | `DOC-001` | docs / tests truth | `medium` | `confirmed` | `tests/README.md`, split test modules, runtime reliability backlog | docs owner | Rewrite `tests/README.md` around the current split regression architecture and current deterministic test entrypoints. | blocks honest docs-truth claim for test architecture |
 | `DOC-002` | docs / CLI artifact truth | `medium` | `confirmed` | `README.md`, live `one-shot-dissertation` smoke output | docs owner | Update README report-path wording so dissertation runs mention `*-one-shot-dissertation-report.*` instead of the generic thesis stem. | blocks honest public artifact-path documentation |
 | `BASELINE-001` | release process | `high` | `confirmed` | `git status --short`, `git diff --stat` | repo maintainer | Re-run final release-quality audit on a clean commit or tagged snapshot instead of a dirty in-flight tree. | blocks any strong release-quality claim for the repo |
-| `STATE-001` | active work / standards | `high` | `confirmed` | `python3 -m telegram_console.work_cli work-status --json` | work owner | Resolve or consciously waive visible status blockers for `biometrics-vkr`: missing article raw bundle, thesis conflict review, absent advisories. | blocks project-level formal-compliance / readiness claim |
+| `STATE-001` | active work / standards | `high` | `confirmed` | `python3 -m academic_engine.work_cli work-status --json` | work owner | Resolve or consciously waive visible status blockers for `biometrics-vkr`: missing article raw bundle, thesis conflict review, absent advisories. | blocks project-level formal-compliance / readiness claim |
 
 ## High-Value Next Wave
 
 | Finding ID | Subsystem | Severity | Confidence | Evidence source | Suggested owner | Recommended next action | Blocking impact |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `CI-001` | CI / formatting | `medium` | `strong-suspect` | `.github/workflows/ci.yml`, `.pre-commit-config.yaml`, recent format drift noted in final quality audit | repo maintainer | Add `ruff format --check telegram_console/ tests/` to CI to close the formatting blind spot. | does not block runtime correctness, but weakens CI completeness |
+| `CI-001` | CI / formatting | `medium` | `strong-suspect` | `.github/workflows/ci.yml`, `.pre-commit-config.yaml`, recent format drift noted in final quality audit | repo maintainer | Add `ruff format --check academic_engine/ tests/` to CI to close the formatting blind spot. | does not block runtime correctness, but weakens CI completeness |
 | `CLI-001` | CLI architecture | `medium` | `strong-suspect` | runtime reliability backlog | runtime maintainer | Split the remaining `work_cli.py` parser shell into smaller command groups only if the next wave touches multiple command families. | raises maintenance cost and review complexity |
 | `PROJ-001` | project observability | `medium` | `confirmed` | active `work-status --json` output | work owner | Fill thesis/article advisory surfaces deliberately or document why they remain absent for the current phase. | blocks stronger project-state clarity |
 

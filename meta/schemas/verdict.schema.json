@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://legal-academic-workspace.local/schemas/verdict.schema.json",
   "title": "Structured Academic Verdict",
-  "description": "Deterministic machine-readable verdict emitted by evaluator/critic/checker agents via fenced ```verdict …``` block. Parsed by telegram_console.verdict_parser and preferred over regex-based signal extraction when present.",
+  "description": "Deterministic machine-readable verdict emitted by evaluator/critic/checker agents via fenced ```verdict …``` block. Parsed by academic_engine.verdict_parser and preferred over regex-based signal extraction when present.",
   "type": "object",
   "required": ["verdict_version", "lane", "kind", "status"],
   "additionalProperties": false,
