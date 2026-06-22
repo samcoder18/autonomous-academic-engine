@@ -213,7 +213,7 @@ raw_dir = "meta/standards/raw/ru-vkr-gost-r-7-0-100-2018"
 official_only = true
 notes = [
   "ГОСТ Р 7.0.100-2018 - базовый стандарт библиографического описания для ВКР и диссертаций.",
-  "Машинные проверки реализованы в telegram_console/gost_linter.py.",
+  "Машинные проверки реализованы в academic_engine/gost_linter.py.",
 ]
 
 [profiles."ru-vkr-university-default"]
@@ -226,5 +226,5 @@ official_only = false
 notes = [
   "Дефолтный профиль форматирования ВКР (TNR 14, 1.5, поля 30/20/20/20).",
   "Используется при отсутствии подтверждённой кафедральной методички.",
-  "Машинные проверки в telegram_console/docx_conformance.py.",
+  "Машинные проверки в academic_engine/docx_conformance.py.",
 ]

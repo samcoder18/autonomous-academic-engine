@@ -12,11 +12,11 @@ blockers` вердикт для VKR, статьи, магистерской и (
 ### Решено автоматически
 
 - Контрактные проверки структуры источника (`Source`) — связаны в
-  [telegram_console/sources](../telegram_console/sources).
+  [academic_engine/sources](../academic_engine/sources).
 - Stub/live режим и throttling (stub включен по умолчанию в CI).
 - Коннекторы: `pravo_gov_ru`, `sudact_ru`, `cbr_ru`, `vak_gov`,
   `elibrary`, `semantic_scholar`, `cyberleninka`, `web_fallback`.
-- Верификатор `telegram_console/source_verifier.py`: статусы
+- Верификатор `academic_engine/source_verifier.py`: статусы
   `current/stale/obsolete/primary-missing/unverifiable` и блокеры.
 
 ### Unknowns
@@ -37,7 +37,7 @@ blockers` вердикт для VKR, статьи, магистерской и (
 ### Решено автоматически
 
 - MinHash fingerprint + локальный корпус
-  ([`telegram_console/originality`](../telegram_console/originality));
+  ([`academic_engine/originality`](../academic_engine/originality));
 - Блокеры `originality/high-similarity-<passage_id>` для
   `repair_kernel`;
 - Гейт в `one_shot` с порогом из work-type профиля.
@@ -57,9 +57,9 @@ blockers` вердикт для VKR, статьи, магистерской и (
 
 ### Решено автоматически
 
-- `telegram_console/gost_linter.py`: 5 классов проверок (структура,
+- `academic_engine/gost_linter.py`: 5 классов проверок (структура,
   терминальная точка, дубликаты URL, дубликаты entry);
-- `telegram_console/docx_conformance.py`: шрифт, кегль, поля,
+- `academic_engine/docx_conformance.py`: шрифт, кегль, поля,
   междустрочный, heading-стили, footnotes;
 - Нормализованные профили: `ru-vkr-gost-r-7-0-100-2018`,
   `ru-vkr-university-default`.
@@ -100,18 +100,18 @@ blockers` вердикт для VKR, статьи, магистерской и (
 
 - Фронтматтер: `title-page`, `abstract-ru`, `abstract-en`,
   `keywords`, `task-sheet` —
-  [`telegram_console/vkr_artifacts.py`](../telegram_console/vkr_artifacts.py).
+  [`academic_engine/vkr_artifacts.py`](../academic_engine/vkr_artifacts.py).
 - Dissertation contour: `author-abstract`, `defense-checklist`,
   `historiography-map`, `novelty-contribution-map`,
   `dissertation-claim-map`, `counterargument-review`,
   `dissertation-review`, `publication-evidence`,
   `publication-claim-matrix` — через
-  [`telegram_console/dissertation_artifacts.py`](../telegram_console/dissertation_artifacts.py),
-  [`telegram_console/dissertation_contour.py`](../telegram_console/dissertation_contour.py)
+  [`academic_engine/dissertation_artifacts.py`](../academic_engine/dissertation_artifacts.py),
+  [`academic_engine/dissertation_contour.py`](../academic_engine/dissertation_contour.py)
   и `one-shot-dissertation`.
 - Work-type профили (`article`, `vkr-bachelor`, `vkr-specialist`,
   `master-thesis`, `dissertation-candidate`, `dissertation-doctor`) —
-  [`telegram_console/work_type.py`](../telegram_console/work_type.py).
+  [`academic_engine/work_type.py`](../academic_engine/work_type.py).
 - Минимальное количество источников/порог similarity — из профиля.
 
 ### Unknowns
@@ -135,12 +135,12 @@ blockers` вердикт для VKR, статьи, магистерской и (
 - GitHub Actions: ruff, unittest, skill source map audit, smoke
   verdict parser, smoke one-shot pipeline.
 - Fake Codex для verdict smoke.
-- Ops-alerts ([`telegram_console/ops_alerts.py`](../telegram_console/ops_alerts.py))
+- Ops-alerts ([`academic_engine/ops_alerts.py`](../academic_engine/ops_alerts.py))
   подключены к `autonomous_daemon.acquire_daemon_lock` (stale-lock recovery,
   lock-blocked) и к `run_daemon_foreground` (terminal-stop, stuck, unhandled
   exception). Offline sink настраивается через `OPS_ALERT_LOG_PATH`; без него
   события остаются в stderr + Python `logging`.
-- Resource guards ([`telegram_console/resource_guards.py`](../telegram_console/resource_guards.py))
+- Resource guards ([`academic_engine/resource_guards.py`](../academic_engine/resource_guards.py))
   активны в `run_daemon_foreground`: `TimeoutBudget` как defense-in-depth к
   существующему `max_runtime_minutes`, `StuckDetector` через CLI-флаг
   `--stuck-after-minutes` или env `DAEMON_STUCK_AFTER_MINUTES`.

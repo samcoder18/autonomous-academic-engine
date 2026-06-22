@@ -488,7 +488,7 @@ class WorkflowEngine:
     def _create_sandbox(self, sandbox_dir: Path, work_dir: Path) -> None:
         sandbox_dir.mkdir(parents=True, exist_ok=False)
         ignored = shutil.ignore_patterns(".git", "output", "__pycache__", "*.pyc", ".DS_Store")
-        for name in ("agents", "meta", "templates", "scripts", "telegram_console"):
+        for name in ("agents", "meta", "templates", "scripts", "academic_engine"):
             source = self.root_dir / name
             if source.exists():
                 shutil.copytree(source, sandbox_dir / name, ignore=ignored)

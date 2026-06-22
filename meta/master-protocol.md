@@ -173,8 +173,8 @@
 
 Перед тем как объявить любой thesis-результат `submission-ready`, рукопись обязана пройти детерминированный one-shot pipeline:
 
-- `python3 -m telegram_console.work_cli build-vkr-frontmatter [--work <slug>]` — собирает title-page, abstract, keywords, task-sheet из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра (автор, научный руководитель, abstract < 200 символов, < 3 ключевых слов RU/EN) блокирует сборку.
-- `python3 -m telegram_console.work_cli one-shot-thesis [--work <slug>] --corpus <path> [--work-type <profile>]` — запускает обязательные гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure`, а для managed thesis bundle еще и `thesis-quality-contract`, и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
+- `python3 -m academic_engine.work_cli build-vkr-frontmatter [--work <slug>]` — собирает title-page, abstract, keywords, task-sheet из `works/<slug>/thesis/metadata.toml`. Любая метаданная-дыра (автор, научный руководитель, abstract < 200 символов, < 3 ключевых слов RU/EN) блокирует сборку.
+- `python3 -m academic_engine.work_cli one-shot-thesis [--work <slug>] --corpus <path> [--work-type <profile>]` — запускает обязательные гейты `vkr-frontmatter`, `gost-bibliography`, `docx-conformance`, `originality`, `work-type-structure`, а для managed thesis bundle еще и `thesis-quality-contract`, и пишет отчёт в `works/<slug>/thesis/reviews/<date>-one-shot-report.(md|json)`.
 
 Правила статуса:
 
@@ -183,17 +183,17 @@
 - legacy `--skip-docx` не отключает DOCX gate в strict mode;
 - `submission-ready` разрешён только через evaluator + machine veto composition: evaluator допускает статус, а все обязательные deterministic gates имеют PASS;
 - `thesis-quality-contract` требует для managed thesis bundle claim ledger, verification log и review artifacts с machine-readable strict fields; отсутствие этих артефактов или неполный claim passport блокируют `submission-ready`;
-- origin-text originality-gate обязан использовать локальный corpus (`telegram_console.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
+- origin-text originality-gate обязан использовать локальный corpus (`academic_engine.originality`). Внешние AI-детекторы и anti-plagiarism SaaS запрещены и системой не поддерживаются (см. AGENTS.md, hard rules).
 
 ### 11.1 Repo-level release claims
 
 - Сильный repo-level claim вида `release-quality`, `fully final` или эквивалентной формулировки допускается только на clean git snapshot: без незакоммиченных repo-tracked изменений в рабочем дереве.
-- Перед таким claim обязан быть полностью зелёный deterministic verification matrix workspace: `python3 -m unittest discover -s tests -q`, `ruff check telegram_console/ tests/`, `ruff format --check telegram_console/ tests/`, `python3 -m telegram_console.work_cli skill-source-map audit --json`.
+- Перед таким claim обязан быть полностью зелёный deterministic verification matrix workspace: `python3 -m unittest discover -s tests -q`, `ruff check academic_engine/ tests/`, `ruff format --check academic_engine/ tests/`, `python3 -m academic_engine.work_cli skill-source-map audit --json`.
 - Если аудит или verification matrix были выполнены на dirty tree, это допустимо как engineering evidence и промежуточный closeout, но не как финальный безусловный release-quality verdict.
 
 ### 11.2 Операционный канал daemon'а
 
-- Долгоживущий `autonomous_daemon.run_daemon_foreground` эмитит структурированные ops-alerts через [`telegram_console.ops_alerts`](../telegram_console/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
+- Долгоживущий `autonomous_daemon.run_daemon_foreground` эмитит структурированные ops-alerts через [`academic_engine.ops_alerts`](../academic_engine/ops_alerts.py). События, которые обязаны доходить до оператора: `daemon/stale-lock-recovered`, `daemon/lock-blocked`, `daemon/terminal-max-cycles`, `daemon/terminal-max-runtime`, `daemon/run-stuck`, `daemon/timeout-exceeded`, `daemon/unhandled-exception`.
 - Конфигурация доставки: `OPS_ALERT_LOG_PATH` (файл для offline-tee). Если он не выставлен, алерты идут в stderr и в Python `logging` — local-run остаётся тихим, но событие не теряется.
 - Stuck-detector активируется флагом `--stuck-after-minutes` у `autonomous daemon run` или переменной `DAEMON_STUCK_AFTER_MINUTES`. При срабатывании daemon пишет terminal-state `run-stuck`, эмитит `daemon/run-stuck` (severity CRITICAL) и завершается штатно.
 - Ops-канал намеренно отделён от пользовательского управления. Legacy compatibility layer не является поддерживаемой surface управления проектом. Любое изменение kind-ов алертов фиксируется в [tests/test_daemon_ops_integration.py](../tests/test_daemon_ops_integration.py) и в §6 unknowns.

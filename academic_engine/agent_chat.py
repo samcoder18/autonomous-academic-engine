@@ -167,7 +167,7 @@ class AgentChatService:
         wrapper_cmd = [
             self.python_executable,
             "-m",
-            "telegram_console.chat_wrapper",
+            "academic_engine.chat_wrapper",
             "--task-dir",
             str(task_dir),
         ]

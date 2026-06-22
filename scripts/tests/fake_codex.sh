@@ -2,7 +2,7 @@
 # Minimal fake `codex` used by CI smoke-e2e.
 #
 # Emits enough structured output (including a fenced ```verdict``` block)
-# for telegram_console.work_cli and orchestrator to process a run as if a
+# for academic_engine.work_cli and orchestrator to process a run as if a
 # real Codex agent had responded. Used by .github/workflows/ci.yml so we
 # detect regressions in the runtime pipeline without calling OpenAI.
 #

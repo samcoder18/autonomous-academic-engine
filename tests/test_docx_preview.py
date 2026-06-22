@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from textwrap import dedent
 from unittest.mock import patch
 
-from telegram_console import docx_preview
+from academic_engine import docx_preview
 
 
 def _write_demo_workspace(root: Path) -> None:
@@ -111,7 +111,7 @@ class DocxPreviewConfigTests(unittest.TestCase):
             stderr = StringIO()
 
             with patch(
-                "telegram_console.docx_preview._load_docx_dependencies",
+                "academic_engine.docx_preview._load_docx_dependencies",
                 side_effect=docx_preview.DocxPreviewDependencyError("python-docx is not installed"),
             ):
                 code = docx_preview.main(
@@ -126,7 +126,7 @@ class DocxPreviewConfigTests(unittest.TestCase):
         self.assertIn("python-docx is not installed", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
-    def test_script_wrapper_avoids_telegram_console_import_shadowing(self) -> None:
+    def test_script_wrapper_avoids_academic_engine_import_shadowing(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
         with TemporaryDirectory() as tmp:
@@ -151,7 +151,7 @@ class DocxPreviewConfigTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout, "")
         self.assertIn("Input DOCX not found", proc.stderr)
-        self.assertNotIn("No module named 'telegram_console.bot'", proc.stderr)
+        self.assertNotIn("No module named 'academic_engine.bot'", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
 
 

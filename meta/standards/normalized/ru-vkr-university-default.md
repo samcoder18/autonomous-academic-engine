@@ -2,7 +2,7 @@
 
 Дефолтный профиль для ВКР бакалавра/специалиста в российском вузе при
 отсутствии подтверждённой кафедральной методички. Используется
-`telegram_console/docx_conformance.py::ConformanceProfile` по умолчанию.
+`academic_engine/docx_conformance.py::ConformanceProfile` по умолчанию.
 
 ## Форматирование страницы
 
@@ -31,4 +31,4 @@
 
 ## Связанные модули workspace
 
-- [telegram_console/docx_conformance.py](../../../telegram_console/docx_conformance.py)
+- [academic_engine/docx_conformance.py](../../../academic_engine/docx_conformance.py)

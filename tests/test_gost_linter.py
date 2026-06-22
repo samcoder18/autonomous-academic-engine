@@ -1,11 +1,11 @@
-"""Tests for telegram_console.gost_linter."""
+"""Tests for academic_engine.gost_linter."""
 
 from __future__ import annotations
 
 import unittest
 from textwrap import dedent
 
-from telegram_console.gost_linter import (
+from academic_engine.gost_linter import (
     extract_bibliography_entries,
     lint_bibliography,
     lint_to_blockers,

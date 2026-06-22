@@ -22,8 +22,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 
-from telegram_console.one_shot import OneShotConfig, run_one_shot
-from telegram_console.originality.corpus import OriginalityCorpus
+from academic_engine.one_shot import OneShotConfig, run_one_shot
+from academic_engine.originality.corpus import OriginalityCorpus
 
 _METADATA_TOML = dedent(
     f"""

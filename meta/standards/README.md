@@ -14,9 +14,9 @@ Raw и normalized хранятся рядом, но finalizer не должен 
 
 ## Intake track
 
-- `python3 -m telegram_console.work_cli standards-intake <profile-id>` - подтягивает отсутствующие raw-источники и пересобирает normalized profile без принудительного refresh уже скачанных файлов.
-- `python3 -m telegram_console.work_cli standards-refresh <profile-id>` - принудительно перепроверяет official sources и переписывает raw manifest + normalized profile.
-- `python3 -m telegram_console.work_cli standards-status [profile-id]` - показывает resolved profile, fallback, raw state и conflict flag.
+- `python3 -m academic_engine.work_cli standards-intake <profile-id>` - подтягивает отсутствующие raw-источники и пересобирает normalized profile без принудительного refresh уже скачанных файлов.
+- `python3 -m academic_engine.work_cli standards-refresh <profile-id>` - принудительно перепроверяет official sources и переписывает raw manifest + normalized profile.
+- `python3 -m academic_engine.work_cli standards-status [profile-id]` - показывает resolved profile, fallback, raw state и conflict flag.
 
 ## Partial profiles
 

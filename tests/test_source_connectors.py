@@ -3,12 +3,12 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from telegram_console.sources.connectors import default_registry
-from telegram_console.sources.connectors._base import BaseConnector
-from telegram_console.sources.connectors.pravo_gov_ru import PravoGovRuConnector
-from telegram_console.sources.connectors.semantic_scholar import SemanticScholarConnector
-from telegram_console.sources.http_client import HttpClient, HttpResponse
-from telegram_console.sources.models import SourceKind
+from academic_engine.sources.connectors import default_registry
+from academic_engine.sources.connectors._base import BaseConnector
+from academic_engine.sources.connectors.pravo_gov_ru import PravoGovRuConnector
+from academic_engine.sources.connectors.semantic_scholar import SemanticScholarConnector
+from academic_engine.sources.http_client import HttpClient, HttpResponse
+from academic_engine.sources.models import SourceKind
 
 
 class _RecordingTransport:

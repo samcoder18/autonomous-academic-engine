@@ -18,17 +18,17 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["telegram_console*"]
+include = ["academic_engine*"]
 exclude = ["tests*", "scripts*"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-src = ["telegram_console", "tests"]
+src = ["academic_engine", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
-# tests/test_telegram_console.py: very long integration module; E501 deferred (engineering audit 2026-04-19).
+# tests/test_academic_engine.py: very long integration module; E501 deferred (engineering audit 2026-04-19).
 [tool.ruff.lint.per-file-ignores]
-"tests/test_telegram_console.py" = ["E501"]
+"tests/test_academic_engine.py" = ["E501"]

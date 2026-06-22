@@ -1,4 +1,4 @@
-"""Tests for telegram_console.one_shot."""
+"""Tests for academic_engine.one_shot."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 
-from telegram_console.one_shot import (
+from academic_engine.one_shot import (
     OneShotConfig,
     run_one_shot,
     write_report,
 )
-from telegram_console.orchestrator_exports import require_machine_gates_passed
-from telegram_console.orchestrator_support import WorkflowError
-from telegram_console.originality.corpus import OriginalityCorpus
+from academic_engine.orchestrator_exports import require_machine_gates_passed
+from academic_engine.orchestrator_support import WorkflowError
+from academic_engine.originality.corpus import OriginalityCorpus
 
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 

@@ -7,8 +7,8 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console import work_cli
-from telegram_console.skill_source_map import (
+from academic_engine import work_cli
+from academic_engine.skill_source_map import (
     audit_skill_source_map,
     load_skill_source_map,
     sync_external_skill_sources,

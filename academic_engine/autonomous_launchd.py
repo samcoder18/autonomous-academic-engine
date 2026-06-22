@@ -228,7 +228,7 @@ class AutonomousDaemonLaunchdManager:
         args = [
             self.python_executable,
             "-m",
-            "telegram_console.work_cli",
+            "academic_engine.work_cli",
             "autonomous",
             "daemon",
             "run",
@@ -279,7 +279,7 @@ class AutonomousDaemonLaunchdManager:
                     [
                         "Autonomous daemon LaunchAgent is not installed.",
                         f"Expected plist: {self.paths.installed_plist}",
-                        "Run `python3 -m telegram_console.work_cli autonomous daemon launchd install "
+                        "Run `python3 -m academic_engine.work_cli autonomous daemon launchd install "
                         "--works all` first.",
                     ]
                 )

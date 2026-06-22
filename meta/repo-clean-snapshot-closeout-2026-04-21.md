@@ -28,14 +28,14 @@ verification-first волны на clean snapshot.
 
 Симптом:
 
-- `python3 -m telegram_console.work_cli ...` без явного `root_dir` на изолированном
+- `python3 -m academic_engine.work_cli ...` без явного `root_dir` на изолированном
   temp workspace запускался от `/Users/albina/дипломная`, а не от текущей рабочей папки.
 - Из-за этого `work init` мог писать `*-smoke` bundle прямо в repo root, а
   `one-shot-*` и `build-dissertation-artifacts` смотрели не в тот workspace.
 
 Repair:
 
-- `telegram_console.work_cli.main()` теперь по умолчанию использует `Path.cwd()`.
+- `academic_engine.work_cli.main()` теперь по умолчанию использует `Path.cwd()`.
 - Добавлен regression test, фиксирующий contract: CLI без `root_dir` обязан
   использовать текущую рабочую директорию как workspace root.
 - Случайные smoke-следы (`article-smoke`, `thesis-smoke`, `candidate-smoke`) были
@@ -51,9 +51,9 @@ Repair:
 
 ```bash
 python3 -m unittest discover -s tests -q
-ruff check telegram_console/ tests/
-ruff format --check telegram_console/ tests/
-python3 -m telegram_console.work_cli skill-source-map audit --json
+ruff check academic_engine/ tests/
+ruff format --check academic_engine/ tests/
+python3 -m academic_engine.work_cli skill-source-map audit --json
 ```
 
 Результат повторных baseline pass:
@@ -79,8 +79,8 @@ python3 -m unittest tests.test_work_cli_runtime tests.test_work_bootstrap -v
 ### Live workspace checks
 
 ```bash
-python3 -m telegram_console.work_cli work-status --json
-python3 -m telegram_console.work_cli standards-status journal-jrp
+python3 -m academic_engine.work_cli work-status --json
+python3 -m academic_engine.work_cli standards-status journal-jrp
 ```
 
 Подтверждено:

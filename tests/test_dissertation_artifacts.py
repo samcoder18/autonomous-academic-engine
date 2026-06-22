@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 
-from telegram_console.dissertation_artifacts import build_bundle, write_bundle
+from academic_engine.dissertation_artifacts import build_bundle, write_bundle
 
 
 def _metadata_text(author_abstract: str) -> str:

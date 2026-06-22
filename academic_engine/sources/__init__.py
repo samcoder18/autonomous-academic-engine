@@ -6,14 +6,14 @@ deterministically.
 
 Entry points:
 
-- :mod:`telegram_console.sources.models` — :class:`Source`,
+- :mod:`academic_engine.sources.models` — :class:`Source`,
   :class:`SourceKind`, :class:`FetchResult`, :class:`VerificationRecord`,
   :class:`AccessProvenance`.
-- :mod:`telegram_console.sources.registry` — connector registry and
+- :mod:`academic_engine.sources.registry` — connector registry and
   dispatch helper.
-- :mod:`telegram_console.sources.cache` — SQLite-backed cache with TTL
+- :mod:`academic_engine.sources.cache` — SQLite-backed cache with TTL
   and content-hash awareness.
-- :mod:`telegram_console.sources.throttle` — per-connector retry budgets.
+- :mod:`academic_engine.sources.throttle` — per-connector retry budgets.
 """
 
 from .cache import SourceCache

@@ -9,16 +9,16 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from telegram_console.action_specs import (
+from academic_engine.action_specs import (
     AllowedWriteScope,
     ExecutionContract,
     QualityGate,
     RepairPolicy,
     RequiredArtifact,
 )
-from telegram_console.runtime_status import load_runtime_record
-from telegram_console.state import RuntimeStore
-from telegram_console.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease
+from academic_engine.runtime_status import load_runtime_record
+from academic_engine.state import RuntimeStore
+from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease
 
 
 class WorkflowEngineTests(unittest.TestCase):

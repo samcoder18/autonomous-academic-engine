@@ -68,4 +68,4 @@ fi
 
 export PYTHON_BIN
 cd "$ROOT_DIR"
-exec "$PYTHON_BIN" -m telegram_console --root "$ROOT_DIR"
+exec "$PYTHON_BIN" -m academic_engine --root "$ROOT_DIR"

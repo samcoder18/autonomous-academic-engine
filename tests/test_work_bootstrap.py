@@ -7,8 +7,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from telegram_console import work_cli
-from telegram_console.work_bootstrap import (
+from academic_engine import work_cli
+from academic_engine.work_bootstrap import (
     DEFAULT_ARTICLE_PROFILE,
     DEFAULT_DISSERTATION_CANDIDATE_PROFILE,
     DEFAULT_DISSERTATION_DOCTOR_PROFILE,

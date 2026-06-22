@@ -7,7 +7,7 @@ Scope:
   minutes; triggers ops alerts and gives the orchestrator a deterministic
   kill signal.
 - **Retry budgets** — bounded per-connector retry counters with cooldown
-  (used by :mod:`telegram_console.sources` in Phase 1).
+  (used by :mod:`academic_engine.sources` in Phase 1).
 
 All guards are **pure data + clock-injected helpers** so they compose
 with the existing autonomous daemon without spawning extra threads.
@@ -167,7 +167,7 @@ class RetryBudget:
 
 @dataclass
 class RunGuards:
-    """Bundle used by :mod:`telegram_console.one_shot`."""
+    """Bundle used by :mod:`academic_engine.one_shot`."""
 
     timeout: TimeoutBudget
     stuck: StuckDetector

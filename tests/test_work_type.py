@@ -1,11 +1,11 @@
-"""Tests for telegram_console.work_type."""
+"""Tests for academic_engine.work_type."""
 
 from __future__ import annotations
 
 import unittest
 from textwrap import dedent
 
-from telegram_console.work_type import (
+from academic_engine.work_type import (
     available_profiles,
     resolve_profile,
     validate_structure,

@@ -22,4 +22,4 @@ if ! command -v pandoc >/dev/null 2>&1; then
 fi
 
 PYTHON_CMD="${PYTHON_BIN:-python3}"
-"$PYTHON_CMD" -m telegram_console.work_cli export-article-docx "$@"
+"$PYTHON_CMD" -m academic_engine.work_cli export-article-docx "$@"

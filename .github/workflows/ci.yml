@@ -19,10 +19,10 @@ jobs:
         run: pip install "ruff>=0.8"
 
       - name: Ruff
-        run: ruff check telegram_console tests
+        run: ruff check academic_engine tests
 
       - name: Ruff format
-        run: ruff format --check telegram_console tests
+        run: ruff format --check academic_engine tests
 
       - name: Unit tests
         env:
@@ -34,9 +34,9 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           SKILLS_ROOT="$(mktemp -d)"
-          python3 -m telegram_console.work_cli skill-source-map sync-external \
+          python3 -m academic_engine.work_cli skill-source-map sync-external \
             --skills-root "$SKILLS_ROOT" --write --json
-          python3 -m telegram_console.work_cli skill-source-map audit \
+          python3 -m academic_engine.work_cli skill-source-map audit \
             --skills-root "$SKILLS_ROOT" --json
 
       - name: Smoke one-shot pipeline (offline fixture)
@@ -52,7 +52,7 @@ jobs:
           echo "$OUTPUT"
           python3 -c "
           import sys
-          from telegram_console.verdict_parser import extract_structured_verdicts
+          from academic_engine.verdict_parser import extract_structured_verdicts
           text = sys.stdin.read()
           verdicts, errors = extract_structured_verdicts({'output': text})
           assert not errors, f'unexpected verdict errors: {errors}'

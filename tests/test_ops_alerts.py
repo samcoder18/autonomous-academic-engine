@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console.ops_alerts import AlertSeverity, OpsAlertSink, emit_alert
+from academic_engine.ops_alerts import AlertSeverity, OpsAlertSink, emit_alert
 
 
 class OpsAlertTests(unittest.TestCase):

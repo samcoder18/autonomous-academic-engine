@@ -36,8 +36,8 @@
 
 ## Связанные модули workspace
 
-- [telegram_console/gost_linter.py](../../../telegram_console/gost_linter.py)
-- [telegram_console/docx_conformance.py](../../../telegram_console/docx_conformance.py)
+- [academic_engine/gost_linter.py](../../../academic_engine/gost_linter.py)
+- [academic_engine/docx_conformance.py](../../../academic_engine/docx_conformance.py)
 
 ## Не-goals
 

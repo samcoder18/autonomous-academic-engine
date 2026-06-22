@@ -1,4 +1,4 @@
-"""Tests for telegram_console.docx_conformance."""
+"""Tests for academic_engine.docx_conformance."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from telegram_console.docx_conformance import (
+from academic_engine.docx_conformance import (
     ConformanceProfile,
     check_docx,
     check_docx_to_blockers,

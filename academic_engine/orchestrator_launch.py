@@ -129,7 +129,7 @@ class OrchestratorLaunchMixin:
         wrapper_cmd = [
             self.python_executable,
             "-m",
-            "telegram_console.run_wrapper",
+            "academic_engine.run_wrapper",
             "--run-dir",
             str(run_dir),
             "--cwd",

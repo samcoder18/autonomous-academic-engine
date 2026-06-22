@@ -8,19 +8,19 @@ import unittest
 import warnings
 from pathlib import Path
 
-from telegram_console.autonomous_daemon import (
+from academic_engine.autonomous_daemon import (
     DAEMON_TERMINAL_STATUSES,
     daemon_lock_path,
     daemon_status_payload,
     start_daemon_process,
 )
-from telegram_console.autonomous_launchd import AutonomousDaemonLaunchdManager
-from telegram_console.autonomous_scheduler import (
+from academic_engine.autonomous_launchd import AutonomousDaemonLaunchdManager
+from academic_engine.autonomous_scheduler import (
     multi_daemon_lock_path,
     multi_daemon_status_payload,
     start_multi_work_daemon_process,
 )
-from tests.test_telegram_console import (
+from tests.test_academic_engine import (
     TEST_WORK_ID,
     FakeLaunchctl,
     build_fake_repo,
@@ -156,7 +156,7 @@ class LaunchdSmokeTests(unittest.TestCase):
             )
             plist_text = manager.paths.installed_plist.read_text(encoding="utf-8")
             self.assertTrue(install_result.status.loaded)
-            self.assertIn("telegram_console.work_cli", plist_text)
+            self.assertIn("academic_engine.work_cli", plist_text)
             self.assertIn("<string>--works</string>", plist_text)
             self.assertIn("<string>all</string>", plist_text)
             self.assertIn("<key>KeepAlive</key>\n  <true/>", plist_text)

@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from telegram_console import ops_alerts
-from telegram_console.autonomous_daemon import (
+from academic_engine import ops_alerts
+from academic_engine.autonomous_daemon import (
     _build_foreground_guards,
     _resolve_stuck_after_minutes,
     acquire_daemon_lock,
@@ -39,7 +39,7 @@ from telegram_console.autonomous_daemon import (
     run_daemon_tick,
     write_daemon_lock,
 )
-from telegram_console.autonomous_scheduler import (
+from academic_engine.autonomous_scheduler import (
     acquire_multi_daemon_lock,
     build_multi_work_schedule,
     multi_daemon_lock_path,
@@ -50,9 +50,9 @@ from telegram_console.autonomous_scheduler import (
     run_multi_work_daemon_foreground,
     run_multi_work_daemon_tick,
 )
-from telegram_console.ops_alerts import OpsAlert, OpsAlertSink, configure_default_sink
-from telegram_console.resource_guards import ResourceGuardError
-from tests.test_telegram_console import TEST_WORK_ID, add_demo_work_clone, build_fake_repo, write_raw_manifest
+from academic_engine.ops_alerts import OpsAlert, OpsAlertSink, configure_default_sink
+from academic_engine.resource_guards import ResourceGuardError
+from tests.test_academic_engine import TEST_WORK_ID, add_demo_work_clone, build_fake_repo, write_raw_manifest
 
 
 class _RecordingSink(OpsAlertSink):
@@ -154,7 +154,7 @@ class DaemonOpsAlertsTests(unittest.TestCase):
 import json
 import os
 import sys
-from telegram_console.autonomous_daemon import acquire_daemon_lock
+from academic_engine.autonomous_daemon import acquire_daemon_lock
 
 result = acquire_daemon_lock(sys.argv[1], sys.argv[2], mode="autonomous-full", pid=os.getpid())
 print(json.dumps(result))
@@ -251,7 +251,7 @@ class DaemonReliabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            with patch("telegram_console.autonomous_daemon._build_foreground_guards", return_value=_FailingGuards()):
+            with patch("academic_engine.autonomous_daemon._build_foreground_guards", return_value=_FailingGuards()):
                 state = run_daemon_foreground(
                     root_dir=root,
                     work_id=TEST_WORK_ID,
@@ -271,7 +271,7 @@ class DaemonReliabilityTests(unittest.TestCase):
             root = Path(tempdir)
             build_fake_repo(root)
 
-            with patch("telegram_console.autonomous_daemon.run_daemon_tick", side_effect=RuntimeError("boom")):
+            with patch("academic_engine.autonomous_daemon.run_daemon_tick", side_effect=RuntimeError("boom")):
                 with self.assertRaisesRegex(RuntimeError, "boom"):
                     run_daemon_foreground(
                         root_dir=root,
@@ -342,7 +342,7 @@ class DaemonReliabilityTests(unittest.TestCase):
                 return original(self, work_id=work_id)
 
             with patch(
-                "telegram_console.autonomous_scheduler.WorkflowOrchestrator.get_work_state",
+                "academic_engine.autonomous_scheduler.WorkflowOrchestrator.get_work_state",
                 new=_flaky_get_work_state,
             ):
                 schedule = build_multi_work_schedule(
@@ -376,7 +376,7 @@ class DaemonReliabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            with patch("telegram_console.autonomous_scheduler._build_foreground_guards", return_value=_FailingGuards()):
+            with patch("academic_engine.autonomous_scheduler._build_foreground_guards", return_value=_FailingGuards()):
                 state = run_multi_work_daemon_foreground(
                     root_dir=root,
                     work_ids=[TEST_WORK_ID],
@@ -398,7 +398,7 @@ class DaemonReliabilityTests(unittest.TestCase):
             build_fake_repo(root)
 
             with patch(
-                "telegram_console.autonomous_scheduler.run_multi_work_daemon_tick",
+                "academic_engine.autonomous_scheduler.run_multi_work_daemon_tick",
                 side_effect=RuntimeError("boom"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "boom"):

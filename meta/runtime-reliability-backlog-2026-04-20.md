@@ -10,13 +10,13 @@
 
 | Status | Item | Resolution |
 | --- | --- | --- |
-| `must-fix this wave` | Shared runtime JSON persistence for state/lock/stop files | Closed via `telegram_console/autonomous_runtime_store.py` |
-| `must-fix this wave` | JSON-first CLI error contract for autonomous/daemon/launchd | Closed via `telegram_console/work_cli_output.py` and `work_cli_autonomous.py` |
+| `must-fix this wave` | Shared runtime JSON persistence for state/lock/stop files | Closed via `academic_engine/autonomous_runtime_store.py` |
+| `must-fix this wave` | JSON-first CLI error contract for autonomous/daemon/launchd | Closed via `academic_engine/work_cli_output.py` and `work_cli_autonomous.py` |
 | `must-fix this wave` | Deterministic stop-request consumption in single/multi daemon | Closed in `autonomous_daemon.py` and `autonomous_scheduler.py` |
 | `must-fix this wave` | Corrupted runtime JSON fallback coverage | Closed with new CLI/runtime tests |
-| `must-fix this wave` | Split overloaded CLI/runtime tests out of `tests/test_telegram_console.py` | Closed via `test_work_cli_autonomous.py`, `test_work_cli_launchd.py`, `test_work_cli_runtime.py` |
-| `must-fix this wave` | Further decompose `orchestrator.py` without breaking public imports | Closed via mixin extraction and compatibility re-exports in `telegram_console/orchestrator.py` |
-| `must-fix this wave` | Introduce structured runtime error classes for scheduler candidate isolation | Closed via `telegram_console/autonomous_runtime_errors.py` |
+| `must-fix this wave` | Split overloaded CLI/runtime tests out of `tests/test_academic_engine.py` | Closed via `test_work_cli_autonomous.py`, `test_work_cli_launchd.py`, `test_work_cli_runtime.py` |
+| `must-fix this wave` | Further decompose `orchestrator.py` without breaking public imports | Closed via mixin extraction and compatibility re-exports in `academic_engine/orchestrator.py` |
+| `must-fix this wave` | Introduce structured runtime error classes for scheduler candidate isolation | Closed via `academic_engine/autonomous_runtime_errors.py` |
 | `must-fix this wave` | Add pilot smoke coverage for launchd lifecycle and detached daemon path | Closed via `tests/test_daemon_smoke.py` |
 
 ## Open backlog

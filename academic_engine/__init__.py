@@ -1,4 +1,4 @@
-"""Telegram control console for the legal-academic workflow."""
+"""Local CLI workflow engine for the legal-academic workspace."""
 
 from .config import TelegramConsoleConfig
 from .orchestrator import WorkflowOrchestrator

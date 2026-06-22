@@ -4,9 +4,9 @@ import unittest
 from dataclasses import replace
 from datetime import UTC, date, datetime
 
-from telegram_console.source_verifier import SourceVerifier
-from telegram_console.sources.connectors._base import BaseConnector
-from telegram_console.sources.models import (
+from academic_engine.source_verifier import SourceVerifier
+from academic_engine.sources.connectors._base import BaseConnector
+from academic_engine.sources.models import (
     AccessProvenance,
     Claim,
     FetchResult,
@@ -14,7 +14,7 @@ from telegram_console.sources.models import (
     SourceKind,
     VerificationStatus,
 )
-from telegram_console.sources.registry import ConnectorRegistry
+from academic_engine.sources.registry import ConnectorRegistry
 
 
 def _make_connector(name: str, response: FetchResult, supported=(SourceKind.STATUTE,)):
