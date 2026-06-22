@@ -129,20 +129,24 @@ class DocxPreviewConfigTests(unittest.TestCase):
     def test_script_wrapper_avoids_telegram_console_import_shadowing(self) -> None:
         root = Path(__file__).resolve().parents[1]
 
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "scripts/render_docx_preview.py",
-                "--work",
-                "martial-law-coursework",
-                "--input",
-                "missing.docx",
-            ],
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        with TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp)
+            _write_demo_workspace(workspace_root)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "render_docx_preview.py"),
+                    "--work",
+                    "demo-work",
+                    "--input",
+                    "missing.docx",
+                ],
+                cwd=workspace_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
 
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout, "")

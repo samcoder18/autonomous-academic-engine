@@ -633,3 +633,17 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 - Versioned PDF/PNG snapshots under `output/docx/` are generated output and were removed from git index.
 - Existing thesis works now use official `sogu-vkr-2025`; the profile's conflict/applicability flag remains visible instead of being hidden.
 - `frontend/` had no tracked source and is treated as local generated/build output until a real frontend app is intentionally added.
+
+## Addendum: Scientific Work Cleanup
+
+- [x] Removed substantive academic work bundles from `works/`:
+  `martial-law-coursework`,
+  `constitutional-amendments-implementation-coursework`,
+  `state-essence-role-coursework`, and the unregistered
+  `future-lawyers-values-dissertation` draft.
+- [x] Removed work-specific generated output under `output/docx/`.
+- [x] Reduced `workspace.toml` to the empty technical `starter-work` bundle.
+- [x] Updated docs and tests so the clean snapshot no longer depends on old
+  coursework slugs.
+- [x] Verified with `python3 -m unittest discover -s tests -q`, `ruff check`,
+  `ruff format --check`, and `scripts/audit_workspace_hygiene.sh`.
