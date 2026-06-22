@@ -15,6 +15,16 @@ output/docx/**/*.docx
 output/telegram/projects.json
 output/telegram/runtime/
 
+# Local web/frontend build artifacts
+frontend/node_modules/
+frontend/.next/
+
+# Local runtime databases
+output/runtime/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
 # Автогенерируемые артефакты автономного движка
 output/sources-cache/
 works/*/thesis/reviews/*-one-shot-report.json
