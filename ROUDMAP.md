@@ -644,5 +644,18 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 - [x] Confirmed there is no tracked browser-app source tree.
 - [x] Removed browser-app-specific `.gitignore` rules and hygiene audit checks.
 - [x] Removed the old local web runtime check from the hygiene script.
-- [x] Reworded the Telegram stale-callback fallback so it no longer names an
+- [x] Reworded the legacy stale-callback fallback so it no longer names an
   application dashboard.
+
+## Addendum: Documentation Control-Surface Cleanup
+
+- [x] Removed stale remote-chat management wording from active repository
+  documentation.
+- [x] Reframed `telegram_console` as a historical Python package name for the
+  supported local CLI/file-first workflow.
+- [x] Rewrote runtime and ops-alert docs around local CLI, generated files, and
+  `OPS_ALERT_LOG_PATH`.
+- [x] Added notes where historical audit files mention removed runtime layers,
+  so old snapshots are not mistaken for current operating instructions.
+- [x] Verified Markdown/TOML/shell docs no longer advertise remote-chat-based
+  project management.

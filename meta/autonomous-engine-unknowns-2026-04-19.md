@@ -138,8 +138,8 @@ blockers` вердикт для VKR, статьи, магистерской и (
 - Ops-alerts ([`telegram_console/ops_alerts.py`](../telegram_console/ops_alerts.py))
   подключены к `autonomous_daemon.acquire_daemon_lock` (stale-lock recovery,
   lock-blocked) и к `run_daemon_foreground` (terminal-stop, stuck, unhandled
-  exception). Sink в `bot.build_bot()` настраивается по `OPS_ALERT_CHAT_ID`
-  и `OPS_ALERT_LOG_PATH`.
+  exception). Offline sink настраивается через `OPS_ALERT_LOG_PATH`; без него
+  события остаются в stderr + Python `logging`.
 - Resource guards ([`telegram_console/resource_guards.py`](../telegram_console/resource_guards.py))
   активны в `run_daemon_foreground`: `TimeoutBudget` как defense-in-depth к
   существующему `max_runtime_minutes`, `StuckDetector` через CLI-флаг
@@ -147,14 +147,13 @@ blockers` вердикт для VKR, статьи, магистерской и (
 
 ### Unknowns
 
-- Telegram runtime и autonomous daemon требуют `TELEGRAM_TOKEN`
-  и реального OPENAI/Codex бюджета; не поднимаются в CI.
+- Live role execution требует реального OPENAI/Codex бюджета; CI использует
+  offline fakes и не поднимает внешние operator surfaces.
 - Pandoc смоук не включен в CI (по умолчанию pandoc отсутствует
   в стандартных runners; добавление — следующий шаг).
 - python-docx отсутствует намеренно: все DOCX-проверки через stdlib.
-- Ops-sink не отправляет алерты в Telegram без явного
-  `OPS_ALERT_CHAT_ID`; по умолчанию — stderr + optional log file.
-  Так специально: без явной конфигурации daemon ведёт себя как раньше.
+- Ops-sink по умолчанию пишет в stderr + optional log file. Так специально:
+  без явной конфигурации daemon остаётся локальным и детерминированным.
 - launchd coverage остаётся unit-style: CLI и plist generation покрыты
   тестами, но реальный smoke против системного launchd в CI по-прежнему
   не запускается.

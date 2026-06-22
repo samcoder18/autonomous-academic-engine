@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "legal-academic-workspace"
 version = "0.1.0"
-description = "Юридически-академический workspace: telegram_console, launchers и work-aware оркестрация."
+description = "Юридически-академический CLI workspace: work-aware orchestration, launchers and deterministic quality gates."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
