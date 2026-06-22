@@ -22,6 +22,7 @@
 - [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 6 completed.** Duplicate work-local DOCX formatting scripts were replaced by shared `telegram_console.docx_preview` plus `scripts/render_docx_preview.py`; work-specific settings now live in `work.toml`, and verification passed with 436 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 7 completed.** Thesis works now bind to official `sogu-vkr-2025` with raw bundle available; the old `thesis-standards-raw-missing` blocker is gone, while the profile's honest conflict/applicability flag remains visible.
+- [x] **2026-06-22: Task 8 completed.** Added executable `scripts/audit_workspace_hygiene.sh` and a regression smoke test; the script prints git, ignored-path, standards, and skill-source-map hygiene signals without modifying files.
 
 ## Initial Audit Baseline
 
@@ -522,7 +523,7 @@ Actual: all three work-status checks resolve thesis profile `sogu-vkr-2025` with
 - Create: `scripts/audit_workspace_hygiene.sh`
 - Test: add a smoke assertion in `tests/test_regression_harness.py` if the shell script stays simple and deterministic
 
-- [ ] **Step 1: Create script**
+- [x] **Step 1: Create script**
 
 Create `scripts/audit_workspace_hygiene.sh`:
 
@@ -539,7 +540,9 @@ python3 -m telegram_console.work_cli standards-status
 python3 -m telegram_console.work_cli skill-source-map audit --json
 ```
 
-- [ ] **Step 2: Make executable**
+Actual: created `scripts/audit_workspace_hygiene.sh` with section labels and the same deterministic hygiene commands.
+
+- [x] **Step 2: Make executable**
 
 Run:
 
@@ -547,7 +550,9 @@ Run:
 chmod +x scripts/audit_workspace_hygiene.sh
 ```
 
-- [ ] **Step 3: Run script**
+Actual: script mode is executable and covered by `tests.test_regression_harness.WorkspaceHygieneAuditTests`.
+
+- [x] **Step 3: Run script**
 
 Run:
 
@@ -556,6 +561,8 @@ scripts/audit_workspace_hygiene.sh
 ```
 
 Expected: command completes and prints hygiene signals without modifying files.
+
+Actual: script completed with exit code 0 and printed git status, tracked `output/docx`, ignore-rule matches, standards status, and skill-source-map JSON with `"ok": true`.
 
 ---
 
