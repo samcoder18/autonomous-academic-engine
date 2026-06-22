@@ -4,7 +4,7 @@
 
 **Goal:** Clean the repository, remove generated junk and stale artifacts, consolidate duplicate workflow utilities, and make the pipeline easier to operate without weakening safety gates.
 
-**Architecture:** Keep canonical source text and configuration under `works/<slug>/`, `telegram_console/`, `agents/`, `templates/`, `meta/`, and launcher scripts. Treat `output/`, local caches, runtime databases, `node_modules`, `.next`, and one-shot JSON traces as generated state unless a file is explicitly documented as a versioned evidence snapshot. Make every cleanup step reversible through git review and verify with the existing offline CI matrix.
+**Architecture:** Keep canonical source text and configuration under `works/<slug>/`, `telegram_console/`, `agents/`, `templates/`, `meta/`, and launcher scripts. Treat `output/`, local caches, runtime databases, and one-shot JSON traces as generated state unless a file is explicitly documented as a versioned evidence snapshot. Make every cleanup step reversible through git review and verify with the existing offline CI matrix.
 
 **Tech Stack:** Python 3.11+ stdlib, unittest, ruff, shell launchers, TOML/Markdown workspace contracts, git.
 
@@ -15,8 +15,8 @@
 - [x] **2026-06-22: Baseline audit completed.** Evidence gathered with `git status --short`, `python3 -m unittest discover -s tests -q`, `ruff check telegram_console tests`, `ruff format --check telegram_console tests`, `work-status`, `standards-status`, and targeted file inventory commands.
 - [x] **2026-06-22: Roadmap file created.** This plan is saved as `ROUDMAP.md`, matching the requested filename.
 - [x] **2026-06-22: Execution branch prepared.** Work moved from `main` to `cleanup-roadmap-20260622`; baseline verification passed with 429 unittest tests, `ruff check`, and `ruff format --check`.
-- [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local frontend build artifacts and runtime SQLite files; `git check-ignore` verified all targeted paths.
-- [x] **2026-06-22: Task 2 completed.** Ignored generated directories `frontend/`, `output/runtime/`, and `academic_engine/` were removed after dry-run confirmation; git status stayed clean afterward.
+- [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local runtime SQLite files; `git check-ignore` verified the targeted runtime path.
+- [x] **2026-06-22: Task 2 completed.** Ignored generated runtime/cache directories were removed after dry-run confirmation; git status stayed clean afterward.
 - [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
 - [x] **2026-06-22: Task 3 completed.** `output/docx/` policy is now strict generated-output-only; 135 constitutional render/PDF files were removed from git index, local copies are ignored, and verification passed with 433 unittest tests plus ruff gates.
@@ -31,9 +31,8 @@
 - Lint: `ruff check telegram_console tests` passed.
 - Format: `ruff format --check telegram_console tests` passed.
 - Skill map: `python3 -m telegram_console.work_cli skill-source-map audit --json` reported `ok: true`.
-- Dirty tree before cleanup: untracked `frontend/` and `output/runtime/`.
-- Large local junk: `frontend/` is about 629 MB and contains only `.next/` plus `node_modules/`.
-- Runtime junk: `output/runtime/` contains SQLite files for `web-control-plane`.
+- Dirty tree before cleanup: untracked local runtime/cache output.
+- Runtime junk: `output/runtime/` contains local SQLite files.
 - Ignored local duplicate package cache: `academic_engine/` is ignored and contains `__pycache__` files.
 - Versioned generated output exists under `output/docx/`, including PDF and rendered PNG snapshots.
 - Work-local DOCX helper scripts exist at:
@@ -71,10 +70,6 @@ ruff format --check telegram_console tests
 Add these entries to `.gitignore` below the existing output/runtime rules:
 
 ```gitignore
-# Local web/frontend build artifacts
-frontend/node_modules/
-frontend/.next/
-
 # Local runtime databases
 output/runtime/
 *.sqlite3
@@ -87,12 +82,10 @@ output/runtime/
 Run:
 
 ```bash
-git check-ignore -v frontend/node_modules/.package-lock.json
-git check-ignore -v frontend/.next/trace
-git check-ignore -v output/runtime/web-control-plane.sqlite3
+git check-ignore -v output/runtime/local.sqlite3
 ```
 
-Expected: each command prints the matching `.gitignore` rule.
+Expected: the command prints the matching `.gitignore` rule.
 
 - [x] **Step 3: Verify no source files were hidden accidentally**
 
@@ -102,13 +95,13 @@ Run:
 git status --short
 ```
 
-Expected: `frontend/` and `output/runtime/` no longer appear as untracked directories; only intentional source edits remain.
+Expected: `output/runtime/` no longer appears as an untracked directory; only intentional source edits remain.
 
 - [x] **Step 4: Commit**
 
 ```bash
 git add .gitignore ROUDMAP.md
-git commit -m "chore: ignore local runtime and frontend artifacts"
+git commit -m "chore: ignore local runtime artifacts"
 ```
 
 ---
@@ -116,7 +109,7 @@ git commit -m "chore: ignore local runtime and frontend artifacts"
 ## Task 2: Remove Local Generated Junk From the Working Tree
 
 **Files:**
-- Remove locally only: `frontend/.next/`, `frontend/node_modules/`, `output/runtime/`, `academic_engine/`
+- Remove locally only: `output/runtime/`, `academic_engine/`
 - Do not remove tracked source files.
 
 - [x] **Step 1: Preview ignored cleanup**
@@ -124,7 +117,7 @@ git commit -m "chore: ignore local runtime and frontend artifacts"
 Run:
 
 ```bash
-git clean -ndX frontend output/runtime academic_engine
+git clean -ndX output/runtime academic_engine
 ```
 
 Expected: the preview lists only ignored generated files and cache directories.
@@ -134,7 +127,7 @@ Expected: the preview lists only ignored generated files and cache directories.
 Run:
 
 ```bash
-git clean -fdX frontend output/runtime academic_engine
+git clean -fdX output/runtime academic_engine
 ```
 
 Expected: the same ignored generated files are removed.
@@ -144,7 +137,7 @@ Expected: the same ignored generated files are removed.
 Run:
 
 ```bash
-du -sh frontend output/runtime academic_engine
+du -sh output/runtime academic_engine
 ```
 
 Expected: removed paths are absent or much smaller; no source directory under `telegram_console/`, `works/`, `meta/`, `agents/`, `templates/`, or `tests/` is affected.
@@ -534,9 +527,7 @@ set -euo pipefail
 
 git status --short
 git ls-files output/docx
-git check-ignore -v frontend/node_modules/.package-lock.json
-git check-ignore -v frontend/.next/trace
-git check-ignore -v output/runtime/web-control-plane.sqlite3
+git check-ignore -v output/runtime/local.sqlite3
 python3 -m telegram_console.work_cli standards-status
 python3 -m telegram_console.work_cli skill-source-map audit --json
 ```
@@ -597,7 +588,7 @@ Run:
 git status --short
 ```
 
-Expected: only intended source/doc changes are present; no `frontend/`, `output/runtime/`, `academic_engine/`, `.next/`, `node_modules/`, or one-shot JSON traces appear.
+Expected: only intended source/doc changes are present; no `output/runtime/`, `academic_engine/`, or one-shot JSON traces appear.
 
 Actual: pre-closeout hygiene audit printed an empty `git status`; ignored generated paths are covered by `.gitignore`.
 
@@ -632,7 +623,7 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
 
 - Versioned PDF/PNG snapshots under `output/docx/` are generated output and were removed from git index.
 - Existing thesis works now use official `sogu-vkr-2025`; the profile's conflict/applicability flag remains visible instead of being hidden.
-- `frontend/` had no tracked source and is treated as local generated/build output until a real frontend app is intentionally added.
+- Any former local UI-panel files are out of scope for this clean backend/CLI snapshot.
 
 ## Addendum: Scientific Work Cleanup
 
@@ -647,3 +638,11 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
   coursework slugs.
 - [x] Verified with `python3 -m unittest discover -s tests -q`, `ruff check`,
   `ruff format --check`, and `scripts/audit_workspace_hygiene.sh`.
+
+## Addendum: Browser Surface Removal
+
+- [x] Confirmed there is no tracked browser-app source tree.
+- [x] Removed browser-app-specific `.gitignore` rules and hygiene audit checks.
+- [x] Removed the old local web runtime check from the hygiene script.
+- [x] Reworded the Telegram stale-callback fallback so it no longer names an
+  application dashboard.

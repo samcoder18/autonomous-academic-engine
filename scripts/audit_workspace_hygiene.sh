@@ -7,10 +7,8 @@ git status --short
 echo "== tracked output/docx =="
 git ls-files output/docx
 
-echo "== ignore rules =="
-git check-ignore -v frontend/node_modules/.package-lock.json
-git check-ignore -v frontend/.next/trace
-git check-ignore -v output/runtime/web-control-plane.sqlite3
+echo "== runtime ignore rule =="
+git check-ignore -v output/runtime/local.sqlite3
 
 echo "== standards =="
 python3 -m telegram_console.work_cli standards-status

@@ -15,10 +15,6 @@ output/docx/
 output/telegram/projects.json
 output/telegram/runtime/
 
-# Local web/frontend build artifacts
-frontend/node_modules/
-frontend/.next/
-
 # Local runtime databases
 output/runtime/
 *.sqlite3
