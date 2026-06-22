@@ -16,6 +16,7 @@
 - [x] **2026-06-22: Roadmap file created.** This plan is saved as `ROUDMAP.md`, matching the requested filename.
 - [x] **2026-06-22: Execution branch prepared.** Work moved from `main` to `cleanup-roadmap-20260622`; baseline verification passed with 429 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local frontend build artifacts and runtime SQLite files; `git check-ignore` verified all targeted paths.
+- [x] **2026-06-22: Task 2 completed.** Ignored generated directories `frontend/`, `output/runtime/`, and `academic_engine/` were removed after dry-run confirmation; git status stayed clean afterward.
 
 ## Current Baseline
 
@@ -111,7 +112,7 @@ git commit -m "chore: ignore local runtime and frontend artifacts"
 - Remove locally only: `frontend/.next/`, `frontend/node_modules/`, `output/runtime/`, `academic_engine/`
 - Do not remove tracked source files.
 
-- [ ] **Step 1: Preview ignored cleanup**
+- [x] **Step 1: Preview ignored cleanup**
 
 Run:
 
@@ -121,7 +122,7 @@ git clean -ndX frontend output/runtime academic_engine
 
 Expected: the preview lists only ignored generated files and cache directories.
 
-- [ ] **Step 2: Remove ignored generated files after preview is clean**
+- [x] **Step 2: Remove ignored generated files after preview is clean**
 
 Run:
 
@@ -131,7 +132,7 @@ git clean -fdX frontend output/runtime academic_engine
 
 Expected: the same ignored generated files are removed.
 
-- [ ] **Step 3: Verify size reduction**
+- [x] **Step 3: Verify size reduction**
 
 Run:
 
@@ -141,7 +142,7 @@ du -sh frontend output/runtime academic_engine
 
 Expected: removed paths are absent or much smaller; no source directory under `telegram_console/`, `works/`, `meta/`, `agents/`, `templates/`, or `tests/` is affected.
 
-- [ ] **Step 4: Verify git tree**
+- [x] **Step 4: Verify git tree**
 
 Run:
 
