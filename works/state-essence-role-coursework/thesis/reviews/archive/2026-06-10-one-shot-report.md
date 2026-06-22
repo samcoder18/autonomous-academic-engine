@@ -1,3 +1,5 @@
+> Legacy report. This predates mandatory originality corpus enforcement and must not be used as a submission-ready signal.
+
 # One-shot thesis report — submission-ready
 
 - Started: 2026-06-10T08:34:22.890974+00:00

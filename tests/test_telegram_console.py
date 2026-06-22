@@ -67,6 +67,7 @@ from telegram_console.email_delivery import EmailDeliveryError, SmtpDocxSender, 
 from telegram_console.finalization_engine import evaluate_article_finalization
 from telegram_console.guarded_prose import load_guarded_prose_rules
 from telegram_console.launchd_service import DEFAULT_SERVICE_LABEL, LaunchdServiceManager
+from telegram_console.one_shot import ONE_SHOT_REPORT_VERSION
 from telegram_console.orchestrator import RunBusyError, RunRecord, WorkflowOrchestrator
 from telegram_console.projects import ProjectService
 from telegram_console.prompting import PROFILE_EXPECTATIONS, PROFILE_LABELS, PromptBuilder
@@ -556,6 +557,7 @@ def write_submission_ready_workflow(
             root / "works" / work_id / "thesis" / "reviews" / "2026-04-18-one-shot-report.json",
             json.dumps(
                 {
+                    "version": ONE_SHOT_REPORT_VERSION,
                     "status": "machine-gates-passed",
                     "finished_at": "2026-04-18T10:59:00+00:00",
                 },

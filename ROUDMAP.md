@@ -18,6 +18,7 @@
 - [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local frontend build artifacts and runtime SQLite files; `git check-ignore` verified all targeted paths.
 - [x] **2026-06-22: Task 2 completed.** Ignored generated directories `frontend/`, `output/runtime/`, and `academic_engine/` were removed after dry-run confirmation; git status stayed clean afterward.
 - [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
+- [x] **2026-06-22: Task 4 completed.** One-shot reports now emit `one-shot-report/v2`, thesis export rejects legacy reports, stale Markdown reports were archived with legacy warnings, ignored one-shot JSON traces were removed locally, and verification passed with 433 unittest tests plus ruff gates.
 
 ## Current Baseline
 
@@ -244,7 +245,7 @@ Expected: all commands pass.
 - Modify or archive: `works/*/thesis/reviews/*one-shot-report.md`
 - Remove from git index if generated: `works/*/thesis/reviews/*one-shot-report.json`
 
-- [ ] **Step 1: Add report version to new one-shot JSON**
+- [x] **Step 1: Add report version to new one-shot JSON**
 
 Modify `OneShotReport.to_dict()` in `telegram_console/one_shot.py` so it emits:
 
@@ -254,7 +255,7 @@ Modify `OneShotReport.to_dict()` in `telegram_console/one_shot.py` so it emits:
 
 Expected: new reports are machine-identifiable and old reports can be rejected explicitly.
 
-- [ ] **Step 2: Require v2 machine gate reports for export**
+- [x] **Step 2: Require v2 machine gate reports for export**
 
 Modify `require_machine_gates_passed()` in `telegram_console/orchestrator_exports.py` to accept only:
 
@@ -265,7 +266,7 @@ payload.get("status") == "machine-gates-passed"
 
 Expected: legacy reports with `submission-ready` or skipped originality cannot unlock export.
 
-- [ ] **Step 3: Extend tests**
+- [x] **Step 3: Extend tests**
 
 Add tests in `tests/test_one_shot.py` covering:
 
@@ -279,7 +280,7 @@ def test_legacy_submission_ready_report_does_not_unlock_export(self) -> None:
 
 Expected: old `submission-ready` one-shot JSON is rejected even if all legacy gates say PASS.
 
-- [ ] **Step 4: Archive stale Markdown reports**
+- [x] **Step 4: Archive stale Markdown reports**
 
 Move old Markdown reports into:
 
@@ -293,7 +294,7 @@ Add a short header to each archived report:
 > Legacy report. This predates mandatory originality corpus enforcement and must not be used as a submission-ready signal.
 ```
 
-- [ ] **Step 5: Remove generated one-shot JSON from git index**
+- [x] **Step 5: Remove generated one-shot JSON from git index**
 
 Run:
 
@@ -303,7 +304,9 @@ git rm works/*/thesis/reviews/*one-shot-report.json
 
 Expected: JSON traces stop being versioned; `.gitignore` already excludes future one-shot JSON.
 
-- [ ] **Step 6: Verify**
+Actual: current JSON traces were already ignored/untracked, so they were removed from the local working tree and verified absent with `find works -path '*/thesis/reviews/*one-shot-report.json' -print`.
+
+- [x] **Step 6: Verify**
 
 Run:
 

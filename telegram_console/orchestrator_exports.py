@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .one_shot import ONE_SHOT_REPORT_VERSION
 from .orchestrator_support import WorkflowError
 
 
@@ -53,7 +54,7 @@ def require_machine_gates_passed(reviews_dir: Path) -> None:
             reports.append((str(payload.get("finished_at") or path.stat().st_mtime), payload))
     reports.sort(key=lambda item: item[0], reverse=True)
     latest = reports[0][1] if reports else None
-    if not latest or latest.get("status") != "machine-gates-passed":
+    if not latest or latest.get("version") != ONE_SHOT_REPORT_VERSION or latest.get("status") != "machine-gates-passed":
         raise WorkflowError("DOCX export blocked: thesis one-shot machine gates have not passed.")
 
 
