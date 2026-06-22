@@ -17,6 +17,7 @@
 - [x] **2026-06-22: Execution branch prepared.** Work moved from `main` to `cleanup-roadmap-20260622`; baseline verification passed with 429 unittest tests, `ruff check`, and `ruff format --check`.
 - [x] **2026-06-22: Task 1 completed.** `.gitignore` now excludes local frontend build artifacts and runtime SQLite files; `git check-ignore` verified all targeted paths.
 - [x] **2026-06-22: Task 2 completed.** Ignored generated directories `frontend/`, `output/runtime/`, and `academic_engine/` were removed after dry-run confirmation; git status stayed clean afterward.
+- [x] **2026-06-22: Task 5 completed.** `WorkflowError` from blocked exports now returns a clean CLI error instead of a traceback; regression test added and full verification passed with 430 unittest tests, `ruff check`, and `ruff format --check`.
 
 ## Current Baseline
 
@@ -321,7 +322,7 @@ Expected: all tests pass.
 - Modify: `telegram_console/work_cli.py`
 - Test: add coverage to `tests/test_work_cli_runtime.py` or `tests/test_work_cli_autonomous.py`
 
-- [ ] **Step 1: Catch `WorkflowError` in CLI main**
+- [x] **Step 1: Catch `WorkflowError` in CLI main**
 
 Import `WorkflowError` from `telegram_console.orchestrator_support` in `telegram_console/work_cli.py` and extend the existing exception handler:
 
@@ -337,7 +338,7 @@ from .orchestrator_support import WorkflowError
 
 Expected: blocked export prints a clean one-line error instead of a traceback.
 
-- [ ] **Step 2: Add regression test**
+- [x] **Step 2: Add regression test**
 
 Add a test that calls:
 
@@ -347,7 +348,7 @@ python3 -m telegram_console.work_cli export-thesis-docx --work martial-law-cours
 
 Expected: exit code `1`, stderr contains `DOCX export blocked`, stderr does not contain `Traceback`.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run:
 

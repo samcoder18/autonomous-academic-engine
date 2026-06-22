@@ -76,6 +76,21 @@ class WorkCliRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["kind"], "work-state")
             self.assertEqual(payload["suggested_next_action"]["action_id"], "article-review")
 
+    def test_export_thesis_docx_blocked_workflow_prints_clean_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["export-thesis-docx"], root_dir=root)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("DOCX export blocked", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_work_status_cli_exposes_thesis_repair_plan_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
