@@ -23,7 +23,7 @@ from .article_bundle_state import (
     write_article_bundle_state,
 )
 from .autonomous_policy import AUTONOMOUS_MODES
-from .orchestrator import WorkflowOrchestrator
+from .engine_service import CreateWorkRequest, EngineService
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .orchestrator_support import WorkflowError
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
@@ -36,12 +36,7 @@ from .standards import (
     sync_standard_profile,
 )
 from .utils import resolve_executable
-from .work_bootstrap import (
-    ALL_ARTIFACT_TYPES,
-    WorkBootstrapError,
-    WorkBootstrapRequest,
-    bootstrap_work,
-)
+from .work_bootstrap import ALL_ARTIFACT_TYPES, WorkBootstrapError
 from .work_cli_autonomous import handle_autonomous_cli
 from .work_state import format_work_state_summary
 from .workflow_engine import ROLE_TIMEOUT_SECONDS, WorkflowEngine
@@ -368,7 +363,7 @@ def work_init(root_dir: Path, args: Any) -> int:
         lanes = tuple(lanes_raw)
 
     topic = args.topic.strip() if args.topic else args.title
-    request = WorkBootstrapRequest(
+    request = CreateWorkRequest(
         slug=args.slug,
         title=args.title,
         topic=topic,
@@ -381,35 +376,25 @@ def work_init(root_dir: Path, args: Any) -> int:
     )
 
     try:
-        result = bootstrap_work(root_dir, request)
+        payload = EngineService(root_dir).create_work(request)
     except WorkBootstrapError as exc:
         print(f"work init failed: {exc}", file=sys.stderr)
         return 2
 
-    payload = {
-        "kind": "work-init",
-        "version": "v1",
-        "slug": result.slug,
-        "work_dir": str(result.work_dir),
-        "work_toml": str(result.work_toml),
-        "work_canon": str(result.work_canon),
-        "workspace_toml": str(result.workspace_toml),
-        "set_default": result.set_default,
-        "default_work": result.default_work_after,
-        "created_dirs": [str(directory) for directory in result.created_dirs],
-    }
     if getattr(args, "as_json", False):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        rel = result.work_dir.relative_to(root_dir) if result.work_dir.is_absolute() else result.work_dir
-        print(f"Created work `{result.slug}` at {rel}")
-        print(f"  work.toml: {result.work_toml.relative_to(root_dir)}")
-        print(f"  work-canon.md: {result.work_canon.relative_to(root_dir)}")
-        print(f"  registered in: {result.workspace_toml.relative_to(root_dir)}")
-        if result.set_default:
-            print(f"  default_work switched to `{result.default_work_after}`")
+        resolved_root = root_dir.resolve()
+        work_dir = Path(str(payload["work_dir"]))
+        rel = work_dir.relative_to(resolved_root) if work_dir.is_absolute() else work_dir
+        print(f"Created work `{payload['slug']}` at {rel}")
+        print(f"  work.toml: {Path(str(payload['work_toml'])).relative_to(resolved_root)}")
+        print(f"  work-canon.md: {Path(str(payload['work_canon'])).relative_to(resolved_root)}")
+        print(f"  registered in: {Path(str(payload['workspace_toml'])).relative_to(resolved_root)}")
+        if payload["set_default"]:
+            print(f"  default_work switched to `{payload['default_work']}`")
         else:
-            print(f"  default_work remains `{result.default_work_after}`")
+            print(f"  default_work remains `{payload['default_work']}`")
         print("Next step: заполнить work-canon.md и положить источники / бриф в соответствующую lane.")
     return 0
 
