@@ -22,6 +22,7 @@ JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 REQUIRED_SCALAR_FIELDS = ("job_id", "work_id", "job_type", "status", "created_at", "updated_at")
 REQUIRED_DICT_FIELDS = ("payload", "limits")
 REQUIRED_WORKFLOW_PAYLOAD_KEYS = ("lane", "action", "target_or_topic")
+OPTIONAL_WORKFLOW_STRING_PAYLOAD_KEYS = ("notes", "model_override", "profile_override")
 REQUIRED_LIMIT_KEYS = ("global_concurrency", "per_work_concurrency")
 _UNSET = object()
 
@@ -300,6 +301,12 @@ class JobQueue:
         for key in REQUIRED_WORKFLOW_PAYLOAD_KEYS:
             if not isinstance(workflow_payload.get(key), str):
                 raise CorruptJobError(f"Invalid {context}: payload key `{key}` must be a string.")
+        for key in OPTIONAL_WORKFLOW_STRING_PAYLOAD_KEYS:
+            if workflow_payload.get(key) is not None and not isinstance(workflow_payload.get(key), str):
+                raise CorruptJobError(f"Invalid {context}: payload key `{key}` must be a string or null.")
+        search_override = workflow_payload.get("search_override")
+        if search_override is not None and type(search_override) is not bool:
+            raise CorruptJobError(f"Invalid {context}: payload key `search_override` must be a boolean or null.")
         limits = payload["limits"]
         for key in REQUIRED_LIMIT_KEYS:
             value = self._require_non_bool_int(limits.get(key), context=context, field=f"limits.{key}")

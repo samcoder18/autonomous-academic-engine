@@ -298,6 +298,25 @@ class JobQueueStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(JobQueueError, "bad-job-type.json"):
             queue.list_jobs()
 
+    def test_loaded_record_with_invalid_optional_payload_fields_raises(self) -> None:
+        cases = [
+            ("bad-notes", {"notes": 123}),
+            ("bad-search-override", {"search_override": "yes"}),
+            ("bad-model-override", {"model_override": 123}),
+            ("bad-profile-override", {"profile_override": False}),
+        ]
+
+        for job_id, payload_overrides in cases:
+            record = self._valid_job_record(job_id=job_id)
+            payload = dict(record["payload"])  # type: ignore[arg-type]
+            payload.update(payload_overrides)
+            record["payload"] = payload
+            self._job_path(job_id).write_text(json.dumps(record), encoding="utf-8")
+
+            with self.subTest(job_id=job_id):
+                with self.assertRaisesRegex(JobQueueError, f"{job_id}.json"):
+                    JobQueue(self.root).get_job(job_id)
+
     def test_invalid_job_id_from_factory_is_rejected(self) -> None:
         queue = JobQueue(self.root, id_factory=lambda: "bad/id")
 
@@ -345,6 +364,27 @@ class JobQueueStoreTests(unittest.TestCase):
             queue.submit_workflow(WorkflowJobSpec(123, "article", "review", "draft.md"))  # type: ignore[arg-type]
 
         self.assertFalse(self._job_path("bad-work-id").exists())
+
+    def test_submit_workflow_rejects_invalid_optional_payload_fields_without_writing(self) -> None:
+        bad_notes = JobQueue(self.root, id_factory=lambda: "bad-notes")
+        with self.assertRaises(JobQueueError):
+            bad_notes.submit_workflow(
+                WorkflowJobSpec("demo-work", "article", "review", "draft.md", notes=123)  # type: ignore[arg-type]
+            )
+        self.assertFalse(self._job_path("bad-notes").exists())
+
+        bad_search = JobQueue(self.root, id_factory=lambda: "bad-search-override")
+        with self.assertRaises(JobQueueError):
+            bad_search.submit_workflow(
+                WorkflowJobSpec(
+                    "demo-work",
+                    "article",
+                    "review",
+                    "draft.md",
+                    search_override="yes",  # type: ignore[arg-type]
+                )
+            )
+        self.assertFalse(self._job_path("bad-search-override").exists())
 
     def test_terminal_statuses_exclude_resumable_blocked_jobs(self) -> None:
         self.assertEqual(TERMINAL_JOB_STATUSES, {"failed", "completed"})
