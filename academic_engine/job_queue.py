@@ -188,11 +188,6 @@ class JobQueue:
 
     def dispatch_jobs(self, *, limit: int | None = None) -> dict[str, Any]:
         orchestrator = self._orchestrator()
-        self._sync_active_runs(orchestrator)
-        active_runs = self._active_runs(orchestrator)
-        running_jobs = self.list_jobs(status="running")
-        running_total, running_by_work = self._running_counts(running_jobs, active_runs)
-        dispatch_limit = None if limit is None else max(0, limit)
         result: dict[str, Any] = {
             "kind": "job-dispatch",
             "version": "v1",
@@ -201,6 +196,14 @@ class JobQueue:
             "blocked": [],
             "reconciled": [],
         }
+        self._sync_active_runs(orchestrator)
+        reconcile_result = self.reconcile_jobs()
+        result["reconciled"].extend(reconcile_result["reconciled"])
+        result["blocked"].extend(reconcile_result["blocked"])
+        active_runs = self._active_runs(orchestrator)
+        running_jobs = self.list_jobs(status="running")
+        running_total, running_by_work = self._running_counts(running_jobs, active_runs)
+        dispatch_limit = None if limit is None else max(0, limit)
 
         for job in self._dispatch_candidates():
             if dispatch_limit is not None and len(result["dispatched"]) >= dispatch_limit:
@@ -284,7 +287,17 @@ class JobQueue:
                 )
                 result["blocked"].append(self._dispatch_result(blocked))
                 continue
-            workflow = self._workflow_payload(workflow_id)
+            try:
+                workflow = self._workflow_payload(workflow_id)
+            except CorruptJobError as exc:
+                blocked = self._block_job(
+                    job,
+                    code="ambiguous-runtime-result",
+                    category="runtime",
+                    exc=exc,
+                )
+                result["blocked"].append(self._dispatch_result(blocked))
+                continue
             if workflow is None:
                 blocked = self._block_job(
                     job,
@@ -319,6 +332,16 @@ class JobQueue:
                     details={"workflow_id": workflow_id},
                 )
                 result["reconciled"].append(self._dispatch_result(failed))
+            elif execution_status in {"queued", "running"}:
+                continue
+            else:
+                blocked = self._block_job(
+                    job,
+                    code="ambiguous-runtime-result",
+                    category="runtime",
+                    message=f"Ambiguous runtime result for workflow `{workflow_id}`.",
+                )
+                result["blocked"].append(self._dispatch_result(blocked))
         return result
 
     def _transition_for_test(
@@ -400,7 +423,27 @@ class JobQueue:
     ) -> tuple[int, dict[str, int]]:
         total = 0
         by_work: dict[str, int] = {}
-        for item in [*running_jobs, *active_runs]:
+        running_workflow_ids = {
+            value for job in running_jobs if isinstance(value := job.get("workflow_id"), str) and value
+        }
+        running_active_run_ids = {
+            value for job in running_jobs if isinstance(value := job.get("active_run_id"), str) and value
+        }
+        for item in running_jobs:
+            total += 1
+            work_id = item.get("work_id")
+            if isinstance(work_id, str) and work_id:
+                by_work[work_id] = by_work.get(work_id, 0) + 1
+        for item in active_runs:
+            workflow_id = item.get("workflow_id")
+            run_id = item.get("run_id")
+            active_run_id = item.get("active_run_id")
+            if isinstance(workflow_id, str) and workflow_id in running_workflow_ids:
+                continue
+            if isinstance(run_id, str) and run_id in running_active_run_ids:
+                continue
+            if isinstance(active_run_id, str) and active_run_id in running_active_run_ids:
+                continue
             total += 1
             work_id = item.get("work_id")
             if isinstance(work_id, str) and work_id:
@@ -446,8 +489,13 @@ class JobQueue:
         path = self.root_dir / "output" / "runs" / workflow_id / "workflow.json"
         if not path.exists():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise CorruptJobError(f"Invalid workflow runtime artifact `{path}`: malformed JSON.") from exc
+        if not isinstance(payload, dict):
+            raise CorruptJobError(f"Invalid workflow runtime artifact `{path}`: expected JSON object.")
+        return payload
 
     def _job_path(self, job_id: str) -> Path:
         return self.jobs_dir / f"{self._validate_job_id(job_id)}.json"
