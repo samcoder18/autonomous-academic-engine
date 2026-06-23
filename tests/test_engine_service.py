@@ -88,6 +88,19 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
         self.assertEqual(work_toml["topic"], "Fallback title")
 
+    def test_create_work_trims_whitespace_topic_to_empty(self) -> None:
+        payload = EngineService(self.root).create_work(
+            CreateWorkRequest(
+                slug="topic-whitespace",
+                title="Fallback title",
+                topic="   ",
+                artifact_type="article",
+            )
+        )
+
+        work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
+        self.assertEqual(work_toml["topic"], "")
+
     def test_create_work_preserves_explicit_empty_topic(self) -> None:
         payload = EngineService(self.root).create_work(
             CreateWorkRequest(
