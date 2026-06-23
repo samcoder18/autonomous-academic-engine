@@ -62,6 +62,15 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         self.assertFalse(payload["set_default"])
         self.assertEqual(payload["default_work"], "starter-work")
         self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "briefs"), payload["created_dirs"])
+        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "drafts"), payload["created_dirs"])
+        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "reviews"), payload["created_dirs"])
+        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "final"), payload["created_dirs"])
+
+        work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
+        self.assertEqual(work_toml["slug"], "smart-contracts")
+        self.assertEqual(work_toml["title"], "Статья по смарт-контрактам")
+        self.assertEqual(work_toml["topic"], "Смарт-контракты")
+        self.assertEqual(work_toml["artifact_type"], "article")
 
         parsed = tomllib.loads((self.root / "workspace.toml").read_text(encoding="utf-8"))
         self.assertIn("smart-contracts", parsed["works"])
@@ -94,6 +103,7 @@ class EngineServiceStatusTests(unittest.TestCase):
 
         self.assertEqual(payload["kind"], "work-state")
         self.assertEqual(payload["work_id"], "demo-work")
+        self.assertEqual(instances[0].root_dir, Path("/tmp/example-root").resolve())
         self.assertEqual(instances[0].status_work_ids, ["demo-work"])
 
 
