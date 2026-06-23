@@ -13,7 +13,7 @@ from .utils import utc_now
 JOB_KIND = "engine-job"
 JOB_VERSION = "job/v1"
 PUBLIC_JOB_STATUSES = {"queued", "running", "blocked", "failed", "completed"}
-TERMINAL_JOB_STATUSES = {"blocked", "failed", "completed"}
+TERMINAL_JOB_STATUSES = {"failed", "completed"}
 DEFAULT_GLOBAL_CONCURRENCY = 2
 DEFAULT_PER_WORK_CONCURRENCY = 1
 DEFAULT_MAX_ATTEMPTS = 3
@@ -135,7 +135,7 @@ class JobQueue:
         if job.get("status") != "failed":
             raise InvalidJobStateError(f"Only failed jobs can be retried: `{job_id}`.")
         attempt = int(job.get("attempt") or 0) + 1
-        if attempt >= int(job.get("max_attempts") or DEFAULT_MAX_ATTEMPTS):
+        if attempt > int(job.get("max_attempts") or DEFAULT_MAX_ATTEMPTS):
             raise InvalidJobStateError(f"Job `{job_id}` has no retry attempts left.")
         job["attempt"] = attempt
         job["workflow_id"] = None
