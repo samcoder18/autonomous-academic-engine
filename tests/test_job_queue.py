@@ -217,6 +217,87 @@ class JobQueueStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(JobQueueError, "missing-payload.json"):
             queue.list_jobs()
 
+    def test_loaded_record_with_invalid_limits_values_raises(self) -> None:
+        self._job_path("bad-global-limit").write_text(
+            json.dumps(
+                self._valid_job_record(
+                    job_id="bad-global-limit",
+                    limits={"global_concurrency": "2", "per_work_concurrency": 1},
+                )
+            ),
+            encoding="utf-8",
+        )
+        self._job_path("bad-work-limit").write_text(
+            json.dumps(
+                self._valid_job_record(
+                    job_id="bad-work-limit",
+                    limits={"global_concurrency": 2, "per_work_concurrency": None},
+                )
+            ),
+            encoding="utf-8",
+        )
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "bad-global-limit.json"):
+            queue.get_job("bad-global-limit")
+
+        with self.assertRaisesRegex(JobQueueError, "bad-global-limit.json|bad-work-limit.json"):
+            queue.list_jobs()
+
+    def test_loaded_record_with_non_dict_history_item_raises(self) -> None:
+        self._job_path("bad-history-item").write_text(
+            json.dumps(self._valid_job_record(job_id="bad-history-item", history=["not-an-event"])),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(JobQueueError, "bad-history-item.json"):
+            JobQueue(self.root).get_job("bad-history-item")
+
+    def test_loaded_record_with_invalid_history_event_shape_raises(self) -> None:
+        missing_event = self._valid_job_record(
+            job_id="missing-history-event",
+            history=[
+                {
+                    "timestamp": "2026-06-23T10:00:00+00:00",
+                    "status": "queued",
+                    "details": {},
+                }
+            ],
+        )
+        invalid_status = self._valid_job_record(
+            job_id="invalid-history-status",
+            history=[
+                {
+                    "timestamp": "2026-06-23T10:00:00+00:00",
+                    "event": "job-submitted",
+                    "status": "mystery",
+                    "details": {},
+                }
+            ],
+        )
+        self._job_path("missing-history-event").write_text(json.dumps(missing_event), encoding="utf-8")
+        self._job_path("invalid-history-status").write_text(json.dumps(invalid_status), encoding="utf-8")
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "missing-history-event.json"):
+            queue.get_job("missing-history-event")
+
+        with self.assertRaisesRegex(JobQueueError, "invalid-history-status.json"):
+            queue.get_job("invalid-history-status")
+
+    def test_loaded_record_with_non_workflow_job_type_raises(self) -> None:
+        self._job_path("bad-job-type").write_text(
+            json.dumps(self._valid_job_record(job_id="bad-job-type", job_type="not-workflow")),
+            encoding="utf-8",
+        )
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "bad-job-type.json"):
+            queue.get_job("bad-job-type")
+
+        with self.assertRaisesRegex(JobQueueError, "bad-job-type.json"):
+            queue.list_jobs()
+
     def test_invalid_job_id_from_factory_is_rejected(self) -> None:
         queue = JobQueue(self.root, id_factory=lambda: "bad/id")
 
@@ -232,6 +313,38 @@ class JobQueueStoreTests(unittest.TestCase):
 
         stored = json.loads(self._job_path("job-demo").read_text(encoding="utf-8"))
         self.assertEqual(stored, first)
+
+    def test_submit_workflow_rejects_invalid_max_attempts_without_writing(self) -> None:
+        queue = JobQueue(self.root, id_factory=lambda: "bad-max-attempts")
+
+        with self.assertRaises(JobQueueError):
+            queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md", max_attempts=0))
+
+        self.assertFalse(self._job_path("bad-max-attempts").exists())
+
+    def test_submit_workflow_rejects_invalid_concurrency_without_writing(self) -> None:
+        queue = JobQueue(self.root, id_factory=lambda: "bad-global-concurrency")
+
+        with self.assertRaises(JobQueueError):
+            queue.submit_workflow(
+                WorkflowJobSpec(
+                    "demo-work",
+                    "article",
+                    "review",
+                    "draft.md",
+                    global_concurrency="2",  # type: ignore[arg-type]
+                )
+            )
+
+        self.assertFalse(self._job_path("bad-global-concurrency").exists())
+
+    def test_submit_workflow_rejects_non_string_core_field_without_writing(self) -> None:
+        queue = JobQueue(self.root, id_factory=lambda: "bad-work-id")
+
+        with self.assertRaises(JobQueueError):
+            queue.submit_workflow(WorkflowJobSpec(123, "article", "review", "draft.md"))  # type: ignore[arg-type]
+
+        self.assertFalse(self._job_path("bad-work-id").exists())
 
     def test_terminal_statuses_exclude_resumable_blocked_jobs(self) -> None:
         self.assertEqual(TERMINAL_JOB_STATUSES, {"failed", "completed"})

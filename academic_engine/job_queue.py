@@ -20,7 +20,6 @@ DEFAULT_PER_WORK_CONCURRENCY = 1
 DEFAULT_MAX_ATTEMPTS = 3
 JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 REQUIRED_SCALAR_FIELDS = ("job_id", "work_id", "job_type", "status", "created_at", "updated_at")
-REQUIRED_INTEGER_FIELDS = ("attempt", "max_attempts")
 REQUIRED_DICT_FIELDS = ("payload", "limits")
 REQUIRED_WORKFLOW_PAYLOAD_KEYS = ("lane", "action", "target_or_topic")
 REQUIRED_LIMIT_KEYS = ("global_concurrency", "per_work_concurrency")
@@ -125,6 +124,7 @@ class JobQueue:
                 }
             ],
         }
+        self._validate_job_record(job, context=f"constructed job `{job_id}`")
         self._create_job(job)
         return job
 
@@ -244,6 +244,7 @@ class JobQueue:
             raise DuplicateJobIdError(f"Job `{job['job_id']}` already exists.") from exc
 
     def _write_job(self, job: dict[str, Any]) -> None:
+        self._validate_job_record(job, context=f"updated job `{job.get('job_id')}`")
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         path = self._job_path(str(job["job_id"]))
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(self.jobs_dir)) as handle:
@@ -258,41 +259,70 @@ class JobQueue:
         return job_id
 
     def _validate_loaded_job(self, payload: Any, path: Path) -> dict[str, Any]:
+        job = self._validate_job_record(payload, context=f"job record `{path}`")
+        if job["job_id"] != path.stem:
+            raise CorruptJobError(f"Corrupt job record `{path}`: job id does not match filename.")
+        return job
+
+    def _validate_job_record(self, payload: Any, *, context: str) -> dict[str, Any]:
         if not isinstance(payload, dict):
-            raise CorruptJobError(f"Corrupt job record `{path}`: expected JSON object.")
+            raise CorruptJobError(f"Invalid {context}: expected JSON object.")
         if payload.get("kind") != JOB_KIND:
-            raise CorruptJobError(f"Corrupt job record `{path}`: expected kind `{JOB_KIND}`.")
+            raise CorruptJobError(f"Invalid {context}: expected kind `{JOB_KIND}`.")
         if payload.get("version") != JOB_VERSION:
-            raise CorruptJobError(f"Corrupt job record `{path}`: expected version `{JOB_VERSION}`.")
+            raise CorruptJobError(f"Invalid {context}: expected version `{JOB_VERSION}`.")
         job_id = payload.get("job_id")
         try:
             self._validate_job_id(job_id)
         except InvalidJobIdError as exc:
-            raise CorruptJobError(f"Corrupt job record `{path}`: invalid job id `{job_id}`.") from exc
-        if job_id != path.stem:
-            raise CorruptJobError(f"Corrupt job record `{path}`: job id does not match filename.")
+            raise CorruptJobError(f"Invalid {context}: invalid job id `{job_id}`.") from exc
         for field in REQUIRED_SCALAR_FIELDS:
             if not isinstance(payload.get(field), str):
-                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be a string.")
-        for field in REQUIRED_INTEGER_FIELDS:
-            if type(payload.get(field)) is not int:
-                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be an integer.")
+                raise CorruptJobError(f"Invalid {context}: field `{field}` must be a string.")
+        attempt = self._require_non_bool_int(payload.get("attempt"), context=context, field="attempt")
+        if attempt < 0:
+            raise CorruptJobError(f"Invalid {context}: field `attempt` must be non-negative.")
+        max_attempts = self._require_non_bool_int(payload.get("max_attempts"), context=context, field="max_attempts")
+        if max_attempts <= 0:
+            raise CorruptJobError(f"Invalid {context}: field `max_attempts` must be a positive integer.")
         for field in REQUIRED_DICT_FIELDS:
             if not isinstance(payload.get(field), dict):
-                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be an object.")
+                raise CorruptJobError(f"Invalid {context}: field `{field}` must be an object.")
         if not isinstance(payload.get("history"), list):
-            raise CorruptJobError(f"Corrupt job record `{path}`: field `history` must be a list.")
+            raise CorruptJobError(f"Invalid {context}: field `history` must be a list.")
         status = payload.get("status")
         if status not in PUBLIC_JOB_STATUSES:
-            raise InvalidJobStateError(f"Job record `{path}` has unknown status `{status}`.")
+            raise InvalidJobStateError(f"Invalid {context}: unknown status `{status}`.")
         job_type = payload.get("job_type")
-        if job_type == "workflow":
-            workflow_payload = payload["payload"]
-            for key in REQUIRED_WORKFLOW_PAYLOAD_KEYS:
-                if not isinstance(workflow_payload.get(key), str):
-                    raise CorruptJobError(f"Corrupt job record `{path}`: payload key `{key}` must be a string.")
+        if job_type != "workflow":
+            raise CorruptJobError(f"Invalid {context}: field `job_type` must be `workflow`.")
+        workflow_payload = payload["payload"]
+        for key in REQUIRED_WORKFLOW_PAYLOAD_KEYS:
+            if not isinstance(workflow_payload.get(key), str):
+                raise CorruptJobError(f"Invalid {context}: payload key `{key}` must be a string.")
         limits = payload["limits"]
         for key in REQUIRED_LIMIT_KEYS:
-            if key not in limits:
-                raise CorruptJobError(f"Corrupt job record `{path}`: missing limits key `{key}`.")
+            value = self._require_non_bool_int(limits.get(key), context=context, field=f"limits.{key}")
+            if value <= 0:
+                raise CorruptJobError(f"Invalid {context}: limits key `{key}` must be a positive integer.")
+        for index, item in enumerate(payload["history"]):
+            self._validate_history_item(item, context=context, index=index)
         return payload
+
+    def _require_non_bool_int(self, value: Any, *, context: str, field: str) -> int:
+        if type(value) is not int:
+            raise CorruptJobError(f"Invalid {context}: field `{field}` must be an integer.")
+        return value
+
+    def _validate_history_item(self, item: Any, *, context: str, index: int) -> None:
+        if not isinstance(item, dict):
+            raise CorruptJobError(f"Invalid {context}: history item {index} must be an object.")
+        if not isinstance(item.get("timestamp"), str):
+            raise CorruptJobError(f"Invalid {context}: history item {index} field `timestamp` must be a string.")
+        if not isinstance(item.get("event"), str):
+            raise CorruptJobError(f"Invalid {context}: history item {index} field `event` must be a string.")
+        status = item.get("status")
+        if status not in PUBLIC_JOB_STATUSES:
+            raise InvalidJobStateError(f"Invalid {context}: history item {index} has unknown status `{status}`.")
+        if not isinstance(item.get("details"), dict):
+            raise CorruptJobError(f"Invalid {context}: history item {index} field `details` must be an object.")
