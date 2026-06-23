@@ -61,7 +61,7 @@ class EngineService:
         self._orchestrator_factory = orchestrator_factory or WorkflowOrchestrator
 
     def create_work(self, request: CreateWorkRequest) -> dict[str, Any]:
-        topic = request.topic.strip() if request.topic and request.topic.strip() else request.title
+        topic = request.title if request.topic is None else request.topic
         result = bootstrap_work(
             self.root_dir,
             WorkBootstrapRequest(

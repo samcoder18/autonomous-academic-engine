@@ -76,10 +76,22 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         parsed = tomllib.loads((root / "workspace.toml").read_text(encoding="utf-8"))
         self.assertIn("smart-contracts", parsed["works"])
 
-    def test_create_work_defaults_empty_topic_to_title(self) -> None:
+    def test_create_work_defaults_missing_topic_to_title(self) -> None:
         payload = EngineService(self.root).create_work(
             CreateWorkRequest(
                 slug="topic-default",
+                title="Fallback title",
+                artifact_type="article",
+            )
+        )
+
+        work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
+        self.assertEqual(work_toml["topic"], "Fallback title")
+
+    def test_create_work_preserves_explicit_empty_topic(self) -> None:
+        payload = EngineService(self.root).create_work(
+            CreateWorkRequest(
+                slug="topic-empty",
                 title="Fallback title",
                 topic="",
                 artifact_type="article",
@@ -87,7 +99,7 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         )
 
         work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
-        self.assertEqual(work_toml["topic"], "Fallback title")
+        self.assertEqual(work_toml["topic"], "")
 
 
 class EngineServiceDelegationTests(unittest.TestCase):
