@@ -28,6 +28,47 @@ class JobQueueStoreTests(unittest.TestCase):
         jobs_dir.mkdir(parents=True, exist_ok=True)
         return jobs_dir / f"{job_id}.json"
 
+    def _valid_job_record(self, job_id: str = "job-demo", **overrides: object) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": "engine-job",
+            "version": "job/v1",
+            "job_id": job_id,
+            "work_id": "demo-work",
+            "job_type": "workflow",
+            "status": "queued",
+            "created_at": "2026-06-23T10:00:00+00:00",
+            "updated_at": "2026-06-23T10:00:00+00:00",
+            "attempt": 0,
+            "max_attempts": 3,
+            "workflow_id": None,
+            "active_run_id": None,
+            "payload": {
+                "lane": "article",
+                "action": "review",
+                "target_or_topic": "draft.md",
+                "notes": None,
+                "search_override": None,
+                "model_override": None,
+                "profile_override": None,
+            },
+            "limits": {
+                "global_concurrency": 2,
+                "per_work_concurrency": 1,
+            },
+            "blocked_reason": None,
+            "failure": None,
+            "history": [
+                {
+                    "timestamp": "2026-06-23T10:00:00+00:00",
+                    "event": "job-submitted",
+                    "status": "queued",
+                    "details": {},
+                }
+            ],
+        }
+        record.update(overrides)
+        return record
+
     def test_submit_workflow_persists_queued_job(self) -> None:
         queue = JobQueue(self.root, now=lambda: "2026-06-23T10:00:00+00:00", id_factory=lambda: "job-demo")
 
@@ -123,14 +164,7 @@ class JobQueueStoreTests(unittest.TestCase):
             queue.list_jobs()
 
     def test_invalid_loaded_status_fails_closed(self) -> None:
-        record = {
-            "kind": "engine-job",
-            "version": "job/v1",
-            "job_id": "bad-status",
-            "work_id": "demo-work",
-            "status": "mystery",
-            "history": [],
-        }
+        record = self._valid_job_record(job_id="bad-status", status="mystery")
         path = self._job_path("bad-status")
         path.write_text(json.dumps(record), encoding="utf-8")
         queue = JobQueue(self.root)
@@ -143,7 +177,45 @@ class JobQueueStoreTests(unittest.TestCase):
 
         stored = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(stored["status"], "mystery")
-        self.assertEqual(stored["history"], [])
+        self.assertEqual(stored["history"], record["history"])
+
+    def test_filename_payload_job_id_mismatch_fails_closed_without_payload_id_write(self) -> None:
+        foo_path = self._job_path("foo")
+        foo_path.write_text(json.dumps(self._valid_job_record(job_id="bar")), encoding="utf-8")
+        bar_record = self._valid_job_record(job_id="bar", work_id="untouched-work")
+        bar_path = self._job_path("bar")
+        bar_path.write_text(json.dumps(bar_record), encoding="utf-8")
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "foo.json"):
+            queue.cancel_job("foo")
+
+        self.assertEqual(json.loads(bar_path.read_text(encoding="utf-8")), bar_record)
+
+    def test_wrong_version_job_record_raises(self) -> None:
+        self._job_path("wrong-version").write_text(
+            json.dumps(self._valid_job_record(job_id="wrong-version", version="job/v0")),
+            encoding="utf-8",
+        )
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "wrong-version.json"):
+            queue.get_job("wrong-version")
+
+        with self.assertRaisesRegex(JobQueueError, "wrong-version.json"):
+            queue.list_jobs()
+
+    def test_missing_required_job_record_field_raises(self) -> None:
+        record = self._valid_job_record(job_id="missing-payload")
+        del record["payload"]
+        self._job_path("missing-payload").write_text(json.dumps(record), encoding="utf-8")
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "missing-payload.json"):
+            queue.get_job("missing-payload")
+
+        with self.assertRaisesRegex(JobQueueError, "missing-payload.json"):
+            queue.list_jobs()
 
     def test_invalid_job_id_from_factory_is_rejected(self) -> None:
         queue = JobQueue(self.root, id_factory=lambda: "bad/id")

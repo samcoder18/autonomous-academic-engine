@@ -19,6 +19,11 @@ DEFAULT_GLOBAL_CONCURRENCY = 2
 DEFAULT_PER_WORK_CONCURRENCY = 1
 DEFAULT_MAX_ATTEMPTS = 3
 JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+REQUIRED_SCALAR_FIELDS = ("job_id", "work_id", "job_type", "status", "created_at", "updated_at")
+REQUIRED_INTEGER_FIELDS = ("attempt", "max_attempts")
+REQUIRED_DICT_FIELDS = ("payload", "limits")
+REQUIRED_WORKFLOW_PAYLOAD_KEYS = ("lane", "action", "target_or_topic")
+REQUIRED_LIMIT_KEYS = ("global_concurrency", "per_work_concurrency")
 _UNSET = object()
 
 
@@ -120,7 +125,7 @@ class JobQueue:
                 }
             ],
         }
-        self._write_job(job)
+        self._create_job(job)
         return job
 
     def list_jobs(self, *, work_id: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
@@ -228,6 +233,16 @@ class JobQueue:
             raise CorruptJobError(f"Corrupt job record `{path}`: malformed JSON.") from exc
         return self._validate_loaded_job(payload, path)
 
+    def _create_job(self, job: dict[str, Any]) -> None:
+        self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        path = self._job_path(str(job["job_id"]))
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(job, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+        except FileExistsError as exc:
+            raise DuplicateJobIdError(f"Job `{job['job_id']}` already exists.") from exc
+
     def _write_job(self, job: dict[str, Any]) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         path = self._job_path(str(job["job_id"]))
@@ -247,12 +262,37 @@ class JobQueue:
             raise CorruptJobError(f"Corrupt job record `{path}`: expected JSON object.")
         if payload.get("kind") != JOB_KIND:
             raise CorruptJobError(f"Corrupt job record `{path}`: expected kind `{JOB_KIND}`.")
+        if payload.get("version") != JOB_VERSION:
+            raise CorruptJobError(f"Corrupt job record `{path}`: expected version `{JOB_VERSION}`.")
         job_id = payload.get("job_id")
         try:
             self._validate_job_id(job_id)
         except InvalidJobIdError as exc:
             raise CorruptJobError(f"Corrupt job record `{path}`: invalid job id `{job_id}`.") from exc
+        if job_id != path.stem:
+            raise CorruptJobError(f"Corrupt job record `{path}`: job id does not match filename.")
+        for field in REQUIRED_SCALAR_FIELDS:
+            if not isinstance(payload.get(field), str):
+                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be a string.")
+        for field in REQUIRED_INTEGER_FIELDS:
+            if type(payload.get(field)) is not int:
+                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be an integer.")
+        for field in REQUIRED_DICT_FIELDS:
+            if not isinstance(payload.get(field), dict):
+                raise CorruptJobError(f"Corrupt job record `{path}`: field `{field}` must be an object.")
+        if not isinstance(payload.get("history"), list):
+            raise CorruptJobError(f"Corrupt job record `{path}`: field `history` must be a list.")
         status = payload.get("status")
         if status not in PUBLIC_JOB_STATUSES:
             raise InvalidJobStateError(f"Job record `{path}` has unknown status `{status}`.")
+        job_type = payload.get("job_type")
+        if job_type == "workflow":
+            workflow_payload = payload["payload"]
+            for key in REQUIRED_WORKFLOW_PAYLOAD_KEYS:
+                if not isinstance(workflow_payload.get(key), str):
+                    raise CorruptJobError(f"Corrupt job record `{path}`: payload key `{key}` must be a string.")
+        limits = payload["limits"]
+        for key in REQUIRED_LIMIT_KEYS:
+            if key not in limits:
+                raise CorruptJobError(f"Corrupt job record `{path}`: missing limits key `{key}`.")
         return payload
