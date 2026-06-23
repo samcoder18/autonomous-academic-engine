@@ -104,6 +104,7 @@ class EngineServiceDelegationTests(unittest.TestCase):
 
         self.assertEqual(payload["kind"], "work-state")
         self.assertEqual(payload["work_id"], "demo-work")
+        self.assertEqual(instances[0].root_dir, Path("/tmp/example-root").resolve())
         self.assertEqual(instances[0].status_work_ids, ["demo-work"])
 
     def test_start_workflow_delegates_to_orchestrator(self) -> None:
