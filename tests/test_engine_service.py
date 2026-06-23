@@ -7,7 +7,6 @@ from pathlib import Path
 
 from academic_engine.engine_service import CreateWorkRequest, EngineService
 
-
 MINIMAL_WORKSPACE_TOML = """\
 version = 1
 default_work = "starter-work"
@@ -210,9 +209,7 @@ class EngineServiceStopJobTests(unittest.TestCase):
     def test_stop_job_resolves_work_and_writes_autonomous_stop_state(self) -> None:
         from academic_engine.engine_service import StopJobRequest
 
-        payload = EngineService(self.root).stop_job(
-            StopJobRequest(work_id="stop-demo", reason="operator-stop")
-        )
+        payload = EngineService(self.root).stop_job(StopJobRequest(work_id="stop-demo", reason="operator-stop"))
 
         self.assertEqual(payload["kind"], "autonomous-run-state")
         self.assertEqual(payload["status"], "stopped")
