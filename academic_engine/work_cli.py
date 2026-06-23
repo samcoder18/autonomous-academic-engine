@@ -967,7 +967,7 @@ def standards_status(root_dir: Path, profile_id: str | None) -> int:
 
 
 def work_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -> int:
-    state = WorkflowOrchestrator(root_dir).get_work_state(work_id=work_id)
+    state = EngineService(root_dir).get_work_status(work_id=work_id)
     if as_json:
         print(json.dumps(state, ensure_ascii=False, indent=2))
     else:
