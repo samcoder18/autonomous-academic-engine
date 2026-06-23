@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,37 +32,18 @@ class OpsAlertTests(unittest.TestCase):
             self.assertEqual(payload["work_id"], "starter-work")
             self.assertEqual(payload["details"], {"lock": "/tmp/x.lock"})
 
-    def test_emit_invokes_telegram_sender(self) -> None:
-        delivered: list[tuple[str | int, str]] = []
+    def test_emit_without_log_path_writes_to_stderr(self) -> None:
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            alert = emit_alert(
+                severity=AlertSeverity.INFO,
+                code="heartbeat",
+                message="ok",
+                sink=OpsAlertSink(),
+            )
 
-        def fake_sender(chat_id: str | int, text: str) -> None:
-            delivered.append((chat_id, text))
-
-        sink = OpsAlertSink(chat_id=42, sender=fake_sender)
-        emit_alert(
-            severity=AlertSeverity.ERROR,
-            code="connector-down",
-            message="pravo.gov.ru returns 5xx",
-            component="sources",
-            sink=sink,
-        )
-        self.assertEqual(len(delivered), 1)
-        self.assertEqual(delivered[0][0], 42)
-        self.assertIn("connector-down", delivered[0][1])
-        self.assertIn("OPS ERROR", delivered[0][1])
-
-    def test_emit_swallows_telegram_exceptions(self) -> None:
-        def angry_sender(chat_id: str | int, text: str) -> None:
-            raise RuntimeError("network down")
-
-        sink = OpsAlertSink(chat_id=1, sender=angry_sender)
-        alert = emit_alert(
-            severity=AlertSeverity.INFO,
-            code="heartbeat",
-            message="ok",
-            sink=sink,
-        )
         self.assertEqual(alert.code, "heartbeat")
+        self.assertIn("[OPS:info] heartbeat ok", stderr.getvalue())
 
     def test_unknown_severity_rejected(self) -> None:
         with self.assertRaises(ValueError):

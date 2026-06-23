@@ -36,7 +36,7 @@
 | `tests/`                | 39                    | Отдельные regression-модули по workspace и gates      |
 
 
-Классификация: **ядро движка** — `workspace.toml`, `agents/`, `meta/master-protocol.md`, `meta/skill-source-map.toml`, `templates/`, `academic_engine/`, `scripts/`; **контент** — `works/biometrics-vkr/`; **производное** — `output/docx`, `output/runs`, `output/telegram`, `output/codex`.
+Классификация: **ядро движка** — `workspace.toml`, `agents/`, `meta/master-protocol.md`, `meta/skill-source-map.toml`, `templates/`, `academic_engine/`, `scripts/`; **контент** — `works/biometrics-vkr/`; **производное** — `output/docx`, `output/runs`, runtime namespace, `output/codex`.
 
 ---
 

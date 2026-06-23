@@ -674,3 +674,19 @@ git commit -m "chore: clean workspace artifacts and refactor duplicate helpers"
   launchd wrapper names, and active docs to use `academic_engine`.
 - [x] Verified the CLI wrapper and direct module entrypoint both call
   `academic_engine.work_cli`.
+
+## Addendum: Legacy Control Surface Removal
+
+- [x] Added a regression test that requires the old bot/API/config/chat wrapper,
+  project registry, prompt builder, SMTP panel sender, legacy LaunchAgent
+  template, and historical runtime README to stay absent.
+- [x] Removed the tracked legacy control-surface modules: bot transport,
+  external API client, env config, chat wrapper, project registry, prompt
+  builder, panel mail sender, and old LaunchAgent service manager.
+- [x] Removed old wrapper/deploy files for the deleted panel service.
+- [x] Moved workflow and autonomous daemon runtime state into
+  `output/runtime`.
+- [x] Updated ops-alerts to use local log/stderr delivery only; the supported
+  configuration knob is `OPS_ALERT_LOG_PATH`.
+- [x] Removed obsolete tests for the deleted panel and kept workflow,
+  autonomous daemon, `work_cli`, standards, repair, and export coverage.

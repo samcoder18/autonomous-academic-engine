@@ -12,9 +12,6 @@ __pycache__/
 # Собранные DOCX/PDF/render previews — производные артефакты (источник истины — Markdown в works/)
 output/docx/
 
-output/telegram/projects.json
-output/telegram/runtime/
-
 # Local runtime databases
 output/runtime/
 *.sqlite3

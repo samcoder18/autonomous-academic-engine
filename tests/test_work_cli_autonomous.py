@@ -173,7 +173,7 @@ class AutonomousCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("Autonomous run: dry-run", stdout.getvalue())
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            state_path = root / "output" / "runtime" / "autonomous" / "demo-work.json"
             self.assertTrue(state_path.exists())
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "dry-run")
@@ -188,7 +188,7 @@ class AutonomousCliTests(unittest.TestCase):
             orchestrator.store.set_active_run(
                 {
                     "run_id": "default:active",
-                    "run_dir": str(root / "output" / "telegram" / "runs" / "active"),
+                    "run_dir": str(root / "output" / "runtime" / "runs" / "active"),
                     "pid": os.getpid(),
                     "lane": "article",
                     "action": "review",
@@ -210,7 +210,7 @@ class AutonomousCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("Autonomous run: stopped", stdout.getvalue())
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            state_path = root / "output" / "runtime" / "autonomous" / "demo-work.json"
             payload = json.loads(state_path.read_text())
             self.assertEqual(payload["status"], "stopped")
             self.assertEqual(payload["stop_reason"], "A workflow run is already active for this work.")
@@ -238,7 +238,7 @@ class AutonomousCliTests(unittest.TestCase):
             self.assertIn("Autonomous run: completed", stdout.getvalue())
             docx_path = root / "output" / "docx" / "demo-work" / "articles" / "demo.docx"
             self.assertTrue(docx_path.exists())
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.json"
+            state_path = root / "output" / "runtime" / "autonomous" / "demo-work.json"
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["readiness_claim"], "none")
@@ -249,7 +249,7 @@ class AutonomousCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             build_fake_repo(root)
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / f"{TEST_WORK_ID}.json"
+            state_path = root / "output" / "runtime" / "autonomous" / f"{TEST_WORK_ID}.json"
             state_path.parent.mkdir(parents=True, exist_ok=True)
             state_path.write_text("{broken", encoding="utf-8")
 
@@ -323,7 +323,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
             self.assertEqual(payload["work_id"], TEST_WORK_ID)
             self.assertEqual(payload["readiness_claim"], "none")
             self.assertEqual(payload["assessment_scope"]["depth"], "signals-only")
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "demo-work.daemon.json"
+            state_path = root / "output" / "runtime" / "autonomous" / "demo-work.daemon.json"
             self.assertTrue(state_path.exists())
 
     def test_autonomous_daemon_start_status_and_stop_are_json_first(self) -> None:
@@ -480,7 +480,7 @@ class AutonomousDaemonCliTests(unittest.TestCase):
             self.assertEqual(payload["selected_work_id"], TEST_WORK_ID)
             self.assertEqual(payload["last_schedule"]["kind"], "autonomous-daemon-schedule")
             self.assertEqual(payload["readiness_claim"], "none")
-            state_path = root / "output" / "telegram" / "runtime" / "autonomous" / "multi-work.daemon.json"
+            state_path = root / "output" / "runtime" / "autonomous" / "multi-work.daemon.json"
             self.assertTrue(state_path.exists())
 
     def test_autonomous_daemon_tick_works_active_and_comma_list_are_public_scopes(self) -> None:

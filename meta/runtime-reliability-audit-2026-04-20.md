@@ -4,7 +4,7 @@ Scope: `academic_engine/work_cli.py`, `academic_engine/work_cli_autonomous.py`,
 `academic_engine/autonomous_daemon.py`,
 `academic_engine/autonomous_scheduler.py`,
 `academic_engine/autonomous_runtime_store.py`,
-runtime JSON files under `output/telegram/runtime/autonomous/`,
+runtime JSON files under the then-current legacy runtime namespace,
 daemon/launchd CLI surfaces, and targeted tests/docs around them.
 
 ## Summary
