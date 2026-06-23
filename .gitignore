@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 .ruff_cache/
+.worktrees/
 
 # Собранные DOCX/PDF/render previews — производные артефакты (источник истины — Markdown в works/)
 output/docx/
