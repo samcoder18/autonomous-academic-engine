@@ -54,13 +54,13 @@ class EngineService:
             "kind": "work-init",
             "version": "v1",
             "slug": result.slug,
-            "work_dir": self._display_path(result.work_dir),
-            "work_toml": self._display_path(result.work_toml),
-            "work_canon": self._display_path(result.work_canon),
-            "workspace_toml": self._display_path(result.workspace_toml),
+            "work_dir": str(result.work_dir),
+            "work_toml": str(result.work_toml),
+            "work_canon": str(result.work_canon),
+            "workspace_toml": str(result.workspace_toml),
             "set_default": result.set_default,
             "default_work": result.default_work_after,
-            "created_dirs": [self._display_path(directory) for directory in result.created_dirs],
+            "created_dirs": [str(directory) for directory in result.created_dirs],
         }
 
     def get_work_status(self, work_id: str | None = None) -> dict[str, Any]:
@@ -68,10 +68,3 @@ class EngineService:
 
     def _orchestrator(self) -> Any:
         return self._orchestrator_factory(self.root_dir)
-
-    @staticmethod
-    def _display_path(path: Path) -> str:
-        text = str(path)
-        if text.startswith("/private/"):
-            return text.removeprefix("/private")
-        return text

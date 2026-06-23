@@ -43,6 +43,7 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         self._tempdir.cleanup()
 
     def test_create_work_returns_cli_compatible_payload(self) -> None:
+        root = self.root.resolve()
         payload = EngineService(self.root).create_work(
             CreateWorkRequest(
                 slug="smart-contracts",
@@ -55,16 +56,16 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         self.assertEqual(payload["kind"], "work-init")
         self.assertEqual(payload["version"], "v1")
         self.assertEqual(payload["slug"], "smart-contracts")
-        self.assertEqual(payload["work_dir"], str(self.root / "works" / "smart-contracts"))
-        self.assertEqual(payload["work_toml"], str(self.root / "works" / "smart-contracts" / "work.toml"))
-        self.assertEqual(payload["work_canon"], str(self.root / "works" / "smart-contracts" / "work-canon.md"))
-        self.assertEqual(payload["workspace_toml"], str(self.root / "workspace.toml"))
+        self.assertEqual(payload["work_dir"], str(root / "works" / "smart-contracts"))
+        self.assertEqual(payload["work_toml"], str(root / "works" / "smart-contracts" / "work.toml"))
+        self.assertEqual(payload["work_canon"], str(root / "works" / "smart-contracts" / "work-canon.md"))
+        self.assertEqual(payload["workspace_toml"], str(root / "workspace.toml"))
         self.assertFalse(payload["set_default"])
         self.assertEqual(payload["default_work"], "starter-work")
-        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "briefs"), payload["created_dirs"])
-        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "drafts"), payload["created_dirs"])
-        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "reviews"), payload["created_dirs"])
-        self.assertIn(str(self.root / "works" / "smart-contracts" / "articles" / "final"), payload["created_dirs"])
+        self.assertIn(str(root / "works" / "smart-contracts" / "articles" / "briefs"), payload["created_dirs"])
+        self.assertIn(str(root / "works" / "smart-contracts" / "articles" / "drafts"), payload["created_dirs"])
+        self.assertIn(str(root / "works" / "smart-contracts" / "articles" / "reviews"), payload["created_dirs"])
+        self.assertIn(str(root / "works" / "smart-contracts" / "articles" / "final"), payload["created_dirs"])
 
         work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
         self.assertEqual(work_toml["slug"], "smart-contracts")
@@ -72,7 +73,7 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         self.assertEqual(work_toml["topic"], "Смарт-контракты")
         self.assertEqual(work_toml["artifact_type"], "article")
 
-        parsed = tomllib.loads((self.root / "workspace.toml").read_text(encoding="utf-8"))
+        parsed = tomllib.loads((root / "workspace.toml").read_text(encoding="utf-8"))
         self.assertIn("smart-contracts", parsed["works"])
 
     def test_create_work_defaults_empty_topic_to_title(self) -> None:
