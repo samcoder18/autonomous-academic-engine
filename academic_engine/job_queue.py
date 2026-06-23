@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -17,6 +18,7 @@ TERMINAL_JOB_STATUSES = {"failed", "completed"}
 DEFAULT_GLOBAL_CONCURRENCY = 2
 DEFAULT_PER_WORK_CONCURRENCY = 1
 DEFAULT_MAX_ATTEMPTS = 3
+JOB_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _UNSET = object()
 
 
@@ -29,6 +31,18 @@ class JobNotFoundError(JobQueueError):
 
 
 class InvalidJobStateError(JobQueueError):
+    pass
+
+
+class CorruptJobError(JobQueueError):
+    pass
+
+
+class InvalidJobIdError(JobQueueError):
+    pass
+
+
+class DuplicateJobIdError(JobQueueError):
     pass
 
 
@@ -65,7 +79,9 @@ class JobQueue:
         self._stop_job_func = stop_job_func
 
     def submit_workflow(self, spec: WorkflowJobSpec) -> dict[str, Any]:
-        job_id = self._id_factory()
+        job_id = self._validate_job_id(self._id_factory())
+        if self._job_path(job_id).exists():
+            raise DuplicateJobIdError(f"Job `{job_id}` already exists.")
         now = self._now()
         job = {
             "kind": JOB_KIND,
@@ -108,6 +124,8 @@ class JobQueue:
         return job
 
     def list_jobs(self, *, work_id: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
+        if status is not None and status not in PUBLIC_JOB_STATUSES:
+            raise InvalidJobStateError(f"Unknown job status filter `{status}`.")
         jobs = [self._read_job(path) for path in sorted(self.jobs_dir.glob("*.json"))] if self.jobs_dir.exists() else []
         result = [job for job in jobs if job is not None]
         if work_id is not None:
@@ -117,7 +135,7 @@ class JobQueue:
         return sorted(result, key=lambda job: (str(job.get("created_at") or ""), str(job.get("job_id") or "")))
 
     def get_job(self, job_id: str) -> dict[str, Any]:
-        path = self._job_path(job_id)
+        path = self._job_path(self._validate_job_id(job_id))
         job = self._read_job(path)
         if job is None:
             raise JobNotFoundError(f"Job `{job_id}` not found.")
@@ -126,9 +144,18 @@ class JobQueue:
     def cancel_job(self, job_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
         job = self.get_job(job_id)
         status = str(job.get("status") or "")
-        if status in {"completed", "failed"}:
+        if status in TERMINAL_JOB_STATUSES:
             raise InvalidJobStateError(f"Cannot cancel {status} job `{job_id}`.")
-        return self._transition(job, status="blocked", event="job-cancelled", blocked_reason=reason)
+        details = {}
+        if status == "running" and self._stop_job_func is not None:
+            details["stop_result"] = self._stop_job_func(self.root_dir, str(job["work_id"]), reason)
+        return self._transition(
+            job,
+            status="blocked",
+            event="job-cancelled",
+            blocked_reason=reason,
+            details=details,
+        )
 
     def retry_job(self, job_id: str) -> dict[str, Any]:
         job = self.get_job(job_id)
@@ -190,17 +217,16 @@ class JobQueue:
         return job
 
     def _job_path(self, job_id: str) -> Path:
-        safe = "".join(char if char.isalnum() or char in "-_" else "-" for char in job_id)
-        return self.jobs_dir / f"{safe or 'job'}.json"
+        return self.jobs_dir / f"{self._validate_job_id(job_id)}.json"
 
     def _read_job(self, path: Path) -> dict[str, Any] | None:
         if not path.exists():
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
-        return payload if isinstance(payload, dict) and payload.get("kind") == JOB_KIND else None
+        except json.JSONDecodeError as exc:
+            raise CorruptJobError(f"Corrupt job record `{path}`: malformed JSON.") from exc
+        return self._validate_loaded_job(payload, path)
 
     def _write_job(self, job: dict[str, Any]) -> None:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -210,3 +236,23 @@ class JobQueue:
             handle.write("\n")
             temp_name = handle.name
         Path(temp_name).replace(path)
+
+    def _validate_job_id(self, job_id: str) -> str:
+        if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
+            raise InvalidJobIdError(f"Invalid job id `{job_id}`.")
+        return job_id
+
+    def _validate_loaded_job(self, payload: Any, path: Path) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise CorruptJobError(f"Corrupt job record `{path}`: expected JSON object.")
+        if payload.get("kind") != JOB_KIND:
+            raise CorruptJobError(f"Corrupt job record `{path}`: expected kind `{JOB_KIND}`.")
+        job_id = payload.get("job_id")
+        try:
+            self._validate_job_id(job_id)
+        except InvalidJobIdError as exc:
+            raise CorruptJobError(f"Corrupt job record `{path}`: invalid job id `{job_id}`.") from exc
+        status = payload.get("status")
+        if status not in PUBLIC_JOB_STATUSES:
+            raise InvalidJobStateError(f"Job record `{path}` has unknown status `{status}`.")
+        return payload

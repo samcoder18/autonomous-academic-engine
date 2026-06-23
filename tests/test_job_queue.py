@@ -10,6 +10,7 @@ from academic_engine.job_queue import (
     InvalidJobStateError,
     JobNotFoundError,
     JobQueue,
+    JobQueueError,
     WorkflowJobSpec,
 )
 
@@ -21,6 +22,11 @@ class JobQueueStoreTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tempdir.cleanup()
+
+    def _job_path(self, job_id: str) -> Path:
+        jobs_dir = self.root / "output" / "runtime" / "jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        return jobs_dir / f"{job_id}.json"
 
     def test_submit_workflow_persists_queued_job(self) -> None:
         queue = JobQueue(self.root, now=lambda: "2026-06-23T10:00:00+00:00", id_factory=lambda: "job-demo")
@@ -68,6 +74,10 @@ class JobQueueStoreTests(unittest.TestCase):
         self.assertEqual([item["job_id"] for item in queue.list_jobs(work_id="alpha")], [first["job_id"]])
         self.assertEqual([item["job_id"] for item in queue.list_jobs(status="blocked")], [second["job_id"]])
 
+    def test_list_jobs_rejects_unknown_status_filter(self) -> None:
+        with self.assertRaises(InvalidJobStateError):
+            JobQueue(self.root).list_jobs(status="not-public")
+
     def test_list_jobs_orders_by_created_at_then_job_id(self) -> None:
         ids = iter(["job-c", "job-b", "job-a"])
         timestamps = iter(
@@ -88,6 +98,68 @@ class JobQueueStoreTests(unittest.TestCase):
     def test_get_job_rejects_unknown_id(self) -> None:
         with self.assertRaises(JobNotFoundError):
             JobQueue(self.root).get_job("missing-job")
+
+    def test_corrupt_job_json_raises_for_get_and_list(self) -> None:
+        self._job_path("broken").write_text("{not json", encoding="utf-8")
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "broken.json"):
+            queue.get_job("broken")
+
+        with self.assertRaisesRegex(JobQueueError, "broken.json"):
+            queue.list_jobs()
+
+    def test_wrong_kind_job_json_raises_for_get_and_list(self) -> None:
+        self._job_path("wrong-kind").write_text(
+            json.dumps({"kind": "not-engine-job", "job_id": "wrong-kind", "status": "queued"}),
+            encoding="utf-8",
+        )
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(JobQueueError, "wrong-kind.json"):
+            queue.get_job("wrong-kind")
+
+        with self.assertRaisesRegex(JobQueueError, "wrong-kind.json"):
+            queue.list_jobs()
+
+    def test_invalid_loaded_status_fails_closed(self) -> None:
+        record = {
+            "kind": "engine-job",
+            "version": "job/v1",
+            "job_id": "bad-status",
+            "work_id": "demo-work",
+            "status": "mystery",
+            "history": [],
+        }
+        path = self._job_path("bad-status")
+        path.write_text(json.dumps(record), encoding="utf-8")
+        queue = JobQueue(self.root)
+
+        with self.assertRaisesRegex(InvalidJobStateError, "bad-status.json"):
+            queue.list_jobs()
+
+        with self.assertRaisesRegex(InvalidJobStateError, "bad-status.json"):
+            queue.cancel_job("bad-status")
+
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["status"], "mystery")
+        self.assertEqual(stored["history"], [])
+
+    def test_invalid_job_id_from_factory_is_rejected(self) -> None:
+        queue = JobQueue(self.root, id_factory=lambda: "bad/id")
+
+        with self.assertRaisesRegex(JobQueueError, "bad/id"):
+            queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+
+    def test_duplicate_job_id_is_rejected_without_overwrite(self) -> None:
+        queue = JobQueue(self.root, id_factory=lambda: "job-demo")
+        first = queue.submit_workflow(WorkflowJobSpec("first-work", "article", "review", "draft.md"))
+
+        with self.assertRaisesRegex(JobQueueError, "job-demo"):
+            queue.submit_workflow(WorkflowJobSpec("second-work", "article", "review", "draft.md"))
+
+        stored = json.loads(self._job_path("job-demo").read_text(encoding="utf-8"))
+        self.assertEqual(stored, first)
 
     def test_terminal_statuses_exclude_resumable_blocked_jobs(self) -> None:
         self.assertEqual(TERMINAL_JOB_STATUSES, {"failed", "completed"})
@@ -124,6 +196,42 @@ class JobQueueStoreTests(unittest.TestCase):
         self.assertEqual(blocked["status"], "blocked")
         self.assertEqual(blocked["blocked_reason"], "operator-cancelled")
         self.assertEqual(blocked["history"][-1]["event"], "job-cancelled")
+
+    def test_cancel_running_job_calls_stop_hook_and_records_result(self) -> None:
+        calls: list[tuple[Path, str, str]] = []
+
+        def stop_job(root_dir: Path, work_id: str, reason: str) -> dict[str, object]:
+            calls.append((root_dir, work_id, reason))
+            return {"stopped": True, "reason": reason}
+
+        queue = JobQueue(self.root, stop_job_func=stop_job)
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+        queue._transition_for_test(job["job_id"], status="running")
+
+        blocked = queue.cancel_job(job["job_id"], reason="operator-cancelled")
+
+        self.assertEqual(calls, [(queue.root_dir, "demo-work", "operator-cancelled")])
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(
+            blocked["history"][-1]["details"],
+            {"stop_result": {"stopped": True, "reason": "operator-cancelled"}},
+        )
+
+    def test_cancel_running_job_stop_hook_error_does_not_mutate_job(self) -> None:
+        def stop_job(root_dir: Path, work_id: str, reason: str) -> dict[str, object]:
+            raise RuntimeError("stop failed")
+
+        queue = JobQueue(self.root, stop_job_func=stop_job)
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+        running = queue._transition_for_test(job["job_id"], status="running")
+
+        with self.assertRaisesRegex(RuntimeError, "stop failed"):
+            queue.cancel_job(job["job_id"], reason="operator-cancelled")
+
+        stored = queue.get_job(job["job_id"])
+        self.assertEqual(stored["status"], "running")
+        self.assertEqual(stored["updated_at"], running["updated_at"])
+        self.assertNotEqual(stored["history"][-1]["event"], "job-cancelled")
 
     def test_cancel_terminal_jobs_fail_closed(self) -> None:
         queue = JobQueue(self.root)
