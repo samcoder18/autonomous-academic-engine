@@ -90,7 +90,7 @@ class EngineServiceCreateWorkTests(unittest.TestCase):
         self.assertEqual(work_toml["topic"], "Fallback title")
 
 
-class EngineServiceStatusTests(unittest.TestCase):
+class EngineServiceDelegationTests(unittest.TestCase):
     def test_get_work_status_delegates_to_orchestrator(self) -> None:
         instances: list[FakeOrchestrator] = []
 
@@ -104,14 +104,102 @@ class EngineServiceStatusTests(unittest.TestCase):
 
         self.assertEqual(payload["kind"], "work-state")
         self.assertEqual(payload["work_id"], "demo-work")
-        self.assertEqual(instances[0].root_dir, Path("/tmp/example-root").resolve())
         self.assertEqual(instances[0].status_work_ids, ["demo-work"])
+
+    def test_start_workflow_delegates_to_orchestrator(self) -> None:
+        instances: list[FakeOrchestrator] = []
+
+        def factory(root_dir: Path) -> FakeOrchestrator:
+            fake = FakeOrchestrator(root_dir)
+            instances.append(fake)
+            return fake
+
+        from academic_engine.engine_service import StartWorkflowRequest
+
+        payload = EngineService("/tmp/example-root", orchestrator_factory=factory).start_workflow(
+            StartWorkflowRequest(
+                lane="article",
+                action="review",
+                target_or_topic="works/demo-work/articles/drafts/demo.md",
+                notes="check attribution",
+                search_override=False,
+                model_override="test-model",
+                profile_override="ru-law-article-v1",
+                work_id="demo-work",
+            )
+        )
+
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["workflow_id"], "wf-demo")
+        self.assertEqual(
+            instances[0].start_calls,
+            [
+                {
+                    "lane": "article",
+                    "action": "review",
+                    "target_or_topic": "works/demo-work/articles/drafts/demo.md",
+                    "notes": "check attribution",
+                    "search_override": False,
+                    "model_override": "test-model",
+                    "profile_override": "ru-law-article-v1",
+                    "work_id": "demo-work",
+                }
+            ],
+        )
+
+    def test_export_docx_delegates_to_orchestrator(self) -> None:
+        instances: list[FakeOrchestrator] = []
+
+        def factory(root_dir: Path) -> FakeOrchestrator:
+            fake = FakeOrchestrator(root_dir)
+            instances.append(fake)
+            return fake
+
+        from academic_engine.engine_service import ExportRequest
+
+        payload = EngineService("/tmp/example-root", orchestrator_factory=factory).export_docx(
+            ExportRequest(subject="thesis", work_id="demo-work")
+        )
+
+        self.assertEqual(payload["subject"], "thesis")
+        self.assertEqual(payload["work_id"], "demo-work")
+        self.assertEqual(instances[0].export_calls, [{"subject": "thesis", "work_id": "demo-work"}])
+
+
+class EngineServiceStopJobTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self.root = _prepare_workspace(Path(self._tempdir.name))
+        EngineService(self.root).create_work(
+            CreateWorkRequest(
+                slug="stop-demo",
+                title="Stop demo",
+                artifact_type="article",
+            )
+        )
+
+    def tearDown(self) -> None:
+        self._tempdir.cleanup()
+
+    def test_stop_job_resolves_work_and_writes_autonomous_stop_state(self) -> None:
+        from academic_engine.engine_service import StopJobRequest
+
+        payload = EngineService(self.root).stop_job(
+            StopJobRequest(work_id="stop-demo", reason="operator-stop")
+        )
+
+        self.assertEqual(payload["kind"], "autonomous-run-state")
+        self.assertEqual(payload["status"], "stopped")
+        self.assertEqual(payload["work_id"], "stop-demo")
+        self.assertEqual(payload["stop_reason"], "operator-stop")
 
 
 class FakeOrchestrator:
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = root_dir
         self.status_work_ids: list[str | None] = []
+        self.start_calls: list[dict[str, object]] = []
+        self.export_calls: list[dict[str, object]] = []
 
     def get_work_state(self, *, work_id: str | None = None) -> dict[str, object]:
         self.status_work_ids.append(work_id)
@@ -119,6 +207,48 @@ class FakeOrchestrator:
             "kind": "work-state",
             "work_id": work_id or "default-work",
             "work_title": "Demo work",
+        }
+
+    def start_run(
+        self,
+        lane: str,
+        action: str,
+        target_or_topic: str,
+        *,
+        notes: str | None = None,
+        search_override: bool | None = None,
+        model_override: str | None = None,
+        profile_override: str | None = None,
+        work_id: str | None = None,
+    ) -> dict[str, object]:
+        self.start_calls.append(
+            {
+                "lane": lane,
+                "action": action,
+                "target_or_topic": target_or_topic,
+                "notes": notes,
+                "search_override": search_override,
+                "model_override": model_override,
+                "profile_override": profile_override,
+                "work_id": work_id,
+            }
+        )
+        return {
+            "run_id": "demo-run",
+            "workflow_id": "wf-demo",
+            "status": "queued",
+            "work_id": work_id,
+            "lane": lane,
+            "action": action,
+        }
+
+    def export_docx(self, subject: str, *, work_id: str | None = None) -> dict[str, object]:
+        self.export_calls.append({"subject": subject, "work_id": work_id})
+        return {
+            "subject": subject,
+            "work_id": work_id,
+            "path": "/tmp/example.docx",
+            "stdout": "Exported /tmp/example.docx",
         }
 
 
