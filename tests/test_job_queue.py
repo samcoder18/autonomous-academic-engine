@@ -524,3 +524,210 @@ class JobQueueStoreTests(unittest.TestCase):
 
         with self.assertRaises(InvalidJobStateError):
             queue.resume_job(job["job_id"])
+
+
+class FakeStore:
+    def __init__(self) -> None:
+        self.active_runs: list[dict[str, object]] = []
+
+    def list_active_runs(self) -> list[dict[str, object]]:
+        return list(self.active_runs)
+
+
+class FakeOrchestrator:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.store = FakeStore()
+        self.start_calls: list[dict[str, object]] = []
+        self.raise_on_start: Exception | None = None
+        self.raise_busy = False
+
+    def sync_active_run(self, work_id: str | None = None) -> list[dict[str, object]]:
+        return []
+
+    def start_run(
+        self,
+        lane: str,
+        action: str,
+        target_or_topic: str,
+        *,
+        notes: str | None = None,
+        search_override: bool | None = None,
+        model_override: str | None = None,
+        profile_override: str | None = None,
+        work_id: str | None = None,
+    ) -> dict[str, object]:
+        if self.raise_busy:
+            from academic_engine.orchestrator_support import RunBusyError
+
+            raise RunBusyError("busy")
+        if self.raise_on_start is not None:
+            raise self.raise_on_start
+        workflow_id = f"wf-{len(self.start_calls) + 1}"
+        run_id = f"run-{len(self.start_calls) + 1}"
+        self.start_calls.append(
+            {
+                "lane": lane,
+                "action": action,
+                "target_or_topic": target_or_topic,
+                "notes": notes,
+                "search_override": search_override,
+                "model_override": model_override,
+                "profile_override": profile_override,
+                "work_id": work_id,
+            }
+        )
+        return {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "status": "queued",
+            "work_id": work_id,
+            "lane": lane,
+            "action": action,
+        }
+
+
+def _write_workflow(root: Path, workflow_id: str, *, execution_status: str) -> None:
+    workflow_dir = root / "output" / "runs" / workflow_id
+    workflow_dir.mkdir(parents=True, exist_ok=True)
+    (workflow_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "version": "workflow-run/v1",
+                "workflow_id": workflow_id,
+                "run_id": workflow_id,
+                "work_id": "demo-work",
+                "lane": "thesis",
+                "action": "verify",
+                "status": "completed" if execution_status == "succeeded" else "failed",
+                "execution_status": execution_status,
+                "readiness_status": "submission-ready"
+                if execution_status == "succeeded"
+                else "strong-draft-with-blockers",
+                "started_at": "2026-06-23T10:00:00+00:00",
+                "finished_at": "2026-06-23T10:01:00+00:00",
+                "workflow_dir": str(workflow_dir),
+                "sandbox_dir": str(workflow_dir / "sandbox"),
+                "role_runs": [],
+                "gates": [],
+                "gate_summary": {},
+                "blockers": [],
+                "promotion": {"status": "promoted"},
+                "promotion_status": "promoted",
+                "evaluator_verdict": None,
+                "metadata": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+class JobQueueDispatchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self._tempdir.name)
+        self.fake = FakeOrchestrator(self.root)
+
+    def tearDown(self) -> None:
+        self._tempdir.cleanup()
+
+    def queue(self) -> JobQueue:
+        return JobQueue(self.root, orchestrator_factory=lambda root: self.fake)
+
+    def test_dispatch_starts_oldest_queued_job_and_links_workflow(self) -> None:
+        queue = self.queue()
+        first = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "section-1"))
+        queue.submit_workflow(WorkflowJobSpec("other-work", "article", "review", "draft.md"))
+
+        result = queue.dispatch_jobs(limit=1)
+
+        self.assertEqual([item["job_id"] for item in result["dispatched"]], [first["job_id"]])
+        job = queue.get_job(first["job_id"])
+        self.assertEqual(job["status"], "running")
+        self.assertEqual(job["workflow_id"], "wf-1")
+        self.assertEqual(job["active_run_id"], "run-1")
+        self.assertEqual(job["attempt"], 1)
+        self.assertEqual(self.fake.start_calls[0]["work_id"], "demo-work")
+
+    def test_dispatch_respects_global_and_per_work_limits(self) -> None:
+        queue = self.queue()
+        running = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "running"))
+        queue._transition_for_test(running["job_id"], status="running")
+        first = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "queued-same-work"))
+        second = queue.submit_workflow(WorkflowJobSpec("other-work", "article", "review", "queued-other-work"))
+
+        result = queue.dispatch_jobs(limit=5)
+
+        self.assertEqual([item["job_id"] for item in result["dispatched"]], [second["job_id"]])
+        self.assertEqual(queue.get_job(first["job_id"])["status"], "queued")
+
+    def test_reconcile_completed_and_failed_workflows(self) -> None:
+        queue = self.queue()
+        done = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "done"))
+        failed = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "failed"))
+        done_payload = queue.get_job(done["job_id"])
+        done_payload["workflow_id"] = "wf-done"
+        queue._transition(done_payload, status="running", event="job-dispatched")
+        failed_payload = queue.get_job(failed["job_id"])
+        failed_payload["workflow_id"] = "wf-failed"
+        queue._transition(failed_payload, status="running", event="job-dispatched")
+        _write_workflow(self.root, "wf-done", execution_status="succeeded")
+        _write_workflow(self.root, "wf-failed", execution_status="failed")
+
+        result = queue.reconcile_jobs()
+
+        self.assertEqual(
+            {item["job_id"]: item["status"] for item in result["reconciled"]},
+            {
+                done["job_id"]: "completed",
+                failed["job_id"]: "failed",
+            },
+        )
+
+    def test_reconcile_missing_runtime_blocks_running_job(self) -> None:
+        queue = self.queue()
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+        job["workflow_id"] = "wf-missing"
+        queue._transition(job, status="running", event="job-dispatched")
+
+        queue.reconcile_jobs()
+
+        blocked = queue.get_job(job["job_id"])
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["failure"]["code"], "missing-runtime-result")
+
+    def test_dispatch_preserves_retry_attempt_count(self) -> None:
+        queue = self.queue()
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "retry-me"))
+        failed = queue._transition_for_test(job["job_id"], status="failed", failure={"code": "boom"})
+        self.assertEqual(failed["attempt"], 0)
+        retried = queue.retry_job(job["job_id"])
+        self.assertEqual(retried["attempt"], 1)
+
+        queue.dispatch_jobs(limit=1)
+
+        dispatched = queue.get_job(job["job_id"])
+        self.assertEqual(dispatched["status"], "running")
+        self.assertEqual(dispatched["attempt"], 1)
+
+    def test_dispatch_blocks_config_errors(self) -> None:
+        queue = self.queue()
+        self.fake.raise_on_start = ValueError("bad target")
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "bad-target"))
+
+        result = queue.dispatch_jobs(limit=1)
+
+        blocked = queue.get_job(job["job_id"])
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertEqual(blocked["failure"]["category"], "config")
+        self.assertEqual([item["job_id"] for item in result["blocked"]], [job["job_id"]])
+
+    def test_dispatch_run_busy_leaves_job_queued(self) -> None:
+        queue = self.queue()
+        self.fake.raise_busy = True
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "busy-target"))
+
+        result = queue.dispatch_jobs(limit=1)
+
+        self.assertEqual(queue.get_job(job["job_id"])["status"], "queued")
+        self.assertEqual([item["job_id"] for item in result["skipped"]], [job["job_id"]])
