@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from academic_engine.export_explain import explain_export
@@ -111,6 +113,30 @@ class ExportExplainTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["reasons"], [])
 
+    def test_empty_article_slug_blocks_export_without_raising(self) -> None:
+        _write_workflow(
+            self.root,
+            "wf-article-ready",
+            lane="article",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        payload = explain_export(self.root, "article:", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "unsupported-export-subject")
+
+    def test_whitespace_article_slug_blocks_export_without_raising(self) -> None:
+        _write_workflow(
+            self.root,
+            "wf-article-ready",
+            lane="article",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        payload = explain_export(self.root, "article:   ", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "unsupported-export-subject")
+
     def test_unsupported_subject_blocks_export(self) -> None:
         payload = explain_export(self.root, "slides", work_id=TEST_WORK_ID)
         self.assertEqual(payload["status"], "blocked")
@@ -128,6 +154,78 @@ class ExportExplainTests(unittest.TestCase):
         payload = explain_export(self.root, "thesis", work_id=TEST_WORK_ID)
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["reasons"], [])
+
+    def test_latest_malformed_one_shot_report_blocks_even_when_older_report_passed(self) -> None:
+        _write_workflow(
+            self.root,
+            "wf-thesis-ready",
+            lane="thesis",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        _write_one_shot_report(
+            self.root,
+            status="machine-gates-passed",
+            finished_at="2026-04-18T10:59:00+00:00",
+        )
+        _write_raw_one_shot_report(
+            self.root,
+            "2026-04-19-one-shot-report.json",
+            "{not json",
+            mtime="2026-04-19T10:59:00+00:00",
+        )
+        payload = explain_export(self.root, "thesis", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "machine-gates-not-passed")
+
+    def test_latest_non_dict_one_shot_report_blocks_without_raising(self) -> None:
+        for raw_payload in (["not", "a", "dict"], "not a dict"):
+            with self.subTest(raw_payload=raw_payload):
+                _write_workflow(
+                    self.root,
+                    "wf-thesis-ready",
+                    lane="thesis",
+                    execution_status="succeeded",
+                    readiness_status="submission-ready",
+                )
+                _write_one_shot_report(
+                    self.root,
+                    status="machine-gates-passed",
+                    finished_at="2026-04-18T10:59:00+00:00",
+                )
+                _write_raw_one_shot_report(
+                    self.root,
+                    "2026-04-19-one-shot-report.json",
+                    json.dumps(raw_payload),
+                    mtime="2026-04-19T10:59:00+00:00",
+                )
+                payload = explain_export(self.root, "thesis", work_id=TEST_WORK_ID)
+                self.assertEqual(payload["status"], "blocked")
+                self.assertEqual(payload["reasons"][0]["code"], "machine-gates-not-passed")
+
+    def test_latest_blocked_one_shot_report_blocks_even_when_older_report_passed(self) -> None:
+        _write_workflow(
+            self.root,
+            "wf-thesis-ready",
+            lane="thesis",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        _write_one_shot_report(
+            self.root,
+            status="machine-gates-passed",
+            finished_at="2026-04-18T10:59:00+00:00",
+            name="2026-04-18-one-shot-report.json",
+        )
+        _write_one_shot_report(
+            self.root,
+            status="blocked",
+            finished_at="2026-04-19T10:59:00+00:00",
+            name="2026-04-19-one-shot-report.json",
+        )
+        payload = explain_export(self.root, "thesis", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "machine-gates-not-passed")
 
 
 def _write_workflow(
@@ -164,12 +262,26 @@ def _write_workflow(
     )
 
 
-def _write_one_shot_report(root: Path, *, status: str) -> None:
-    report_path = root / "works" / TEST_WORK_ID / "thesis" / "reviews" / "2026-04-18-one-shot-report.json"
+def _write_one_shot_report(
+    root: Path,
+    *,
+    status: str,
+    finished_at: str = "2026-04-18T10:59:00+00:00",
+    name: str = "2026-04-18-one-shot-report.json",
+) -> None:
+    report_path = root / "works" / TEST_WORK_ID / "thesis" / "reviews" / name
     report_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": ONE_SHOT_REPORT_VERSION,
         "status": status,
-        "finished_at": "2026-04-18T10:59:00+00:00",
+        "finished_at": finished_at,
     }
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _write_raw_one_shot_report(root: Path, name: str, content: str, *, mtime: str) -> None:
+    report_path = root / "works" / TEST_WORK_ID / "thesis" / "reviews" / name
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(content, encoding="utf-8")
+    timestamp = datetime.fromisoformat(mtime).timestamp()
+    os.utime(report_path, (timestamp, timestamp))

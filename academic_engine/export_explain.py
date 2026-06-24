@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -146,7 +147,10 @@ def _resolve_subject(subject: str) -> tuple[str | None, str | None]:
     if subject == "thesis":
         return "thesis", None
     if subject.startswith("article:"):
-        return "article", subject.split(":", 1)[1]
+        article_slug = subject.split(":", 1)[1].strip()
+        if article_slug:
+            return "article", article_slug
+        return None, None
     return None, None
 
 
@@ -182,23 +186,46 @@ def _failed_mandatory_gates(workflow: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _machine_gates_passed(reviews_dir: Path) -> bool:
-    reports: list[tuple[str, dict[str, Any]]] = []
+    reports: list[tuple[float, Any]] = []
     if reviews_dir.exists():
         for path in reviews_dir.glob("*one-shot-report.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
-                sort_key = str(payload.get("finished_at") or path.stat().st_mtime)
-            except (json.JSONDecodeError, OSError):
-                continue
-            if isinstance(payload, dict):
-                reports.append((sort_key, payload))
+            except json.JSONDecodeError:
+                payload = None
+            except OSError:
+                payload = None
+            reports.append((_one_shot_report_recency(path, payload), payload))
     reports.sort(key=lambda item: item[0], reverse=True)
     latest = reports[0][1] if reports else None
     return bool(
-        latest
+        isinstance(latest, dict)
         and latest.get("version") == ONE_SHOT_REPORT_VERSION
         and latest.get("status") == "machine-gates-passed"
     )
+
+
+def _one_shot_report_recency(path: Path, payload: Any) -> float:
+    if isinstance(payload, dict):
+        finished_at = _parse_timestamp(payload.get("finished_at"))
+        if finished_at is not None:
+            return finished_at
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _parse_timestamp(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
 
 
 def _workflow_details(workflow: dict[str, Any] | None, *, lane: str, work_id: str) -> dict[str, Any]:
