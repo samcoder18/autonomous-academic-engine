@@ -1,4 +1,4 @@
-from .bot import main
+from .work_cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -6,27 +6,23 @@ letters) do not compete with user-facing progress updates.
 
 Configuration:
 
-- ``OPS_ALERT_CHAT_ID`` — Telegram chat id to forward ops events to.
-- ``OPS_ALERT_LOG_PATH`` — optional file path to tee alerts to; useful
-  when the Telegram bot is down so that alerts still land on disk.
+- ``OPS_ALERT_LOG_PATH`` — optional file path to tee alerts to.
 
 Delivery semantics:
 
 - Best-effort: alert delivery failures are logged and swallowed. The
-  process that raised the alert must never be blocked by a Telegram
+  process that raised the alert must never be blocked by a logging
   outage.
-- Fail-closed on configuration: if neither ``OPS_ALERT_CHAT_ID`` nor
-  ``OPS_ALERT_LOG_PATH`` is set, alerts are written to ``stderr`` so
-  the operator still sees them during local runs.
+- Fail-closed on configuration: if ``OPS_ALERT_LOG_PATH`` is not set,
+  alerts are written to ``stderr`` so the operator still sees them
+  during local runs.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -100,13 +96,9 @@ class OpsAlertSink:
     def __init__(
         self,
         *,
-        chat_id: str | int | None = None,
         log_path: Path | None = None,
-        sender: Callable[[str | int, str], None] | None = None,
     ) -> None:
-        self._chat_id = chat_id
         self._log_path = log_path
-        self._sender = sender
 
     def emit(self, alert: OpsAlert) -> None:
         serialised = json.dumps(alert.to_dict(), ensure_ascii=False, sort_keys=True)
@@ -120,13 +112,7 @@ class OpsAlertSink:
             except OSError as exc:
                 logger.warning("ops-alert log write failed: %s", exc)
 
-        if self._chat_id and self._sender:
-            try:
-                self._sender(self._chat_id, alert.to_markdown())
-            except Exception as exc:  # noqa: BLE001 — best-effort delivery
-                logger.warning("ops-alert telegram delivery failed: %s", exc)
-
-        if not self._chat_id and not self._log_path:
+        if not self._log_path:
             print(f"[OPS:{alert.severity}] {alert.code} {alert.message}", file=sys.stderr)
 
 
@@ -142,19 +128,11 @@ def default_sink() -> OpsAlertSink:
     global _default_sink
     if _default_sink is not None:
         return _default_sink
-    chat_id_raw = os.environ.get("OPS_ALERT_CHAT_ID")
-    chat_id: str | int | None
-    if chat_id_raw:
-        try:
-            chat_id = int(chat_id_raw)
-        except ValueError:
-            chat_id = chat_id_raw
-    else:
-        chat_id = None
+    import os
 
     log_path_raw = os.environ.get("OPS_ALERT_LOG_PATH")
     log_path = Path(log_path_raw).expanduser() if log_path_raw else None
-    _default_sink = OpsAlertSink(chat_id=chat_id, log_path=log_path, sender=None)
+    _default_sink = OpsAlertSink(log_path=log_path)
     return _default_sink
 
 

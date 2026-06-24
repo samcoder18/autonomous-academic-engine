@@ -383,6 +383,54 @@ class WorkInitCliTests(unittest.TestCase):
         self.assertTrue(payload["set_default"])
         self.assertEqual(payload["default_work"], "phd-law")
 
+    def test_cli_whitespace_topic_stays_empty_in_json_payload(self) -> None:
+        with patch("sys.stdout", new_callable=StringIO) as fake_stdout:
+            rc = work_cli.main(
+                [
+                    "work",
+                    "init",
+                    "whitespace-topic",
+                    "--artifact-type",
+                    "article",
+                    "--title",
+                    "Fallback title",
+                    "--topic",
+                    "   ",
+                    "--json",
+                ],
+                root_dir=self.root,
+            )
+        self.assertEqual(rc, 0)
+        import json as _json
+
+        payload = _json.loads(fake_stdout.getvalue())
+        work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
+        self.assertEqual(work_toml["topic"], "")
+
+    def test_cli_empty_topic_defaults_to_title(self) -> None:
+        with patch("sys.stdout", new_callable=StringIO) as fake_stdout:
+            rc = work_cli.main(
+                [
+                    "work",
+                    "init",
+                    "empty-topic",
+                    "--artifact-type",
+                    "article",
+                    "--title",
+                    "Fallback title",
+                    "--topic",
+                    "",
+                    "--json",
+                ],
+                root_dir=self.root,
+            )
+        self.assertEqual(rc, 0)
+        import json as _json
+
+        payload = _json.loads(fake_stdout.getvalue())
+        work_toml = tomllib.loads(Path(payload["work_toml"]).read_text(encoding="utf-8"))
+        self.assertEqual(work_toml["topic"], "Fallback title")
+
     def test_cli_invalid_slug_returns_error_code(self) -> None:
         with patch("sys.stderr", new_callable=StringIO) as fake_stderr:
             rc = work_cli.main(

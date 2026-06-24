@@ -2,7 +2,7 @@
 
 This module creates a new ``works/<slug>/`` bundle on disk and registers it in
 ``workspace.toml``. The logic is intentionally pure text/path manipulation so it
-can be unit-tested without touching real Codex or Telegram runtime.
+can be unit-tested without touching real Codex or local runtime state.
 
 Supported artifact types:
 

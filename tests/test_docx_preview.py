@@ -151,7 +151,7 @@ class DocxPreviewConfigTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(proc.stdout, "")
         self.assertIn("Input DOCX not found", proc.stderr)
-        self.assertNotIn("No module named 'academic_engine.bot'", proc.stderr)
+        self.assertNotIn("No module named", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
 
 

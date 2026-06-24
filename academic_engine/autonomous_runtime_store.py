@@ -28,7 +28,7 @@ _LOCK_HANDLES: dict[Path, RuntimeLockHandle] = {}
 
 
 def autonomous_runtime_dir(root_dir: str | Path) -> Path:
-    return Path(root_dir).resolve() / "output" / "telegram" / "runtime" / "autonomous"
+    return Path(root_dir).resolve() / "output" / "runtime" / "autonomous"
 
 
 def runtime_file_path(root_dir: str | Path, filename: str) -> Path:

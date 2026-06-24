@@ -10,7 +10,7 @@ class PackageRenameTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
 
         self.assertTrue((root / "academic_engine").is_dir())
-        old_package_name = "telegram" + "_console"
+        old_package_name = "tele" + "gram" + "_console"
         self.assertFalse((root / old_package_name).exists())
 
         module = importlib.import_module("academic_engine.work_cli")

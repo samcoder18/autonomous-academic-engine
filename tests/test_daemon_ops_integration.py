@@ -57,7 +57,7 @@ from tests.test_academic_engine import TEST_WORK_ID, add_demo_work_clone, build_
 
 class _RecordingSink(OpsAlertSink):
     def __init__(self) -> None:
-        super().__init__(chat_id=None, log_path=None, sender=None)
+        super().__init__()
         self.events: list[OpsAlert] = []
 
     def emit(self, alert: OpsAlert) -> None:  # type: ignore[override]

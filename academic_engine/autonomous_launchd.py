@@ -95,7 +95,7 @@ class AutonomousDaemonLaunchdManager:
         root = Path(workspace_root).expanduser().resolve()
         user_home = Path(home_dir or Path.home()).expanduser().resolve()
         launch_agents_dir = user_home / "Library" / "LaunchAgents"
-        runtime_dir = root / "output" / "telegram" / "runtime" / "autonomous"
+        runtime_dir = root / "output" / "runtime" / "autonomous"
         self.paths = AutonomousDaemonLaunchdPaths(
             workspace_root=root,
             label=label,
