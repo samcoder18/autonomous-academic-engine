@@ -350,6 +350,15 @@ class JobQueue:
                 )
                 result["reconciled"].append(self._dispatch_result(failed))
             elif execution_status in {"queued", "running"}:
+                if self._active_run_matches_job(job, active_runs):
+                    continue
+                blocked = self._block_job(
+                    job,
+                    code="missing-runtime-result",
+                    category="runtime",
+                    message=f"Non-terminal workflow `{workflow_id}` has no matching active run.",
+                )
+                result["blocked"].append(self._dispatch_result(blocked))
                 continue
             else:
                 blocked = self._block_job(
@@ -454,26 +463,13 @@ class JobQueue:
     ) -> tuple[int, dict[str, int]]:
         total = 0
         by_work: dict[str, int] = {}
-        running_workflow_ids = {
-            value for job in running_jobs if isinstance(value := job.get("workflow_id"), str) and value
-        }
-        running_active_run_ids = {
-            value for job in running_jobs if isinstance(value := job.get("active_run_id"), str) and value
-        }
         for item in running_jobs:
             total += 1
             work_id = item.get("work_id")
             if isinstance(work_id, str) and work_id:
                 by_work[work_id] = by_work.get(work_id, 0) + 1
         for item in active_runs:
-            workflow_id = item.get("workflow_id")
-            run_id = item.get("run_id")
-            active_run_id = item.get("active_run_id")
-            if isinstance(workflow_id, str) and workflow_id in running_workflow_ids:
-                continue
-            if isinstance(run_id, str) and run_id in running_active_run_ids:
-                continue
-            if isinstance(active_run_id, str) and active_run_id in running_active_run_ids:
+            if any(self._active_run_matches_job(job, [item]) for job in running_jobs):
                 continue
             total += 1
             work_id = item.get("work_id")
