@@ -216,9 +216,7 @@ def _failed_mandatory_gates(workflow: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(gates, list):
         return [{"gate_id": "gates", "status": "missing", "blocking": True}]
     return [
-        gate
-        for gate in gates
-        if isinstance(gate, dict) and bool(gate.get("blocking")) and gate.get("status") != "pass"
+        gate for gate in gates if isinstance(gate, dict) and bool(gate.get("blocking")) and gate.get("status") != "pass"
     ]
 
 

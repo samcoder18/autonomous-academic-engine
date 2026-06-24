@@ -808,16 +808,12 @@ class JobQueueDispatchTests(unittest.TestCase):
 
     def test_dispatch_reconcile_frees_capacity_before_starting_next_job(self) -> None:
         queue = self.queue()
-        done = queue.submit_workflow(
-            WorkflowJobSpec("demo-work", "thesis", "verify", "done", global_concurrency=1)
-        )
+        done = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "done", global_concurrency=1))
         done_payload = queue.get_job(done["job_id"])
         done_payload["workflow_id"] = "wf-done"
         queue._transition(done_payload, status="running", event="job-dispatched")
         _write_workflow(self.root, "wf-done", execution_status="succeeded")
-        queued = queue.submit_workflow(
-            WorkflowJobSpec("other-work", "article", "review", "next", global_concurrency=1)
-        )
+        queued = queue.submit_workflow(WorkflowJobSpec("other-work", "article", "review", "next", global_concurrency=1))
 
         result = queue.dispatch_jobs(limit=1)
 
@@ -840,9 +836,7 @@ class JobQueueDispatchTests(unittest.TestCase):
                 "work_id": "demo-work",
             }
         ]
-        queued = queue.submit_workflow(
-            WorkflowJobSpec("other-work", "article", "review", "next", global_concurrency=2)
-        )
+        queued = queue.submit_workflow(WorkflowJobSpec("other-work", "article", "review", "next", global_concurrency=2))
 
         result = queue.dispatch_jobs(limit=1)
 
@@ -866,11 +860,9 @@ class JobQueueDispatchTests(unittest.TestCase):
                 "workflow_id": "wf-active",
                 "run_id": "run-active",
                 "work_id": "other-work",
-            }
+            },
         ]
-        queued = queue.submit_workflow(
-            WorkflowJobSpec("third-work", "article", "review", "next", global_concurrency=2)
-        )
+        queued = queue.submit_workflow(WorkflowJobSpec("third-work", "article", "review", "next", global_concurrency=2))
 
         result = queue.dispatch_jobs(limit=1)
 
