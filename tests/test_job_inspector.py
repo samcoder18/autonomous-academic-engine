@@ -170,3 +170,21 @@ class JobInspectorTests(unittest.TestCase):
         self.assertTrue(any("events.jsonl" in item["path"] for item in payload["observability_warnings"]))
         self.assertTrue(any(item["event"] == "workflow-queued" for item in payload["timeline"]))
         self.assertTrue(any(item["event"] == "workflow-finished" for item in payload["timeline"]))
+
+    def test_missing_gates_and_promotion_files_are_observability_warnings(self) -> None:
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        warning_paths = [item["path"] for item in payload["observability_warnings"]]
+        self.assertTrue(any("gates.json" in path for path in warning_paths))
+        self.assertTrue(any("promotion.json" in path for path in warning_paths))
+
+    def test_malformed_gates_and_promotion_files_are_observability_warnings(self) -> None:
+        (self.workflow_dir / "gates.json").write_text("{bad gates", encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text("{bad promotion", encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertEqual(payload["kind"], "job-inspection")
+        warning_paths = [item["path"] for item in payload["observability_warnings"]]
+        self.assertTrue(any("gates.json" in path for path in warning_paths))
+        self.assertTrue(any("promotion.json" in path for path in warning_paths))

@@ -31,6 +31,10 @@ def inspect_job(
     workflow = _workflow_payload(workflow_path, warnings)
     role_runs = _role_runs(workflow)
     events = _read_events(events_path, warnings) if events_path is not None else []
+    if gates_path is not None:
+        _read_json(gates_path, warnings)
+    if promotion_path is not None:
+        _read_json(promotion_path, warnings)
     attachments = _attachments(
         {
             "job": job_path,
