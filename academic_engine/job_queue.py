@@ -151,6 +151,11 @@ class JobQueue:
             raise JobNotFoundError(f"Job `{job_id}` not found.")
         return job
 
+    def inspect_job(self, job_id: str) -> dict[str, Any]:
+        from .job_inspector import inspect_job
+
+        return inspect_job(self.root_dir, self.get_job(job_id))
+
     def cancel_job(self, job_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
         job = self.get_job(job_id)
         status = str(job.get("status") or "")
