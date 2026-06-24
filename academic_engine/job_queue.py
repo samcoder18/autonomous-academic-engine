@@ -16,6 +16,7 @@ from .workspace import WorkspaceConfigError
 
 JOB_KIND = "engine-job"
 JOB_VERSION = "job/v1"
+WORKFLOW_RUN_VERSION = "workflow-run/v1"
 PUBLIC_JOB_STATUSES = {"queued", "running", "blocked", "failed", "completed"}
 TERMINAL_JOB_STATUSES = {"failed", "completed"}
 DEFAULT_GLOBAL_CONCURRENCY = 2
@@ -523,7 +524,9 @@ class JobQueue:
         if workflow_id != job_workflow_id:
             return f"Workflow runtime artifact id `{workflow_id}` does not match job workflow `{job_workflow_id}`."
         workflow_work_id = workflow.get("work_id")
-        if workflow_work_id is not None and workflow_work_id != job.get("work_id"):
+        if not isinstance(workflow_work_id, str) or not workflow_work_id:
+            return f"Workflow runtime artifact for `{job_workflow_id}` does not declare a work_id."
+        if workflow_work_id != job.get("work_id"):
             return f"Workflow runtime artifact work `{workflow_work_id}` does not match job work `{job['work_id']}`."
         return None
 
@@ -537,6 +540,10 @@ class JobQueue:
             raise CorruptJobError(f"Invalid workflow runtime artifact `{path}`: malformed JSON.") from exc
         if not isinstance(payload, dict):
             raise CorruptJobError(f"Invalid workflow runtime artifact `{path}`: expected JSON object.")
+        if payload.get("version") != WORKFLOW_RUN_VERSION:
+            raise CorruptJobError(
+                f"Invalid workflow runtime artifact `{path}`: expected version `{WORKFLOW_RUN_VERSION}`."
+            )
         return payload
 
     def _job_path(self, job_id: str) -> Path:

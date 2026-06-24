@@ -935,6 +935,78 @@ class JobQueueDispatchTests(unittest.TestCase):
                 self.assertEqual(blocked["status"], "blocked")
                 self.assertIn(blocked["failure"]["code"], {"ambiguous-runtime-result", "runtime-link-mismatch"})
 
+    def test_reconcile_terminal_payload_requires_string_work_id(self) -> None:
+        cases = [
+            (
+                "missing-work-id",
+                {
+                    "version": "workflow-run/v1",
+                    "workflow_id": "wf-job",
+                    "execution_status": "succeeded",
+                },
+            ),
+            (
+                "non-string-work-id",
+                {
+                    "version": "workflow-run/v1",
+                    "workflow_id": "wf-job",
+                    "work_id": 123,
+                    "execution_status": "succeeded",
+                },
+            ),
+        ]
+
+        for target, workflow_payload in cases:
+            with self.subTest(target=target):
+                queue = self.queue()
+                job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", target))
+                payload = queue.get_job(job["job_id"])
+                payload["workflow_id"] = "wf-job"
+                queue._transition(payload, status="running", event="job-dispatched")
+                _write_workflow_payload(self.root, "wf-job", workflow_payload)
+
+                queue.reconcile_jobs()
+
+                blocked = queue.get_job(job["job_id"])
+                self.assertEqual(blocked["status"], "blocked")
+                self.assertIn(blocked["failure"]["code"], {"ambiguous-runtime-result", "runtime-link-mismatch"})
+
+    def test_reconcile_terminal_payload_requires_workflow_run_version(self) -> None:
+        cases = [
+            (
+                "missing-version",
+                {
+                    "workflow_id": "wf-job",
+                    "work_id": "demo-work",
+                    "execution_status": "succeeded",
+                },
+            ),
+            (
+                "wrong-version",
+                {
+                    "version": "workflow-run/v0",
+                    "workflow_id": "wf-job",
+                    "work_id": "demo-work",
+                    "execution_status": "succeeded",
+                },
+            ),
+        ]
+
+        for target, workflow_payload in cases:
+            with self.subTest(target=target):
+                queue = self.queue()
+                job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", target))
+                payload = queue.get_job(job["job_id"])
+                payload["workflow_id"] = "wf-job"
+                queue._transition(payload, status="running", event="job-dispatched")
+                _write_workflow_payload(self.root, "wf-job", workflow_payload)
+
+                queue.reconcile_jobs()
+
+                blocked = queue.get_job(job["job_id"])
+                self.assertEqual(blocked["status"], "blocked")
+                self.assertEqual(blocked["failure"]["code"], "ambiguous-runtime-result")
+
     def test_dispatch_respects_true_global_limit_across_works(self) -> None:
         queue = self.queue()
         first = queue.submit_workflow(WorkflowJobSpec("first-work", "thesis", "verify", "running-1"))
