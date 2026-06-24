@@ -213,17 +213,28 @@ def _validate_gates_payload(path: Path, payload: Any, warnings: list[dict[str, A
                 "message": "Gates artifact must be an object with a `gates` list.",
             }
         )
+        return
+    for index, gate in enumerate(payload["gates"]):
+        if isinstance(gate, dict):
+            continue
+        warnings.append(
+            {
+                "code": "malformed-artifact",
+                "path": str(path),
+                "message": f"Gates artifact `gates[{index}]` must be a JSON object.",
+            }
+        )
 
 
 def _validate_promotion_payload(path: Path, payload: Any, warnings: list[dict[str, Any]]) -> None:
     if payload is None:
         return
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or not isinstance(payload.get("status"), str) or not payload["status"]:
         warnings.append(
             {
                 "code": "malformed-artifact",
                 "path": str(path),
-                "message": "Promotion artifact must be a JSON object.",
+                "message": "Promotion artifact must be an object with a non-empty string `status`.",
             }
         )
 
@@ -238,14 +249,13 @@ def _role_runs(
     role_runs = workflow.get("role_runs")
     warning_path = str(workflow_path) if workflow_path is not None else None
     if not isinstance(role_runs, list):
-        if role_runs is not None:
-            warnings.append(
-                {
-                    "code": "malformed-workflow",
-                    "path": warning_path,
-                    "message": "Workflow `role_runs` must be a list.",
-                }
-            )
+        warnings.append(
+            {
+                "code": "malformed-workflow",
+                "path": warning_path,
+                "message": "Workflow `role_runs` must be a list.",
+            }
+        )
         return []
     valid_roles: list[dict[str, Any]] = []
     for index, item in enumerate(role_runs):

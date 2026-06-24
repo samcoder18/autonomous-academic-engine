@@ -32,7 +32,7 @@ class JobInspectorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tempdir.cleanup()
 
-    def _write_workflow(self, **overrides: object) -> None:
+    def _write_workflow(self, *, include_role_runs: bool = True, **overrides: object) -> None:
         payload: dict[str, object] = {
             "version": "workflow-run/v1",
             "workflow_id": "wf-demo",
@@ -44,9 +44,10 @@ class JobInspectorTests(unittest.TestCase):
             "execution_status": "succeeded",
             "started_at": "2026-06-23T10:00:00+00:00",
             "finished_at": "2026-06-23T10:01:00+00:00",
-            "role_runs": [],
             "blockers": [],
         }
+        if include_role_runs:
+            payload["role_runs"] = []
         payload.update(overrides)
         (self.workflow_dir / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
 
@@ -216,6 +217,55 @@ class JobInspectorTests(unittest.TestCase):
         warning_paths = [item["path"] for item in payload["observability_warnings"]]
         self.assertTrue(any("gates.json" in path for path in warning_paths))
         self.assertTrue(any("promotion.json" in path for path in warning_paths))
+
+    def test_gates_with_non_object_entries_are_observability_warnings(self) -> None:
+        (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": ["bad"]}), encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertTrue(any("gates.json" in item["path"] for item in payload["observability_warnings"]))
+
+    def test_promotion_without_string_status_is_observability_warning(self) -> None:
+        cases = [{}, {"status": 123}]
+        for promotion_payload in cases:
+            with self.subTest(promotion_payload=promotion_payload):
+                (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": []}), encoding="utf-8")
+                (self.workflow_dir / "promotion.json").write_text(json.dumps(promotion_payload), encoding="utf-8")
+
+                payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+                self.assertTrue(any("promotion.json" in item["path"] for item in payload["observability_warnings"]))
+
+    def test_workflow_missing_role_runs_warns_without_raising(self) -> None:
+        self._write_workflow(include_role_runs=False)
+        (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": []}), encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertEqual(payload["kind"], "job-inspection")
+        self.assertTrue(
+            any(
+                "workflow.json" in item["path"] and "role_runs" in item["message"]
+                for item in payload["observability_warnings"]
+            )
+        )
+
+    def test_workflow_null_role_runs_warns_without_raising(self) -> None:
+        self._write_workflow(role_runs=None)
+        (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": []}), encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertEqual(payload["kind"], "job-inspection")
+        self.assertTrue(
+            any(
+                "workflow.json" in item["path"] and "role_runs" in item["message"]
+                for item in payload["observability_warnings"]
+            )
+        )
 
     def test_workflow_role_runs_string_warns_without_raising(self) -> None:
         self._write_workflow(role_runs="not-a-list")
