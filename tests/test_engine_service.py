@@ -217,6 +217,108 @@ class EngineServiceStopJobTests(unittest.TestCase):
         self.assertEqual(payload["stop_reason"], "operator-stop")
 
 
+class EngineServiceJobQueueTests(unittest.TestCase):
+    def test_submit_list_and_read_job_delegate_to_queue(self) -> None:
+        queue = FakeJobQueue()
+        service = EngineService("/tmp/example-root", job_queue_factory=lambda root, orchestrator_factory: queue)
+
+        from academic_engine.engine_service import SubmitWorkflowJobRequest
+
+        submitted = service.submit_workflow_job(
+            SubmitWorkflowJobRequest(
+                work_id="demo-work",
+                lane="thesis",
+                action="verify",
+                target_or_topic="chapter-1",
+                notes="check sources",
+                search_override=False,
+                model_override="test-model",
+                profile_override="thesis-v1",
+            )
+        )
+        listed = service.list_jobs(work_id="demo-work", status="queued")
+        fetched = service.get_job("job-demo")
+
+        self.assertEqual(submitted["job_id"], "job-demo")
+        self.assertEqual(listed["kind"], "job-list")
+        self.assertEqual(listed["version"], "v1")
+        self.assertEqual(listed["jobs"], [{"job_id": "job-demo", "work_id": "demo-work", "status": "queued"}])
+        self.assertEqual(fetched["job_id"], "job-demo")
+        self.assertEqual(queue.submit_specs[0].work_id, "demo-work")
+        self.assertEqual(queue.submit_specs[0].lane, "thesis")
+        self.assertEqual(queue.submit_specs[0].action, "verify")
+        self.assertEqual(queue.submit_specs[0].target_or_topic, "chapter-1")
+        self.assertEqual(queue.submit_specs[0].notes, "check sources")
+        self.assertIs(queue.submit_specs[0].search_override, False)
+        self.assertEqual(queue.submit_specs[0].model_override, "test-model")
+        self.assertEqual(queue.submit_specs[0].profile_override, "thesis-v1")
+        self.assertEqual(queue.list_filters, [{"work_id": "demo-work", "status": "queued"}])
+
+    def test_queue_control_methods_delegate_to_queue(self) -> None:
+        queue = FakeJobQueue()
+        service = EngineService("/tmp/example-root", job_queue_factory=lambda root, orchestrator_factory: queue)
+
+        from academic_engine.engine_service import (
+            CancelJobRequest,
+            DispatchJobsRequest,
+            ResumeJobRequest,
+            RetryJobRequest,
+        )
+
+        self.assertEqual(service.cancel_job(CancelJobRequest("job-demo", reason="stop"))["event"], "cancel")
+        self.assertEqual(service.retry_job(RetryJobRequest("job-demo"))["event"], "retry")
+        self.assertEqual(service.resume_job(ResumeJobRequest("job-demo"))["event"], "resume")
+        self.assertEqual(service.dispatch_jobs(DispatchJobsRequest(limit=2))["kind"], "job-dispatch")
+        self.assertEqual(
+            queue.control_calls,
+            [
+                {"method": "cancel_job", "job_id": "job-demo", "reason": "stop"},
+                {"method": "retry_job", "job_id": "job-demo"},
+                {"method": "resume_job", "job_id": "job-demo"},
+                {"method": "dispatch_jobs", "limit": 2},
+            ],
+        )
+
+    def test_inspect_job_delegates_to_queue(self) -> None:
+        queue = FakeJobQueue()
+        service = EngineService("/tmp/example-root", job_queue_factory=lambda root, orchestrator_factory: queue)
+
+        from academic_engine.engine_service import InspectJobRequest
+
+        payload = service.inspect_job(InspectJobRequest("job-demo"))
+
+        self.assertEqual(payload["kind"], "job-inspection")
+        self.assertEqual(payload["job"]["job_id"], "job-demo")
+        self.assertEqual(queue.inspect_job_ids, ["job-demo"])
+
+    def test_explain_export_delegates_to_export_explainer(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_export_explainer(root: Path, subject: str, *, work_id: str | None = None) -> dict[str, object]:
+            calls.append({"root": root, "subject": subject, "work_id": work_id})
+            return {
+                "kind": "export-explanation",
+                "subject": subject,
+                "work_id": work_id,
+                "status": "blocked",
+                "reasons": [{"code": "no-successful-workflow"}],
+            }
+
+        service = EngineService(
+            "/tmp/example-root",
+            export_explainer=fake_export_explainer,
+        )
+
+        payload = service.explain_export("thesis", work_id="demo-work")
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "no-successful-workflow")
+        self.assertEqual(
+            calls,
+            [{"root": Path("/tmp/example-root").resolve(), "subject": "thesis", "work_id": "demo-work"}],
+        )
+
+
 class FakeOrchestrator:
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = root_dir
@@ -273,6 +375,45 @@ class FakeOrchestrator:
             "path": "/tmp/example.docx",
             "stdout": "Exported /tmp/example.docx",
         }
+
+
+class FakeJobQueue:
+    def __init__(self) -> None:
+        self.submit_specs: list[object] = []
+        self.list_filters: list[dict[str, str | None]] = []
+        self.control_calls: list[dict[str, object]] = []
+        self.inspect_job_ids: list[str] = []
+
+    def submit_workflow(self, spec: object) -> dict[str, object]:
+        self.submit_specs.append(spec)
+        return {"kind": "engine-job", "job_id": "job-demo", "status": "queued"}
+
+    def list_jobs(self, *, work_id: str | None = None, status: str | None = None) -> list[dict[str, object]]:
+        self.list_filters.append({"work_id": work_id, "status": status})
+        return [{"job_id": "job-demo", "work_id": work_id, "status": status or "queued"}]
+
+    def get_job(self, job_id: str) -> dict[str, object]:
+        return {"job_id": job_id, "status": "queued"}
+
+    def cancel_job(self, job_id: str, *, reason: str) -> dict[str, object]:
+        self.control_calls.append({"method": "cancel_job", "job_id": job_id, "reason": reason})
+        return {"job_id": job_id, "event": "cancel", "reason": reason}
+
+    def retry_job(self, job_id: str) -> dict[str, object]:
+        self.control_calls.append({"method": "retry_job", "job_id": job_id})
+        return {"job_id": job_id, "event": "retry"}
+
+    def resume_job(self, job_id: str) -> dict[str, object]:
+        self.control_calls.append({"method": "resume_job", "job_id": job_id})
+        return {"job_id": job_id, "event": "resume"}
+
+    def dispatch_jobs(self, *, limit: int | None = None) -> dict[str, object]:
+        self.control_calls.append({"method": "dispatch_jobs", "limit": limit})
+        return {"kind": "job-dispatch", "limit": limit, "dispatched": []}
+
+    def inspect_job(self, job_id: str) -> dict[str, object]:
+        self.inspect_job_ids.append(job_id)
+        return {"kind": "job-inspection", "job": {"job_id": job_id}}
 
 
 if __name__ == "__main__":
