@@ -29,12 +29,12 @@ def inspect_job(
     promotion_path = workflow_dir / "promotion.json" if workflow_dir is not None else None
 
     workflow = _workflow_payload(workflow_path, warnings)
-    role_runs = _role_runs(workflow)
+    role_runs = _role_runs(workflow, workflow_path, warnings)
     events = _read_events(events_path, warnings) if events_path is not None else []
     if gates_path is not None:
-        _read_json(gates_path, warnings)
+        _validate_gates_payload(gates_path, _read_json(gates_path, warnings), warnings)
     if promotion_path is not None:
-        _read_json(promotion_path, warnings)
+        _validate_promotion_payload(promotion_path, _read_json(promotion_path, warnings), warnings)
     attachments = _attachments(
         {
             "job": job_path,
@@ -142,6 +142,16 @@ def _read_events(path: Path, warnings: list[dict[str, Any]]) -> list[dict[str, A
                 }
             )
             continue
+        if not isinstance(event.get("timestamp"), str) or not isinstance(event.get("event"), str):
+            warnings.append(
+                {
+                    "code": "malformed-event",
+                    "path": str(path),
+                    "line": line_number,
+                    "message": "Workflow event must include string `timestamp` and `event` fields.",
+                }
+            )
+            continue
         events.append(event)
     return events
 
@@ -192,13 +202,64 @@ def _workflow_payload(path: Path | None, warnings: list[dict[str, Any]]) -> dict
     return None
 
 
-def _role_runs(workflow: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _validate_gates_payload(path: Path, payload: Any, warnings: list[dict[str, Any]]) -> None:
+    if payload is None:
+        return
+    if not isinstance(payload, dict) or not isinstance(payload.get("gates"), list):
+        warnings.append(
+            {
+                "code": "malformed-artifact",
+                "path": str(path),
+                "message": "Gates artifact must be an object with a `gates` list.",
+            }
+        )
+
+
+def _validate_promotion_payload(path: Path, payload: Any, warnings: list[dict[str, Any]]) -> None:
+    if payload is None:
+        return
+    if not isinstance(payload, dict):
+        warnings.append(
+            {
+                "code": "malformed-artifact",
+                "path": str(path),
+                "message": "Promotion artifact must be a JSON object.",
+            }
+        )
+
+
+def _role_runs(
+    workflow: dict[str, Any] | None,
+    workflow_path: Path | None,
+    warnings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     if not isinstance(workflow, dict):
         return []
     role_runs = workflow.get("role_runs")
+    warning_path = str(workflow_path) if workflow_path is not None else None
     if not isinstance(role_runs, list):
+        if role_runs is not None:
+            warnings.append(
+                {
+                    "code": "malformed-workflow",
+                    "path": warning_path,
+                    "message": "Workflow `role_runs` must be a list.",
+                }
+            )
         return []
-    return [item for item in role_runs if isinstance(item, dict)]
+    valid_roles: list[dict[str, Any]] = []
+    for index, item in enumerate(role_runs):
+        if isinstance(item, dict):
+            valid_roles.append(item)
+            continue
+        warnings.append(
+            {
+                "code": "malformed-workflow",
+                "path": warning_path,
+                "message": f"Workflow `role_runs[{index}]` must be a JSON object.",
+            }
+        )
+    return valid_roles
 
 
 def _timeline(job: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:

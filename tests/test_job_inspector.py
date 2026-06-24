@@ -32,6 +32,24 @@ class JobInspectorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tempdir.cleanup()
 
+    def _write_workflow(self, **overrides: object) -> None:
+        payload: dict[str, object] = {
+            "version": "workflow-run/v1",
+            "workflow_id": "wf-demo",
+            "run_id": "wf-demo",
+            "work_id": "demo-work",
+            "lane": "thesis",
+            "action": "verify",
+            "status": "succeeded",
+            "execution_status": "succeeded",
+            "started_at": "2026-06-23T10:00:00+00:00",
+            "finished_at": "2026-06-23T10:01:00+00:00",
+            "role_runs": [],
+            "blockers": [],
+        }
+        payload.update(overrides)
+        (self.workflow_dir / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
+
     def test_inspection_merges_timeline_durations_failure_and_changed_files(self) -> None:
         (self.workflow_dir / "events.jsonl").write_text(
             "\n".join(
@@ -188,3 +206,85 @@ class JobInspectorTests(unittest.TestCase):
         warning_paths = [item["path"] for item in payload["observability_warnings"]]
         self.assertTrue(any("gates.json" in path for path in warning_paths))
         self.assertTrue(any("promotion.json" in path for path in warning_paths))
+
+    def test_schema_invalid_gates_and_promotion_files_are_observability_warnings(self) -> None:
+        (self.workflow_dir / "gates.json").write_text("[]", encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps("ok"), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        warning_paths = [item["path"] for item in payload["observability_warnings"]]
+        self.assertTrue(any("gates.json" in path for path in warning_paths))
+        self.assertTrue(any("promotion.json" in path for path in warning_paths))
+
+    def test_workflow_role_runs_string_warns_without_raising(self) -> None:
+        self._write_workflow(role_runs="not-a-list")
+        (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": []}), encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertEqual(payload["kind"], "job-inspection")
+        self.assertTrue(
+            any(
+                "workflow.json" in item["path"] and "role_runs" in item["message"]
+                for item in payload["observability_warnings"]
+            )
+        )
+
+    def test_workflow_role_runs_skips_non_object_entries_with_warning(self) -> None:
+        self._write_workflow(
+            role_runs=[
+                "not-an-object",
+                {
+                    "role_run_id": "valid-role",
+                    "role_id": "thesis-style-editor",
+                    "status": "succeeded",
+                    "started_at": "2026-06-23T10:00:10+00:00",
+                    "finished_at": "2026-06-23T10:00:20+00:00",
+                    "changed_paths": ["works/demo-work/b.md", "works/demo-work/a.md", "works/demo-work/a.md"],
+                },
+            ]
+        )
+        (self.workflow_dir / "gates.json").write_text(json.dumps({"gates": []}), encoding="utf-8")
+        (self.workflow_dir / "promotion.json").write_text(json.dumps({"status": "succeeded"}), encoding="utf-8")
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        self.assertTrue(
+            any(
+                "workflow.json" in item["path"] and "role_runs[0]" in item["message"]
+                for item in payload["observability_warnings"]
+            )
+        )
+        self.assertEqual(payload["durations"]["roles"][0]["role_id"], "thesis-style-editor")
+        self.assertEqual(payload["changed_files"], ["works/demo-work/a.md", "works/demo-work/b.md"])
+
+    def test_schema_invalid_event_objects_warn_and_do_not_enter_timeline(self) -> None:
+        (self.workflow_dir / "events.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps({"timestamp": "2026-06-23T10:00:01+00:00", "event": "workflow-queued"}),
+                    json.dumps({"timestamp": "2026-06-23T10:00:02+00:00", "details": "missing event"}),
+                    json.dumps({"event": "missing-timestamp"}),
+                    json.dumps({"timestamp": 123, "event": "bad-timestamp"}),
+                    json.dumps({"timestamp": "2026-06-23T10:00:05+00:00", "event": "workflow-finished"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        payload = inspect_job(self.root, self.queue.get_job("job-demo"))
+
+        event_warnings = [
+            item
+            for item in payload["observability_warnings"]
+            if "events.jsonl" in item["path"] and item["code"] == "malformed-event"
+        ]
+        self.assertEqual([item["line"] for item in event_warnings], [2, 3, 4])
+        timeline_events = [item["event"] for item in payload["timeline"]]
+        self.assertIn("workflow-queued", timeline_events)
+        self.assertIn("workflow-finished", timeline_events)
+        self.assertNotIn("missing-timestamp", timeline_events)
+        self.assertNotIn("bad-timestamp", timeline_events)
