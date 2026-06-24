@@ -23,7 +23,17 @@ from .article_bundle_state import (
     write_article_bundle_state,
 )
 from .autonomous_policy import AUTONOMOUS_MODES
-from .engine_service import CreateWorkRequest, EngineService
+from .engine_service import (
+    CancelJobRequest,
+    CreateWorkRequest,
+    DispatchJobsRequest,
+    EngineService,
+    InspectJobRequest,
+    ResumeJobRequest,
+    RetryJobRequest,
+    SubmitWorkflowJobRequest,
+)
+from .job_queue import JobQueueError
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .orchestrator_support import WorkflowError
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
@@ -181,6 +191,56 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    jobs_parser = subparsers.add_parser("jobs")
+    jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+
+    jobs_submit = jobs_subparsers.add_parser("submit-workflow")
+    jobs_submit.add_argument("--work", dest="work_id", required=True)
+    jobs_submit.add_argument("--lane", required=True, choices=("thesis", "article"))
+    jobs_submit.add_argument("--action", required=True)
+    jobs_submit.add_argument("--target", dest="target_or_topic", required=True)
+    jobs_submit.add_argument("--notes")
+    jobs_submit.add_argument("--search", dest="search_override", action="store_const", const=True)
+    jobs_submit.add_argument("--no-search", dest="search_override", action="store_const", const=False)
+    jobs_submit.add_argument("--model", dest="model_override")
+    jobs_submit.add_argument("--profile", dest="profile_override")
+    jobs_submit.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_list = jobs_subparsers.add_parser("list")
+    jobs_list.add_argument("--work", dest="work_id")
+    jobs_list.add_argument("--status")
+    jobs_list.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_status = jobs_subparsers.add_parser("status")
+    jobs_status.add_argument("job_id")
+    jobs_status.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_cancel = jobs_subparsers.add_parser("cancel")
+    jobs_cancel.add_argument("job_id")
+    jobs_cancel.add_argument("--reason", default="operator-cancelled")
+    jobs_cancel.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_retry = jobs_subparsers.add_parser("retry")
+    jobs_retry.add_argument("job_id")
+    jobs_retry.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_resume = jobs_subparsers.add_parser("resume")
+    jobs_resume.add_argument("job_id")
+    jobs_resume.add_argument("--json", action="store_true", dest="as_json")
+
+    jobs_dispatch = jobs_subparsers.add_parser("dispatch")
+    jobs_dispatch.add_argument("--limit", type=int)
+    jobs_dispatch.add_argument("--json", action="store_true", dest="as_json")
+
+    job_inspect = subparsers.add_parser("job-inspect")
+    job_inspect.add_argument("job_id")
+    job_inspect.add_argument("--json", action="store_true", dest="as_json")
+
+    export_explain_parser = subparsers.add_parser("export-explain")
+    export_explain_parser.add_argument("subject")
+    export_explain_parser.add_argument("--work", dest="work_id")
+    export_explain_parser.add_argument("--json", action="store_true", dest="as_json")
+
     work_parser = subparsers.add_parser("work")
     work_subparsers = work_parser.add_subparsers(dest="work_command", required=True)
 
@@ -335,13 +395,19 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "jobs":
+            return jobs_cli(root_path, args)
+        if args.command == "job-inspect":
+            return job_inspect_cli(root_path, args.job_id, as_json=args.as_json)
+        if args.command == "export-explain":
+            return export_explain_cli(root_path, args.subject, args.work_id, as_json=args.as_json)
         if args.command == "work":
             return work_cli(root_path, args)
         if args.command == "skill-source-map":
             return skill_source_map_cli(root_path, args)
         if args.command == "autonomous":
             return handle_autonomous_cli(root_path, args)
-    except (WorkspaceConfigError, WorkflowError) as exc:
+    except (WorkspaceConfigError, WorkflowError, JobQueueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 1
@@ -973,6 +1039,102 @@ def work_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -
     else:
         print(format_work_state_summary(state))
     return 0
+
+
+def jobs_cli(root_dir: Path, args: Any) -> int:
+    service = EngineService(root_dir)
+    if args.jobs_command == "submit-workflow":
+        payload = service.submit_workflow_job(
+            SubmitWorkflowJobRequest(
+                work_id=args.work_id,
+                lane=args.lane,
+                action=args.action,
+                target_or_topic=args.target_or_topic,
+                notes=args.notes,
+                search_override=args.search_override,
+                model_override=args.model_override,
+                profile_override=args.profile_override,
+            )
+        )
+    elif args.jobs_command == "list":
+        payload = service.list_jobs(work_id=args.work_id, status=args.status)
+    elif args.jobs_command == "status":
+        payload = service.get_job(args.job_id)
+    elif args.jobs_command == "cancel":
+        payload = service.cancel_job(CancelJobRequest(args.job_id, reason=args.reason))
+    elif args.jobs_command == "retry":
+        payload = service.retry_job(RetryJobRequest(args.job_id))
+    elif args.jobs_command == "resume":
+        payload = service.resume_job(ResumeJobRequest(args.job_id))
+    elif args.jobs_command == "dispatch":
+        payload = service.dispatch_jobs(DispatchJobsRequest(limit=args.limit))
+    else:
+        return 1
+    _print_job_payload(payload, as_json=args.as_json)
+    return 0
+
+
+def job_inspect_cli(root_dir: Path, job_id: str, *, as_json: bool = False) -> int:
+    payload = EngineService(root_dir).inspect_job(InspectJobRequest(job_id))
+    _print_job_payload(payload, as_json=as_json)
+    return 0
+
+
+def export_explain_cli(root_dir: Path, subject: str, work_id: str | None, *, as_json: bool = False) -> int:
+    payload = EngineService(root_dir).explain_export(subject, work_id=work_id)
+    _print_job_payload(payload, as_json=as_json)
+    return 0
+
+
+def _print_job_payload(payload: dict[str, Any], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    kind = payload.get("kind")
+    if kind == "job-list":
+        jobs = payload.get("jobs") if isinstance(payload.get("jobs"), list) else []
+        print(f"Jobs: {len(jobs)}")
+        for job in jobs:
+            if isinstance(job, dict):
+                print(f"- {job.get('job_id')}: {job.get('status')} work={job.get('work_id')}")
+        return
+
+    if kind == "job-dispatch":
+        _print_dispatch_group("Dispatched", payload.get("dispatched"))
+        _print_dispatch_group("Skipped", payload.get("skipped"))
+        _print_dispatch_group("Blocked", payload.get("blocked"))
+        _print_dispatch_group("Reconciled", payload.get("reconciled"))
+        return
+
+    if kind == "job-inspection":
+        job = payload.get("job") if isinstance(payload.get("job"), dict) else {}
+        print(f"Job: {job.get('job_id')} status={job.get('status')}")
+        print(f"Timeline events: {len(payload.get('timeline') or [])}")
+        print(f"Changed files: {len(payload.get('changed_files') or [])}")
+        return
+
+    if kind == "export-explanation":
+        print(f"Export {payload.get('subject')}: {payload.get('status')}")
+        for reason in payload.get("reasons") or []:
+            if isinstance(reason, dict):
+                print(f"- {reason.get('code')}: {reason.get('message')}")
+        return
+
+    print(f"Job: {payload.get('job_id')} status={payload.get('status')} work={payload.get('work_id')}")
+
+
+def _print_dispatch_group(label: str, raw_items: object) -> None:
+    items = raw_items if isinstance(raw_items, list) else []
+    print(f"{label}: {len(items)}")
+    for item in items:
+        if isinstance(item, dict):
+            details = [f"{item.get('job_id')}: {item.get('status')} work={item.get('work_id')}"]
+            if item.get("reason"):
+                details.append(f"reason={item.get('reason')}")
+            if item.get("message"):
+                details.append(f"message={item.get('message')}")
+            print(f"  - {' '.join(details)}")
 
 
 def assemble_thesis(root_dir: Path, work_id: str | None) -> int:
