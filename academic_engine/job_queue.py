@@ -197,10 +197,10 @@ class JobQueue:
             "reconciled": [],
         }
         self._sync_active_runs(orchestrator)
-        reconcile_result = self.reconcile_jobs()
+        active_runs = self._active_runs(orchestrator)
+        reconcile_result = self.reconcile_jobs(active_runs=active_runs)
         result["reconciled"].extend(reconcile_result["reconciled"])
         result["blocked"].extend(reconcile_result["blocked"])
-        active_runs = self._active_runs(orchestrator)
         running_jobs = self.list_jobs(status="running")
         running_total, running_by_work = self._running_counts(running_jobs, active_runs)
         dispatch_limit = None if limit is None else max(0, limit)
@@ -269,7 +269,11 @@ class JobQueue:
 
         return result
 
-    def reconcile_jobs(self) -> dict[str, Any]:
+    def reconcile_jobs(self, *, active_runs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        if active_runs is None:
+            orchestrator = self._orchestrator()
+            self._sync_active_runs(orchestrator)
+            active_runs = self._active_runs(orchestrator)
         result: dict[str, Any] = {
             "kind": "job-reconcile",
             "version": "v1",
@@ -299,11 +303,23 @@ class JobQueue:
                 result["blocked"].append(self._dispatch_result(blocked))
                 continue
             if workflow is None:
+                if self._active_run_matches_job(job, active_runs):
+                    continue
                 blocked = self._block_job(
                     job,
                     code="missing-runtime-result",
                     category="runtime",
                     message=f"Missing runtime result for workflow `{workflow_id}`.",
+                )
+                result["blocked"].append(self._dispatch_result(blocked))
+                continue
+            identity_error = self._runtime_identity_error(job, workflow)
+            if identity_error is not None:
+                blocked = self._block_job(
+                    job,
+                    code="runtime-link-mismatch",
+                    category="runtime",
+                    message=identity_error,
                 )
                 result["blocked"].append(self._dispatch_result(blocked))
                 continue
@@ -398,6 +414,20 @@ class JobQueue:
             return []
         return [item for item in list_active_runs() if isinstance(item, dict)]
 
+    def _active_run_matches_job(self, job: dict[str, Any], active_runs: list[dict[str, Any]]) -> bool:
+        workflow_id = job.get("workflow_id")
+        active_run_id = job.get("active_run_id")
+        work_id = job.get("work_id")
+        for active in active_runs:
+            if active.get("work_id") != work_id:
+                continue
+            if isinstance(workflow_id, str) and workflow_id and active.get("workflow_id") == workflow_id:
+                return True
+            if isinstance(active_run_id, str) and active_run_id:
+                if active.get("run_id") == active_run_id or active.get("active_run_id") == active_run_id:
+                    return True
+        return False
+
     def _dispatch_candidates(self) -> list[dict[str, Any]]:
         if not self.jobs_dir.exists():
             return []
@@ -484,6 +514,18 @@ class JobQueue:
         }
         item.update(extra)
         return item
+
+    def _runtime_identity_error(self, job: dict[str, Any], workflow: dict[str, Any]) -> str | None:
+        job_workflow_id = str(job.get("workflow_id") or "")
+        workflow_id = workflow.get("workflow_id")
+        if not isinstance(workflow_id, str) or not workflow_id:
+            return f"Workflow runtime artifact for `{job_workflow_id}` does not declare a workflow_id."
+        if workflow_id != job_workflow_id:
+            return f"Workflow runtime artifact id `{workflow_id}` does not match job workflow `{job_workflow_id}`."
+        workflow_work_id = workflow.get("work_id")
+        if workflow_work_id is not None and workflow_work_id != job.get("work_id"):
+            return f"Workflow runtime artifact work `{workflow_work_id}` does not match job work `{job['work_id']}`."
+        return None
 
     def _workflow_payload(self, workflow_id: str) -> dict[str, Any] | None:
         path = self.root_dir / "output" / "runs" / workflow_id / "workflow.json"
