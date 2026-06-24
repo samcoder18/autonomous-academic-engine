@@ -4,6 +4,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from academic_engine.engine_service import CreateWorkRequest, EngineService
 
@@ -316,6 +317,33 @@ class EngineServiceJobQueueTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [{"root": Path("/tmp/example-root").resolve(), "subject": "thesis", "work_id": "demo-work"}],
+        )
+
+    def test_default_queue_cancel_running_job_requests_autonomous_stop(self) -> None:
+        from academic_engine.engine_service import CancelJobRequest
+        from academic_engine.job_queue import JobQueue, WorkflowJobSpec
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            queue = JobQueue(root, id_factory=lambda: "job-demo")
+            job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+            running = queue.get_job(job["job_id"])
+            queue._transition(running, status="running", event="job-dispatched")
+
+            with patch("academic_engine.engine_service.stop_autonomous_run") as stop_run:
+                stop_run.return_value = {
+                    "kind": "autonomous-run-state",
+                    "status": "stopped",
+                    "work_id": "demo-work",
+                }
+
+                payload = EngineService(root).cancel_job(CancelJobRequest("job-demo", reason="operator"))
+
+        stop_run.assert_called_once_with(root.resolve(), "demo-work", reason="operator")
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(
+            payload["history"][-1]["details"]["stop_result"],
+            {"kind": "autonomous-run-state", "status": "stopped", "work_id": "demo-work"},
         )
 
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -442,6 +444,37 @@ class JobQueueStoreTests(unittest.TestCase):
             {"stop_result": {"stopped": True, "reason": "operator-cancelled"}},
         )
 
+    def test_cancel_waits_for_queue_lock_before_transition(self) -> None:
+        import fcntl
+
+        queue = JobQueue(self.root)
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", "draft.md"))
+        lock_path = queue.jobs_dir / ".queue.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        started = threading.Event()
+        finished = threading.Event()
+
+        with lock_path.open("w", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+            def cancel() -> None:
+                started.set()
+                queue.cancel_job(job["job_id"], reason="operator-cancelled")
+                finished.set()
+
+            worker = threading.Thread(target=cancel)
+            worker.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            time.sleep(0.1)
+            self.assertFalse(finished.is_set())
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+        worker.join(timeout=2.0)
+        self.assertTrue(finished.is_set())
+        self.assertEqual(queue.get_job(job["job_id"])["status"], "blocked")
+
     def test_cancel_running_job_stop_hook_error_does_not_mutate_job(self) -> None:
         def stop_job(root_dir: Path, work_id: str, reason: str) -> dict[str, object]:
             raise RuntimeError("stop failed")
@@ -593,6 +626,8 @@ def _write_workflow(
     *,
     execution_status: str,
     work_id: str = "demo-work",
+    lane: str = "thesis",
+    action: str = "verify",
 ) -> None:
     workflow_dir = root / "output" / "runs" / workflow_id
     workflow_dir.mkdir(parents=True, exist_ok=True)
@@ -606,8 +641,8 @@ def _write_workflow(
                 "workflow_id": workflow_id,
                 "run_id": workflow_id,
                 "work_id": work_id,
-                "lane": "thesis",
-                "action": "verify",
+                "lane": lane,
+                "action": action,
                 "status": status,
                 "execution_status": execution_status,
                 "readiness_status": "submission-ready"
@@ -794,7 +829,14 @@ class JobQueueDispatchTests(unittest.TestCase):
         failed_payload["workflow_id"] = "wf-failed"
         queue._transition(failed_payload, status="running", event="job-dispatched")
         _write_workflow(self.root, "wf-done", execution_status="succeeded")
-        _write_workflow(self.root, "wf-failed", execution_status="failed", work_id="other-work")
+        _write_workflow(
+            self.root,
+            "wf-failed",
+            execution_status="failed",
+            work_id="other-work",
+            lane="article",
+            action="review",
+        )
 
         result = queue.dispatch_jobs(limit=0)
 
@@ -951,7 +993,13 @@ class JobQueueDispatchTests(unittest.TestCase):
         cases = [
             (
                 "wf-missing-status",
-                {"version": "workflow-run/v1", "workflow_id": "wf-missing-status", "work_id": "demo-work"},
+                {
+                    "version": "workflow-run/v1",
+                    "workflow_id": "wf-missing-status",
+                    "work_id": "demo-work",
+                    "lane": "article",
+                    "action": "review",
+                },
             ),
             (
                 "wf-unknown-status",
@@ -959,6 +1007,8 @@ class JobQueueDispatchTests(unittest.TestCase):
                     "version": "workflow-run/v1",
                     "workflow_id": "wf-unknown-status",
                     "work_id": "demo-work",
+                    "lane": "article",
+                    "action": "review",
                     "execution_status": "mystery",
                 },
             ),
@@ -1024,6 +1074,48 @@ class JobQueueDispatchTests(unittest.TestCase):
                 blocked = queue.get_job(job["job_id"])
                 self.assertEqual(blocked["status"], "blocked")
                 self.assertIn(blocked["failure"]["code"], {"ambiguous-runtime-result", "runtime-link-mismatch"})
+
+    def test_reconcile_runtime_lane_or_action_mismatch_blocks_terminal_payload(self) -> None:
+        cases = [
+            (
+                "wrong-lane",
+                {
+                    "version": "workflow-run/v1",
+                    "workflow_id": "wf-job",
+                    "work_id": "demo-work",
+                    "lane": "thesis",
+                    "action": "review",
+                    "execution_status": "succeeded",
+                },
+            ),
+            (
+                "wrong-action",
+                {
+                    "version": "workflow-run/v1",
+                    "workflow_id": "wf-job",
+                    "work_id": "demo-work",
+                    "lane": "article",
+                    "action": "verify",
+                    "execution_status": "succeeded",
+                },
+            ),
+        ]
+
+        for target, workflow_payload in cases:
+            with self.subTest(target=target):
+                queue = self.queue()
+                job = queue.submit_workflow(WorkflowJobSpec("demo-work", "article", "review", target))
+                payload = queue.get_job(job["job_id"])
+                payload["workflow_id"] = "wf-job"
+                queue._transition(payload, status="running", event="job-dispatched")
+                _write_workflow_payload(self.root, "wf-job", workflow_payload)
+
+                result = queue.reconcile_jobs()
+
+                blocked = queue.get_job(job["job_id"])
+                self.assertEqual(blocked["status"], "blocked")
+                self.assertEqual(blocked["failure"]["code"], "runtime-link-mismatch")
+                self.assertEqual([item["job_id"] for item in result["blocked"]], [job["job_id"]])
 
     def test_reconcile_terminal_payload_requires_string_work_id(self) -> None:
         cases = [
@@ -1130,3 +1222,36 @@ class JobQueueDispatchTests(unittest.TestCase):
         self.assertEqual(queue.get_job(queued["job_id"])["status"], "queued")
         self.assertEqual([item["job_id"] for item in result["skipped"]], [queued["job_id"]])
         self.assertEqual(result["skipped"][0]["reason"], "global-concurrency-limit")
+
+    def test_dispatch_waits_for_queue_lock_before_starting_jobs(self) -> None:
+        import fcntl
+
+        queue = self.queue()
+        job = queue.submit_workflow(WorkflowJobSpec("demo-work", "thesis", "verify", "locked"))
+        lock_path = queue.jobs_dir / ".queue.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        started = threading.Event()
+        finished = threading.Event()
+        result_holder: dict[str, object] = {}
+
+        with lock_path.open("w", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+            def dispatch() -> None:
+                started.set()
+                result_holder["result"] = queue.dispatch_jobs(limit=1)
+                finished.set()
+
+            worker = threading.Thread(target=dispatch)
+            worker.start()
+            self.assertTrue(started.wait(timeout=1.0))
+            time.sleep(0.1)
+            self.assertFalse(finished.is_set())
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+        worker.join(timeout=2.0)
+        self.assertTrue(finished.is_set())
+        result = result_holder["result"]
+        self.assertEqual([item["job_id"] for item in result["dispatched"]], [job["job_id"]])

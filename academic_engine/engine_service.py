@@ -204,4 +204,8 @@ class EngineService:
     def _job_queue(self) -> Any:
         if self._job_queue_factory is not None:
             return self._job_queue_factory(self.root_dir, self._orchestrator_factory)
-        return JobQueue(self.root_dir, orchestrator_factory=self._orchestrator_factory)
+        return JobQueue(
+            self.root_dir,
+            orchestrator_factory=self._orchestrator_factory,
+            stop_job_func=stop_autonomous_run,
+        )

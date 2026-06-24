@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -157,13 +159,17 @@ class JobQueue:
         return inspect_job(self.root_dir, self.get_job(job_id))
 
     def cancel_job(self, job_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
+        with self._queue_lock():
+            return self._cancel_job_unlocked(job_id, reason=reason)
+
+    def _cancel_job_unlocked(self, job_id: str, *, reason: str) -> dict[str, Any]:
         job = self.get_job(job_id)
         status = str(job.get("status") or "")
         if status in TERMINAL_JOB_STATUSES:
             raise InvalidJobStateError(f"Cannot cancel {status} job `{job_id}`.")
         details = {}
         if status == "running" and self._stop_job_func is not None:
-            details["stop_result"] = self._stop_job_func(self.root_dir, str(job["work_id"]), reason)
+            details["stop_result"] = self._stop_job_func(self.root_dir, str(job["work_id"]), reason=reason)
         return self._transition(
             job,
             status="blocked",
@@ -173,6 +179,10 @@ class JobQueue:
         )
 
     def retry_job(self, job_id: str) -> dict[str, Any]:
+        with self._queue_lock():
+            return self._retry_job_unlocked(job_id)
+
+    def _retry_job_unlocked(self, job_id: str) -> dict[str, Any]:
         job = self.get_job(job_id)
         if job.get("status") != "failed":
             raise InvalidJobStateError(f"Only failed jobs can be retried: `{job_id}`.")
@@ -185,6 +195,10 @@ class JobQueue:
         return self._transition(job, status="queued", event="job-retried", blocked_reason=None, failure=None)
 
     def resume_job(self, job_id: str) -> dict[str, Any]:
+        with self._queue_lock():
+            return self._resume_job_unlocked(job_id)
+
+    def _resume_job_unlocked(self, job_id: str) -> dict[str, Any]:
         job = self.get_job(job_id)
         if job.get("status") != "blocked":
             raise InvalidJobStateError(f"Only blocked jobs can be resumed: `{job_id}`.")
@@ -193,6 +207,10 @@ class JobQueue:
         return self._transition(job, status="queued", event="job-resumed", blocked_reason=None, failure=None)
 
     def dispatch_jobs(self, *, limit: int | None = None) -> dict[str, Any]:
+        with self._queue_lock():
+            return self._dispatch_jobs_unlocked(limit=limit)
+
+    def _dispatch_jobs_unlocked(self, *, limit: int | None = None) -> dict[str, Any]:
         orchestrator = self._orchestrator()
         result: dict[str, Any] = {
             "kind": "job-dispatch",
@@ -204,7 +222,7 @@ class JobQueue:
         }
         self._sync_active_runs(orchestrator)
         active_runs = self._active_runs(orchestrator)
-        reconcile_result = self.reconcile_jobs(active_runs=active_runs)
+        reconcile_result = self._reconcile_jobs_unlocked(active_runs=active_runs)
         result["reconciled"].extend(reconcile_result["reconciled"])
         result["blocked"].extend(reconcile_result["blocked"])
         running_jobs = self.list_jobs(status="running")
@@ -276,6 +294,10 @@ class JobQueue:
         return result
 
     def reconcile_jobs(self, *, active_runs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        with self._queue_lock():
+            return self._reconcile_jobs_unlocked(active_runs=active_runs)
+
+    def _reconcile_jobs_unlocked(self, *, active_runs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         if active_runs is None:
             orchestrator = self._orchestrator()
             self._sync_active_runs(orchestrator)
@@ -529,6 +551,16 @@ class JobQueue:
             return f"Workflow runtime artifact for `{job_workflow_id}` does not declare a work_id."
         if workflow_work_id != job.get("work_id"):
             return f"Workflow runtime artifact work `{workflow_work_id}` does not match job work `{job['work_id']}`."
+        job_payload = job.get("payload")
+        if not isinstance(job_payload, dict):
+            return f"Job `{job.get('job_id')}` does not declare a workflow payload."
+        for field in ("lane", "action"):
+            workflow_value = workflow.get(field)
+            job_value = job_payload.get(field)
+            if not isinstance(workflow_value, str) or not workflow_value:
+                return f"Workflow runtime artifact for `{job_workflow_id}` does not declare a {field}."
+            if workflow_value != job_value:
+                return f"Workflow runtime artifact {field} `{workflow_value}` does not match job {field} `{job_value}`."
         return None
 
     def _workflow_payload(self, workflow_id: str) -> dict[str, Any] | None:
@@ -578,6 +610,17 @@ class JobQueue:
             handle.write("\n")
             temp_name = handle.name
         Path(temp_name).replace(path)
+
+    @contextmanager
+    def _queue_lock(self) -> Iterator[None]:
+        self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.jobs_dir / ".queue.lock"
+        with lock_path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _validate_job_id(self, job_id: str) -> str:
         if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
