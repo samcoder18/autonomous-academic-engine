@@ -137,6 +137,55 @@ class ExportExplainTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reasons"][0]["code"], "unsupported-export-subject")
 
+    def test_path_like_article_slug_blocks_export_without_escaping_bundle(self) -> None:
+        _write_workflow(
+            self.root,
+            "wf-article-ready",
+            lane="article",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        payload = explain_export(self.root, "article:../briefs/demo", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "unsupported-export-subject")
+
+    def test_disabled_work_lane_blocks_export_even_with_stale_ready_artifacts(self) -> None:
+        work_file = self.root / "works" / TEST_WORK_ID / "work.toml"
+        work_file.write_text(
+            work_file.read_text(encoding="utf-8").replace(
+                'active_lanes = ["thesis", "article"]',
+                'active_lanes = ["thesis"]',
+            ),
+            encoding="utf-8",
+        )
+        _write_workflow(
+            self.root,
+            "wf-article-ready",
+            lane="article",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        payload = explain_export(self.root, "article:demo", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "work-lane-disabled")
+        self.assertEqual(payload["reasons"][0]["details"]["lane"], "article")
+
+    def test_missing_enabled_lane_config_blocks_export_without_raising(self) -> None:
+        work_file = self.root / "works" / TEST_WORK_ID / "work.toml"
+        content = work_file.read_text(encoding="utf-8")
+        work_file.write_text(content.split("\n[article]\n", 1)[0], encoding="utf-8")
+        _write_workflow(
+            self.root,
+            "wf-article-ready",
+            lane="article",
+            execution_status="succeeded",
+            readiness_status="submission-ready",
+        )
+        payload = explain_export(self.root, "article:demo", work_id=TEST_WORK_ID)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reasons"][0]["code"], "work-lane-not-configured")
+        self.assertEqual(payload["reasons"][0]["details"]["lane"], "article")
+
     def test_unsupported_subject_blocks_export(self) -> None:
         payload = explain_export(self.root, "slides", work_id=TEST_WORK_ID)
         self.assertEqual(payload["status"], "blocked")

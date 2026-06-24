@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .one_shot import ONE_SHOT_REPORT_VERSION
 from .workspace import article_bundle_paths, load_workspace_config, resolve_work_config
+
+_ARTICLE_SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def explain_export(root_dir: str | Path, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
@@ -28,6 +31,40 @@ def explain_export(root_dir: str | Path, subject: str, *, work_id: str | None = 
                     "unsupported-export-subject",
                     f"Unsupported export subject: {subject}",
                     {"subject": subject, "supported_subjects": ["thesis", "article:<slug>"]},
+                )
+            ],
+        )
+
+    if not work.supports(lane):
+        return _payload(
+            subject,
+            work.slug,
+            [
+                _reason(
+                    "work-lane-disabled",
+                    f"Work `{work.slug}` does not enable {lane} lane.",
+                    {
+                        "work_id": work.slug,
+                        "lane": lane,
+                        "active_lanes": list(work.active_lanes),
+                    },
+                )
+            ],
+        )
+
+    if (lane == "thesis" and work.thesis is None) or (lane == "article" and work.article is None):
+        return _payload(
+            subject,
+            work.slug,
+            [
+                _reason(
+                    "work-lane-not-configured",
+                    f"Work `{work.slug}` enables {lane} lane but has no {lane} bundle configuration.",
+                    {
+                        "work_id": work.slug,
+                        "lane": lane,
+                        "active_lanes": list(work.active_lanes),
+                    },
                 )
             ],
         )
@@ -148,7 +185,7 @@ def _resolve_subject(subject: str) -> tuple[str | None, str | None]:
         return "thesis", None
     if subject.startswith("article:"):
         article_slug = subject.split(":", 1)[1].strip()
-        if article_slug:
+        if article_slug and _ARTICLE_SLUG_RE.fullmatch(article_slug):
             return "article", article_slug
         return None, None
     return None, None
