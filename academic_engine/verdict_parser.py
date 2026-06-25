@@ -52,12 +52,21 @@ ALLOWED_STATUSES = (
     "strong-draft",
     "strong-draft-with-blockers",
     "ready-with-caveats",
+    "blocked-citation",
     "blocked-primary-support",
     "blocked-runtime",
     "blocked-standards",
+    "citation-safe",
+    "verified",
     "updated",
     "reviewed",
     "needs-repair",
+    "repair-complete",
+    "repair-stopped-with-blockers",
+    "reroute-required",
+    "bundle-ready",
+    "blocked-export",
+    "needs-evaluator-refresh",
 )
 
 ALLOWED_BLOCKER_CATEGORIES = (

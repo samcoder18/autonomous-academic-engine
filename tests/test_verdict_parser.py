@@ -93,6 +93,27 @@ class ParseVerdictTests(unittest.TestCase):
         assert isinstance(err, VerdictParseError)
         self.assertEqual(err.code, "status-invalid")
 
+    def test_documented_role_local_statuses_parse(self) -> None:
+        cases = (
+            ("blocked-citation", "article", "citation-checker"),
+            ("citation-safe", "article", "citation-checker"),
+            ("verified", "article", "source-verifier"),
+            ("repair-complete", "article", "repair-orchestrator"),
+            ("repair-stopped-with-blockers", "article", "repair-orchestrator"),
+            ("reroute-required", "article", "repair-orchestrator"),
+            ("bundle-ready", "article", "finalizer"),
+            ("blocked-export", "article", "finalizer"),
+            ("needs-evaluator-refresh", "article", "finalizer"),
+        )
+        for status, lane, kind in cases:
+            with self.subTest(status=status, lane=lane, kind=kind):
+                verdict = parse_verdict(
+                    self._valid_payload(status=status, lane=lane, kind=kind),
+                    source="output",
+                )
+
+                self.assertIsInstance(verdict, StructuredVerdict)
+
     def test_unknown_field(self) -> None:
         err = parse_verdict(self._valid_payload(mystery="x"), source="output")
         assert isinstance(err, VerdictParseError)

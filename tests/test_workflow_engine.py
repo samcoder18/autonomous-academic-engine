@@ -18,7 +18,7 @@ from academic_engine.action_specs import (
 )
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
-from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease
+from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
 
 
 class WorkflowEngineTests(unittest.TestCase):
@@ -290,7 +290,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
         self.assertEqual(result.execution_status, "failed")
         self.assertEqual(result.promotion.status, "blocked")
-        self.assertTrue(any(item["code"] == "role-result-invalid" for item in result.blockers))
+        self.assertTrue(any(item["code"] == "role-result-block-missing" for item in result.blockers))
 
     def test_role_result_work_mismatch_fails_closed(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
@@ -340,7 +340,39 @@ class WorkflowEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.execution_status, "failed")
-        self.assertTrue(any(item["code"] == "checkpoint-evidence-invalid" for item in result.blockers))
+        self.assertTrue(any(item["code"] == "role-result-success-without-evidence" for item in result.blockers))
+
+    def test_successful_role_result_with_blockers_fails_closed(self) -> None:
+        blocker = {
+            "category": "citation",
+            "code": "citation-gap",
+            "message": "Citation support remains incomplete.",
+            "repairable": True,
+        }
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=None,
+                blockers=[blocker],
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertTrue(any(item["code"] == "role-result-success-with-blockers" for item in result.blockers))
 
     def test_transient_role_failure_retries_once(self) -> None:
         attempts: dict[str, int] = {}
@@ -572,6 +604,24 @@ class WorkflowEngineTests(unittest.TestCase):
         store.clear_active_run("alpha")
         self.assertIsNone(store.get_active_run("alpha"))
         self.assertEqual(store.get_active_run("beta")["run_id"], "beta:1")
+
+    def test_role_plan_assigns_checkpoint_to_every_role(self) -> None:
+        checkpoints = (
+            "brief-normalized",
+            "evidence-updated",
+            "claim-map-updated",
+            "draft-updated",
+            "reviewed",
+            "final-status-issued",
+        )
+
+        nodes = build_role_plan("article", "article", checkpoints)
+
+        self.assertTrue(all(node.checkpoints for node in nodes))
+        observed = {checkpoint for node in nodes for checkpoint in node.checkpoints}
+        self.assertTrue(set(checkpoints).issubset(observed))
+        source_verifier = next(node for node in nodes if node.role_id == "academic-source-verifier")
+        self.assertEqual(source_verifier.checkpoints, ("role-completed:academic-source-verifier",))
 
 
 def _evaluator_payload(

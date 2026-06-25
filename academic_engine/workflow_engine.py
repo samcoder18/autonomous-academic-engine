@@ -17,11 +17,15 @@ from pathlib import Path
 from typing import Any
 
 from .action_specs import ExecutionContract
+from .role_result_contract import (
+    ROLE_RESULT_VERSION,
+    ArtifactRecord,
+    RoleResultContext,
+    validate_role_result_payload,
+)
 from .utils import utc_now
-from .verdict_parser import extract_structured_verdicts
 
 WORKFLOW_VERSION = "workflow-run/v1"
-ROLE_RESULT_VERSION = "role-result/v1"
 ROLE_TIMEOUT_SECONDS = 45 * 60
 WORKFLOW_TIMEOUT_SECONDS = 240 * 60
 MAX_CONCURRENT_WORKFLOWS = 2
@@ -39,22 +43,6 @@ READINESS_ORDER = {
 }
 
 RoleExecutor = Callable[[Path, str, Path, bool, str | None], None]
-
-
-@dataclass(frozen=True)
-class ArtifactRecord:
-    path: str
-    sha256: str
-    size: int
-    media_type: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "sha256": self.sha256,
-            "size": self.size,
-            "media_type": self.media_type,
-        }
 
 
 @dataclass(frozen=True)
@@ -598,6 +586,8 @@ class WorkflowEngine:
                 output_file,
                 workflow=workflow,
                 node=node,
+                contract=contract,
+                root_dir=self.root_dir,
                 sandbox_dir=sandbox_dir,
                 after=after,
                 changed_paths=changed,
@@ -1000,7 +990,7 @@ def build_role_plan(lane: str, action: str, checkpoints: tuple[str, ...]) -> tup
         RoleNode(
             role_id=role_id,
             policy_path=_ROLE_POLICIES[role_id],
-            checkpoints=checkpoint_groups[index],
+            checkpoints=checkpoint_groups[index] or (f"role-completed:{role_id}",),
             evaluator=role_id in {"thesis-submission-evaluator", "academic-submission-evaluator"},
             finalizer=role_id == "academic-finalizer",
         )
@@ -1194,8 +1184,11 @@ Rules:
 - End with exactly one fenced `role-result` JSON block after all prose.
 - The `role-result` must use version `{ROLE_RESULT_VERSION}` and repeat the exact workflow, role, and work identifiers.
 - Report every required checkpoint and map it to at least one artifact whose SHA-256 you computed.
+- A `succeeded` result is invalid unless all required checkpoints have hash-verified artifact evidence.
+- If blockers remain, use status `blocked` or `failed`; never report `succeeded` with blockers.
+- Every blocker must use a stable lowercase machine code such as `primary-support-missing`, not free-form prose.
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
-- Put the structured verdict object in `verdict`; do not copy example verdicts from the role policy.
+- Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 
 Required role result shape:
 ```role-result
@@ -1211,6 +1204,34 @@ Required role result shape:
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
   "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
   "blockers": [],
+  "artifacts": [
+    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+  ],
+  "verdict": null
+}}
+```
+
+If the role cannot honestly satisfy the checkpoints, return status `blocked` or `failed` and include blockers like:
+```role-result
+{{
+  "version": "{ROLE_RESULT_VERSION}",
+  "workflow_id": "{workflow.workflow_id}",
+  "role_run_id": "{role_run_id}",
+  "role_id": "{node.role_id}",
+  "work_id": "{workflow.work_id}",
+  "lane": "{workflow.lane}",
+  "action": "{workflow.action}",
+  "status": "blocked",
+  "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
+  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "blockers": [
+    {{
+      "category": "primary-support",
+      "code": "primary-support-missing",
+      "message": "Primary support is still missing.",
+      "repairable": true
+    }}
+  ],
   "artifacts": [
     {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
   ],
@@ -1247,6 +1268,20 @@ def _role_allowed_write_scopes(
     return contract.allowed_write_scopes
 
 
+def _required_output_paths(root_dir: Path, contract: ExecutionContract) -> tuple[str, ...]:
+    paths: list[str] = []
+    for item in contract.required_outputs:
+        path = Path(item.path)
+        if path.is_absolute():
+            try:
+                paths.append(path.resolve().relative_to(root_dir.resolve()).as_posix())
+            except ValueError:
+                continue
+        else:
+            paths.append(path.as_posix())
+    return tuple(dict.fromkeys(paths))
+
+
 _ROLE_RESULT_PATTERN = re.compile(
     r"```[ \t]*role-result[ \t]*\n(?P<body>.*?)\n```",
     re.DOTALL | re.IGNORECASE,
@@ -1258,111 +1293,57 @@ def _parse_role_result(
     *,
     workflow: WorkflowRun,
     node: RoleNode,
+    contract: ExecutionContract,
+    root_dir: Path,
     sandbox_dir: Path,
     after: dict[str, dict[str, Any]],
     changed_paths: list[str],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     if not path.exists():
-        return None, [_runtime_blocker("role-result-missing", "Role produced no output.")]
+        return None, [_runtime_blocker("role-result-block-missing", "Role produced no output.")]
     text = path.read_text(encoding="utf-8", errors="replace")
     matches = list(_ROLE_RESULT_PATTERN.finditer(text))
+    if not matches:
+        return None, [_runtime_blocker("role-result-block-missing", "Role produced no role-result block.")]
     if len(matches) != 1:
         return None, [
             _runtime_blocker(
-                "role-result-invalid",
+                "role-result-block-count-invalid",
                 f"Expected exactly one role-result block, found {len(matches)}.",
             )
         ]
     try:
         payload = json.loads(matches[0].group("body"))
     except json.JSONDecodeError as exc:
-        return None, [_runtime_blocker("role-result-invalid", f"Role result is not valid JSON: {exc}.")]
-    if not isinstance(payload, dict):
-        return None, [_runtime_blocker("role-result-invalid", "Role result must be a JSON object.")]
+        return None, [_runtime_blocker("role-result-json-invalid", f"Role result is not valid JSON: {exc}.")]
 
-    expected_identity = {
-        "version": ROLE_RESULT_VERSION,
-        "workflow_id": workflow.workflow_id,
-        "role_run_id": f"{len(workflow.role_runs) + 1:02d}-{node.role_id}",
-        "role_id": node.role_id,
-        "work_id": workflow.work_id,
-        "lane": workflow.lane,
-        "action": workflow.action,
-    }
-    mismatches = {
-        key: {"expected": expected, "actual": payload.get(key)}
-        for key, expected in expected_identity.items()
-        if payload.get(key) != expected
-    }
-    if mismatches:
-        return None, [
-            {
-                "category": "runtime",
-                "code": "role-result-identity-mismatch",
-                "message": "Role result identity does not match the selected workflow/work.",
-                "repairable": False,
-                "blocks_statuses": ["submission-ready"],
-                "details": mismatches,
-            }
-        ]
+    validated, result_blockers = validate_role_result_payload(
+        payload,
+        RoleResultContext(
+            workflow_id=workflow.workflow_id,
+            expected_role_run_id=f"{len(workflow.role_runs) + 1:02d}-{node.role_id}",
+            role_id=node.role_id,
+            work_id=workflow.work_id,
+            lane=workflow.lane,
+            action=workflow.action,
+            required_checkpoints=node.checkpoints,
+            sandbox_dir=sandbox_dir,
+            post_manifest=after,
+            changed_paths=tuple(changed_paths),
+            required_output_paths=_required_output_paths(root_dir, contract),
+            evaluator=node.evaluator,
+            finalizer=node.finalizer,
+        ),
+    )
+    if validated is None:
+        return None, result_blockers
 
-    status = payload.get("status")
-    if status not in {"succeeded", "blocked", "failed"}:
-        return None, [_runtime_blocker("role-result-invalid", f"Unsupported role status: {status!r}.")]
-    raw_checkpoints = payload.get("checkpoints")
-    checkpoints = (
-        [str(item) for item in raw_checkpoints if isinstance(item, str)] if isinstance(raw_checkpoints, list) else []
-    )
-    missing_checkpoints = sorted(set(node.checkpoints) - set(checkpoints))
-    if missing_checkpoints:
-        return None, [
-            {
-                "category": "process",
-                "code": "checkpoint-missing",
-                "message": "Role result omitted mandatory checkpoints.",
-                "repairable": True,
-                "blocks_statuses": ["submission-ready"],
-                "details": {"missing": missing_checkpoints},
-            }
-        ]
-
-    artifact_records, artifact_errors = _validate_reported_artifacts(
-        payload.get("artifacts"),
-        sandbox_dir=sandbox_dir,
-        after=after,
-        changed_paths=changed_paths,
-    )
-    if artifact_errors:
-        return None, artifact_errors
-    checkpoint_errors = _validate_checkpoint_evidence(
-        payload.get("checkpoint_evidence"),
-        required=node.checkpoints,
-        artifacts=artifact_records,
-    )
-    if checkpoint_errors:
-        return None, checkpoint_errors
-
-    blockers, blocker_errors = _validate_reported_blockers(payload.get("blockers"))
-    if blocker_errors:
-        return None, blocker_errors
-    if status == "blocked" and not blockers:
-        return None, [_runtime_blocker("role-result-invalid", "Blocked role result must include blockers.")]
-    verdict, verdict_blockers = _validate_reported_verdict(
-        payload.get("verdict"),
-        lane=workflow.lane,
-        evaluator=node.evaluator,
-    )
-    if node.evaluator and verdict is None:
-        return None, verdict_blockers
-    if payload.get("verdict") is not None and verdict is None:
-        return None, verdict_blockers
-    blockers.extend(verdict_blockers)
     return {
-        "status": status,
-        "checkpoints": list(node.checkpoints),
-        "blockers": blockers,
-        "artifacts": artifact_records,
-        "verdict": verdict,
+        "status": validated.status,
+        "checkpoints": list(validated.checkpoints),
+        "blockers": list(validated.blockers),
+        "artifacts": list(validated.artifacts),
+        "verdict": validated.verdict,
     }, []
 
 
@@ -1403,178 +1384,6 @@ def _evaluator_context(
         str(Path(workflow.workflow_dir).parents[2]),
         str(sandbox_dir),
     )
-
-
-def _validate_reported_artifacts(
-    raw_artifacts: object,
-    *,
-    sandbox_dir: Path,
-    after: dict[str, dict[str, Any]],
-    changed_paths: list[str],
-) -> tuple[list[ArtifactRecord], list[dict[str, Any]]]:
-    if not isinstance(raw_artifacts, list):
-        return [], [_runtime_blocker("role-result-invalid", "Role artifacts must be a JSON list.")]
-    records: list[ArtifactRecord] = []
-    errors: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in raw_artifacts:
-        if not isinstance(item, dict):
-            errors.append(_runtime_blocker("role-result-invalid", "Artifact entry must be an object."))
-            continue
-        path = _sandbox_relative_path(item.get("path"), sandbox_dir)
-        sha256 = str(item.get("sha256") or "").strip().casefold()
-        if path is None or not re.fullmatch(r"[0-9a-f]{64}", sha256):
-            errors.append(
-                _runtime_blocker(
-                    "role-result-invalid",
-                    f"Artifact entry has invalid path or SHA-256: {item!r}.",
-                )
-            )
-            continue
-        actual = after.get(path)
-        if actual is None or actual.get("sha256") != sha256:
-            errors.append(
-                {
-                    "category": "artifact",
-                    "code": "artifact-hash-mismatch",
-                    "message": f"Reported artifact hash does not match sandbox post-manifest: {path}.",
-                    "repairable": False,
-                    "blocks_statuses": ["submission-ready"],
-                }
-            )
-            continue
-        if path in seen:
-            continue
-        seen.add(path)
-        records.append(_artifact_from_manifest(path, actual))
-    changed_files = {path for path in changed_paths if path in after}
-    missing_changed = sorted(changed_files - seen)
-    if missing_changed:
-        errors.append(
-            {
-                "category": "artifact",
-                "code": "artifact-manifest-incomplete",
-                "message": "Role result omitted created or modified artifacts.",
-                "repairable": True,
-                "blocks_statuses": ["submission-ready"],
-                "details": {"paths": missing_changed},
-            }
-        )
-    return records, errors
-
-
-def _validate_checkpoint_evidence(
-    raw_evidence: object,
-    *,
-    required: tuple[str, ...],
-    artifacts: list[ArtifactRecord],
-) -> list[dict[str, Any]]:
-    if not required:
-        return []
-    if not isinstance(raw_evidence, dict):
-        return [_runtime_blocker("checkpoint-evidence-missing", "Checkpoint evidence must be an object.")]
-    artifact_paths = {item.path for item in artifacts}
-    missing: list[str] = []
-    invalid: dict[str, list[str]] = {}
-    for checkpoint in required:
-        raw_paths = raw_evidence.get(checkpoint)
-        paths = [str(item) for item in raw_paths if isinstance(item, str)] if isinstance(raw_paths, list) else []
-        if not paths:
-            missing.append(checkpoint)
-            continue
-        absent = [path for path in paths if path not in artifact_paths]
-        if absent:
-            invalid[checkpoint] = absent
-    if not missing and not invalid:
-        return []
-    return [
-        {
-            "category": "process",
-            "code": "checkpoint-evidence-invalid",
-            "message": "Mandatory checkpoints lack hash-verified artifact evidence.",
-            "repairable": True,
-            "blocks_statuses": ["submission-ready"],
-            "details": {"missing": missing, "unverified_paths": invalid},
-        }
-    ]
-
-
-def _validate_reported_blockers(
-    raw_blockers: object,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    if raw_blockers is None:
-        return [], []
-    if not isinstance(raw_blockers, list):
-        return [], [_runtime_blocker("role-result-invalid", "Role blockers must be a JSON list.")]
-    blockers: list[dict[str, Any]] = []
-    for item in raw_blockers:
-        valid = isinstance(item, dict) and all(
-            str(item.get(key) or "").strip() for key in ("category", "code", "message")
-        )
-        if not valid:
-            return [], [_runtime_blocker("role-result-invalid", "Role blocker schema is invalid.")]
-        blockers.append(dict(item))
-    return blockers, []
-
-
-def _validate_reported_verdict(
-    raw_verdict: object,
-    *,
-    lane: str,
-    evaluator: bool,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    if raw_verdict is None:
-        if evaluator:
-            return None, [
-                {
-                    "category": "verdict",
-                    "code": "evaluator-verdict-missing",
-                    "message": "Independent evaluator did not report a structured verdict.",
-                    "repairable": True,
-                    "blocks_statuses": ["submission-ready"],
-                }
-            ]
-        return None, []
-    if not isinstance(raw_verdict, dict):
-        return None, [_runtime_blocker("role-result-invalid", "Reported verdict must be an object or null.")]
-    verdicts, errors = extract_structured_verdicts(
-        {"role-result": f"```verdict\n{json.dumps(raw_verdict, ensure_ascii=False)}\n```"}
-    )
-    blockers = [error.to_blocker().to_dict() for error in errors]
-    candidates = [item for item in verdicts if item.lane == lane]
-    if evaluator:
-        candidates = [item for item in candidates if item.kind == "submission-evaluator"]
-    if len(candidates) != 1:
-        blockers.append(
-            {
-                "category": "verdict",
-                "code": "evaluator-verdict-invalid" if evaluator else "role-verdict-invalid",
-                "message": "Reported verdict does not match the role/lane contract.",
-                "repairable": True,
-                "blocks_statuses": ["submission-ready"],
-            }
-        )
-        return None, blockers
-    verdict = candidates[0]
-    blockers.extend(item.to_dict() for item in verdict.blockers)
-    return verdict.to_dict(), blockers
-
-
-def _sandbox_relative_path(raw_path: object, sandbox_dir: Path) -> str | None:
-    text = str(raw_path or "").strip()
-    if not text:
-        return None
-    path = Path(text)
-    if path.is_absolute():
-        try:
-            return path.resolve().relative_to(sandbox_dir.resolve()).as_posix()
-        except ValueError:
-            return None
-    candidate = (sandbox_dir / path).resolve()
-    try:
-        return candidate.relative_to(sandbox_dir.resolve()).as_posix()
-    except ValueError:
-        return None
 
 
 def _source_provenance_summary(sandbox_dir: Path, work_id: str) -> dict[str, int]:
@@ -1747,24 +1556,6 @@ def _changed_paths(
     after: dict[str, dict[str, Any]],
 ) -> list[str]:
     return sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
-
-
-def _artifact_from_manifest(path: str, record: dict[str, Any]) -> ArtifactRecord:
-    return ArtifactRecord(
-        path=path,
-        sha256=str(record["sha256"]),
-        size=int(record["size"]),
-        media_type=_media_type(Path(path)),
-    )
-
-
-def _media_type(path: Path) -> str:
-    return {
-        ".md": "text/markdown",
-        ".json": "application/json",
-        ".toml": "application/toml",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }.get(path.suffix.casefold(), "application/octet-stream")
 
 
 def _ignored_path(path: Path) -> bool:

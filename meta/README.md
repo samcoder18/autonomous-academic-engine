@@ -18,6 +18,7 @@
   - [standards/normalized/](standards/normalized) — машиночитаемые нормализованные профили (включая `ru-vkr-gost-r-7-0-100-2018` и `ru-vkr-university-default`).
 - [schemas/](schemas) — JSON-схемы для runtime артефактов:
   - [schemas/verdict.schema.json](schemas/verdict.schema.json) — контракт для structured verdict-блоков evaluator'ов.
+  - [schemas/role-result.schema.json](schemas/role-result.schema.json) — контракт для fenced `role-result/v1` блоков workflow roles.
 
 ## Аудиты и unknowns автономного движка
 

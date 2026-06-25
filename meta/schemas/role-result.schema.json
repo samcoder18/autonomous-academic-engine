@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://legal-academic-workspace.local/schemas/role-result.schema.json",
+  "title": "Role Result v1",
+  "description": "Machine-readable result emitted by workflow roles via fenced role-result JSON block. Runtime validation is dependency-free in academic_engine.role_result_contract.",
+  "type": "object",
+  "required": [
+    "version",
+    "workflow_id",
+    "role_run_id",
+    "role_id",
+    "work_id",
+    "lane",
+    "action",
+    "status",
+    "checkpoints",
+    "checkpoint_evidence",
+    "blockers",
+    "artifacts",
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string", "enum": ["role-result/v1"] },
+    "workflow_id": { "type": "string", "minLength": 1 },
+    "role_run_id": { "type": "string", "minLength": 1 },
+    "role_id": { "type": "string", "minLength": 1 },
+    "work_id": { "type": "string", "minLength": 1 },
+    "lane": { "type": "string", "enum": ["thesis", "article"] },
+    "action": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["succeeded", "blocked", "failed"] },
+    "checkpoints": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "checkpoint_evidence": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "minItems": 1
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/blocker" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "verdict": {
+      "type": ["object", "null"]
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "required": ["category", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": [
+            "artifact",
+            "citation",
+            "codex",
+            "docx-conformance",
+            "dynamic-material",
+            "external",
+            "gost-bibliography",
+            "logic",
+            "originality",
+            "primary-support",
+            "process",
+            "review",
+            "runtime",
+            "standards",
+            "standards-consistency",
+            "verdict",
+            "verification"
+          ]
+        },
+        "code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "message": { "type": "string", "minLength": 1 },
+        "repairable": { "type": "boolean" },
+        "blocks_statuses": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}
