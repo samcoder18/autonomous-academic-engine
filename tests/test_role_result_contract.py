@@ -45,6 +45,67 @@ class RoleResultContractBaseTests(unittest.TestCase):
         self.assertIn("role-result-status-invalid", _codes(blockers))
 
 
+class RoleResultContractStatusTests(unittest.TestCase):
+    def test_succeeded_requires_checkpoint_evidence(self) -> None:
+        payload = _valid_payload(checkpoint_evidence={})
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-success-without-evidence", _codes(blockers))
+
+    def test_succeeded_cannot_carry_blockers(self) -> None:
+        payload = _valid_payload(
+            blockers=[
+                {
+                    "category": "citation",
+                    "code": "citation-gap",
+                    "message": "Citation support remains incomplete.",
+                    "repairable": True,
+                }
+            ]
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-success-with-blockers", _codes(blockers))
+
+    def test_blocked_requires_blockers(self) -> None:
+        payload = _valid_payload(status="blocked")
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-blocked-without-blockers", _codes(blockers))
+
+    def test_failed_requires_blockers(self) -> None:
+        payload = _valid_payload(status="failed")
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-failed-without-blockers", _codes(blockers))
+
+    def test_blocker_code_must_be_stable_machine_code(self) -> None:
+        payload = _valid_payload(
+            status="blocked",
+            blockers=[
+                {
+                    "category": "citation",
+                    "code": "Citation Gap",
+                    "message": "Citation support remains incomplete.",
+                    "repairable": True,
+                }
+            ],
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-blocker-code-invalid", _codes(blockers))
+
+
 def _context(
     *,
     role_id: str = "thesis-style-editor",
