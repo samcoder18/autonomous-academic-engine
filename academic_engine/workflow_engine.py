@@ -1225,7 +1225,12 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
   "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
   "blockers": [
-    {{"category": "primary-support", "code": "primary-support-missing", "message": "Primary support is still missing.", "repairable": true}}
+    {{
+      "category": "primary-support",
+      "code": "primary-support-missing",
+      "message": "Primary support is still missing.",
+      "repairable": true
+    }}
   ],
   "artifacts": [
     {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
