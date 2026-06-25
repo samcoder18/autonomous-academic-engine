@@ -1184,8 +1184,11 @@ Rules:
 - End with exactly one fenced `role-result` JSON block after all prose.
 - The `role-result` must use version `{ROLE_RESULT_VERSION}` and repeat the exact workflow, role, and work identifiers.
 - Report every required checkpoint and map it to at least one artifact whose SHA-256 you computed.
+- A `succeeded` result is invalid unless all required checkpoints have hash-verified artifact evidence.
+- If blockers remain, use status `blocked` or `failed`; never report `succeeded` with blockers.
+- Every blocker must use a stable lowercase machine code such as `primary-support-missing`, not free-form prose.
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
-- Put the structured verdict object in `verdict`; do not copy example verdicts from the role policy.
+- Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 
 Required role result shape:
 ```role-result
@@ -1201,6 +1204,29 @@ Required role result shape:
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
   "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
   "blockers": [],
+  "artifacts": [
+    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+  ],
+  "verdict": null
+}}
+```
+
+If the role cannot honestly satisfy the checkpoints, return status `blocked` or `failed` and include blockers like:
+```role-result
+{{
+  "version": "{ROLE_RESULT_VERSION}",
+  "workflow_id": "{workflow.workflow_id}",
+  "role_run_id": "{role_run_id}",
+  "role_id": "{node.role_id}",
+  "work_id": "{workflow.work_id}",
+  "lane": "{workflow.lane}",
+  "action": "{workflow.action}",
+  "status": "blocked",
+  "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
+  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "blockers": [
+    {{"category": "primary-support", "code": "primary-support-missing", "message": "Primary support is still missing.", "repairable": true}}
+  ],
   "artifacts": [
     {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
   ],
