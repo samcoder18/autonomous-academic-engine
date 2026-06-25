@@ -290,7 +290,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
         self.assertEqual(result.execution_status, "failed")
         self.assertEqual(result.promotion.status, "blocked")
-        self.assertTrue(any(item["code"] == "role-result-invalid" for item in result.blockers))
+        self.assertTrue(any(item["code"] == "role-result-block-missing" for item in result.blockers))
 
     def test_role_result_work_mismatch_fails_closed(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
@@ -340,7 +340,39 @@ class WorkflowEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.execution_status, "failed")
-        self.assertTrue(any(item["code"] == "checkpoint-evidence-invalid" for item in result.blockers))
+        self.assertTrue(any(item["code"] == "role-result-success-without-evidence" for item in result.blockers))
+
+    def test_successful_role_result_with_blockers_fails_closed(self) -> None:
+        blocker = {
+            "category": "citation",
+            "code": "citation-gap",
+            "message": "Citation support remains incomplete.",
+            "repairable": True,
+        }
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=None,
+                blockers=[blocker],
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertTrue(any(item["code"] == "role-result-success-with-blockers" for item in result.blockers))
 
     def test_transient_role_failure_retries_once(self) -> None:
         attempts: dict[str, int] = {}
