@@ -43,6 +43,25 @@ class RoleResultContractBaseTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("role-result-status-invalid", _codes(blockers))
 
+    def test_extra_top_level_field_fails_schema_contract(self) -> None:
+        payload = _valid_payload()
+        payload["notes"] = "free-form extra field"
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-schema-invalid", _codes(blockers))
+        self.assertEqual(blockers[0]["details"]["unexpected"], ["notes"])
+
+    def test_extra_artifact_field_fails_schema_contract(self) -> None:
+        payload = _valid_payload()
+        payload["artifacts"][0]["label"] = "extra artifact metadata"
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-artifacts-invalid", _codes(blockers))
+
 
 class RoleResultContractStatusTests(unittest.TestCase):
     def test_succeeded_requires_checkpoint_evidence(self) -> None:
@@ -162,6 +181,17 @@ class RoleResultContractStatusTests(unittest.TestCase):
 
                 self.assertIsNone(result)
                 self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
+
+    def test_extra_blocker_field_fails_schema_contract(self) -> None:
+        payload = _valid_payload(
+            status="blocked",
+            blockers=[_valid_blocker(note="extra blocker metadata")],
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
 
 
 class RoleResultContractRoleSpecificTests(unittest.TestCase):

@@ -26,6 +26,9 @@ REQUIRED_ROLE_RESULT_FIELDS = (
     "artifacts",
     "verdict",
 )
+ROLE_RESULT_FIELD_SET = set(REQUIRED_ROLE_RESULT_FIELDS)
+ARTIFACT_FIELDS = {"path", "sha256"}
+BLOCKER_FIELDS = {"category", "code", "message", "repairable", "blocks_statuses", "details"}
 ALLOWED_BLOCKER_CATEGORIES = {
     "artifact",
     "citation",
@@ -122,6 +125,15 @@ def validate_role_result_payload(
                 "role-result-schema-invalid",
                 "Role result omitted required fields.",
                 details={"missing": missing},
+            )
+        ]
+    unexpected = sorted(str(field) for field in payload if field not in ROLE_RESULT_FIELD_SET)
+    if unexpected:
+        return None, [
+            _blocker(
+                "role-result-schema-invalid",
+                "Role result included unsupported fields.",
+                details={"unexpected": unexpected},
             )
         ]
 
@@ -250,6 +262,16 @@ def _validate_artifacts(
         if not isinstance(item, dict):
             errors.append(_blocker("role-result-artifacts-invalid", "Artifact entry must be an object."))
             continue
+        unexpected = sorted(str(field) for field in item if field not in ARTIFACT_FIELDS)
+        if unexpected:
+            errors.append(
+                _blocker(
+                    "role-result-artifacts-invalid",
+                    "Artifact entry included unsupported fields.",
+                    details={"unexpected": unexpected},
+                )
+            )
+            continue
         path = _sandbox_relative_path(item.get("path"), context.sandbox_dir)
         sha256 = str(item.get("sha256") or "").strip().casefold()
         if path is None or not re.fullmatch(r"[0-9a-f]{64}", sha256):
@@ -346,6 +368,15 @@ def _validate_blockers(raw_blockers: object) -> tuple[list[dict[str, Any]], list
     for item in raw_blockers:
         if not isinstance(item, dict):
             return [], [_blocker("role-result-blocker-schema-invalid", "Role blocker must be an object.")]
+        unexpected = sorted(str(field) for field in item if field not in BLOCKER_FIELDS)
+        if unexpected:
+            return [], [
+                _blocker(
+                    "role-result-blocker-schema-invalid",
+                    "Role blocker included unsupported fields.",
+                    details={"unexpected": unexpected},
+                )
+            ]
 
         raw_category = item.get("category")
         raw_code = item.get("code")
