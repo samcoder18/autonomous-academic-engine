@@ -23,6 +23,26 @@ REQUIRED_ROLE_RESULT_FIELDS = (
     "artifacts",
     "verdict",
 )
+ALLOWED_BLOCKER_CATEGORIES = {
+    "artifact",
+    "citation",
+    "codex",
+    "docx-conformance",
+    "dynamic-material",
+    "external",
+    "gost-bibliography",
+    "logic",
+    "originality",
+    "primary-support",
+    "process",
+    "review",
+    "runtime",
+    "standards",
+    "standards-consistency",
+    "verdict",
+    "verification",
+}
+BLOCKER_CODE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 @dataclass(frozen=True)
@@ -129,6 +149,10 @@ def validate_role_result_payload(
     blockers, blocker_errors = _validate_blockers(payload.get("blockers"))
     if blocker_errors:
         return None, blocker_errors
+
+    status_errors = _validate_status_blocker_consistency(str(status), blockers)
+    if status_errors:
+        return None, status_errors
 
     return (
         ValidatedRoleResult(
@@ -275,7 +299,85 @@ def _validate_checkpoint_evidence(
 def _validate_blockers(raw_blockers: object) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(raw_blockers, list):
         return [], [_blocker("role-result-blocker-schema-invalid", "Role blockers must be a JSON list.")]
-    return [dict(item) for item in raw_blockers if isinstance(item, dict)], []
+
+    blockers: list[dict[str, Any]] = []
+    for item in raw_blockers:
+        if not isinstance(item, dict):
+            return [], [_blocker("role-result-blocker-schema-invalid", "Role blocker must be an object.")]
+
+        category = str(item.get("category") or "").strip()
+        code = str(item.get("code") or "").strip()
+        message = str(item.get("message") or "").strip()
+        if not category or not code or not message:
+            return [], [
+                _blocker(
+                    "role-result-blocker-schema-invalid",
+                    "Role blocker must include category, code, and message.",
+                )
+            ]
+        if category not in ALLOWED_BLOCKER_CATEGORIES:
+            return [], [
+                _blocker(
+                    "role-result-blocker-schema-invalid",
+                    "Role blocker category is not in the allowed taxonomy.",
+                    details={"category": category, "allowed": sorted(ALLOWED_BLOCKER_CATEGORIES)},
+                )
+            ]
+        if not BLOCKER_CODE_PATTERN.fullmatch(code):
+            return [], [
+                _blocker(
+                    "role-result-blocker-code-invalid",
+                    "Role blocker code must be a stable lowercase machine code.",
+                    details={"code": code},
+                )
+            ]
+
+        normalized: dict[str, Any] = {
+            "category": category,
+            "code": code,
+            "message": message,
+            "repairable": bool(item.get("repairable", True)),
+        }
+        raw_statuses = item.get("blocks_statuses")
+        if isinstance(raw_statuses, list):
+            statuses = [str(value).strip() for value in raw_statuses if str(value).strip()]
+            if statuses:
+                normalized["blocks_statuses"] = statuses
+        details = item.get("details")
+        if isinstance(details, dict) and details:
+            normalized["details"] = details
+        blockers.append(normalized)
+
+    return blockers, []
+
+
+def _validate_status_blocker_consistency(status: str, blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if status == "succeeded" and blockers:
+        return [
+            _blocker(
+                "role-result-success-with-blockers",
+                "Successful role result cannot carry blockers.",
+                category="process",
+                details={"blocker_codes": [item.get("code") for item in blockers]},
+            )
+        ]
+    if status == "blocked" and not blockers:
+        return [
+            _blocker(
+                "role-result-blocked-without-blockers",
+                "Blocked role result must include at least one structured blocker.",
+                category="process",
+            )
+        ]
+    if status == "failed" and not blockers:
+        return [
+            _blocker(
+                "role-result-failed-without-blockers",
+                "Failed role result must include at least one structured blocker.",
+                category="process",
+            )
+        ]
+    return []
 
 
 def _sandbox_relative_path(raw_path: object, sandbox_dir: Path) -> str | None:
