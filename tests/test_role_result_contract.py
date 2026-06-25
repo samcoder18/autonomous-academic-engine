@@ -10,7 +10,6 @@ from academic_engine.role_result_contract import (
     validate_role_result_payload,
 )
 
-
 HASH = "a" * 64
 ARTIFACT_PATH = "works/demo/thesis/reviews/role-result.md"
 
@@ -199,6 +198,45 @@ class RoleResultContractRoleSpecificTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertIn("role-result-role-contract-invalid", _codes(blockers))
+
+    def test_evidence_role_structured_verdict_blockers_do_not_fail_successful_execution(self) -> None:
+        artifact_path = "works/demo/articles/reviews/citation-check.md"
+        context = _context(
+            role_id="academic-citation-checker",
+            lane="article",
+            action="article",
+            artifact_path=artifact_path,
+        )
+        payload = _valid_payload(
+            role_id="academic-citation-checker",
+            lane="article",
+            action="article",
+            artifact_path=artifact_path,
+            verdict={
+                "verdict_version": "1",
+                "lane": "article",
+                "kind": "citation-checker",
+                "status": "blocked-citation",
+                "summary": "Citation pass found unresolved support gaps.",
+                "blockers": [
+                    {
+                        "category": "citation",
+                        "code": "citation-safety-gap",
+                        "message": "Primary support is still incomplete.",
+                        "repairable": True,
+                        "blocks_statuses": ["submission-ready"],
+                    }
+                ],
+            },
+        )
+
+        result, blockers = validate_role_result_payload(payload, context)
+
+        self.assertEqual(blockers, [])
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.verdict["status"], "blocked-citation")
+        self.assertIn("citation-safety-gap", _codes(list(result.blockers)))
 
     def test_finalizer_requires_required_output_artifact(self) -> None:
         artifact_path = "works/demo/articles/final/unrelated.md"
