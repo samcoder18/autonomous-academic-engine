@@ -18,7 +18,7 @@ from academic_engine.action_specs import (
 )
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
-from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease
+from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
 
 
 class WorkflowEngineTests(unittest.TestCase):
@@ -604,6 +604,24 @@ class WorkflowEngineTests(unittest.TestCase):
         store.clear_active_run("alpha")
         self.assertIsNone(store.get_active_run("alpha"))
         self.assertEqual(store.get_active_run("beta")["run_id"], "beta:1")
+
+    def test_role_plan_assigns_checkpoint_to_every_role(self) -> None:
+        checkpoints = (
+            "brief-normalized",
+            "evidence-updated",
+            "claim-map-updated",
+            "draft-updated",
+            "reviewed",
+            "final-status-issued",
+        )
+
+        nodes = build_role_plan("article", "article", checkpoints)
+
+        self.assertTrue(all(node.checkpoints for node in nodes))
+        observed = {checkpoint for node in nodes for checkpoint in node.checkpoints}
+        self.assertTrue(set(checkpoints).issubset(observed))
+        source_verifier = next(node for node in nodes if node.role_id == "academic-source-verifier")
+        self.assertEqual(source_verifier.checkpoints, ("role-completed:academic-source-verifier",))
 
 
 def _evaluator_payload(

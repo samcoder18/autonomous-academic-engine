@@ -72,6 +72,25 @@ class RoleResultContractStatusTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("role-result-success-without-evidence", _codes(blockers))
 
+    def test_succeeded_requires_at_least_one_checkpoint(self) -> None:
+        payload = _valid_payload(checkpoints=(), checkpoint_evidence={})
+
+        result, blockers = validate_role_result_payload(payload, _context(checkpoints=()))
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-success-without-evidence", _codes(blockers))
+
+    def test_succeeded_requires_evidence_even_without_required_checkpoint_context(self) -> None:
+        payload = _valid_payload(
+            checkpoints=("self-check",),
+            checkpoint_evidence={},
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context(checkpoints=()))
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-success-without-evidence", _codes(blockers))
+
     def test_succeeded_cannot_carry_blockers(self) -> None:
         payload = _valid_payload(
             blockers=[

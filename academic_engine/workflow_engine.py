@@ -990,7 +990,7 @@ def build_role_plan(lane: str, action: str, checkpoints: tuple[str, ...]) -> tup
         RoleNode(
             role_id=role_id,
             policy_path=_ROLE_POLICIES[role_id],
-            checkpoints=checkpoint_groups[index],
+            checkpoints=checkpoint_groups[index] or (f"role-completed:{role_id}",),
             evaluator=role_id in {"thesis-submission-evaluator", "academic-submission-evaluator"},
             finalizer=role_id == "academic-finalizer",
         )

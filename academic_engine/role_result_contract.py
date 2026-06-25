@@ -178,6 +178,16 @@ def validate_role_result_payload(
     )
     if checkpoint_errors:
         return None, checkpoint_errors
+    if str(status) == "succeeded" and (
+        not checkpoints or not _has_any_checkpoint_evidence(payload.get("checkpoint_evidence"))
+    ):
+        return None, [
+            _blocker(
+                "role-result-success-without-evidence",
+                "Successful role result must include checkpoint evidence.",
+                category="process",
+            )
+        ]
 
     blockers, blocker_errors = _validate_blockers(payload.get("blockers"))
     if blocker_errors:
@@ -205,7 +215,7 @@ def validate_role_result_payload(
     return (
         ValidatedRoleResult(
             status=str(status),
-            checkpoints=tuple(context.required_checkpoints),
+            checkpoints=tuple(checkpoints),
             blockers=tuple(blockers),
             artifacts=tuple(artifacts),
             verdict=verdict,
