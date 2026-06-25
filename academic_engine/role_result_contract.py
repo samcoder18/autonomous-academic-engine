@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
+from .verdict_parser import extract_structured_verdicts
 
 ROLE_RESULT_VERSION = "role-result/v1"
 ROLE_RESULT_STATUSES = {"succeeded", "blocked", "failed"}
@@ -43,6 +46,24 @@ ALLOWED_BLOCKER_CATEGORIES = {
     "verification",
 }
 BLOCKER_CODE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+EVALUATOR_ROLE_IDS = {"thesis-submission-evaluator", "academic-submission-evaluator"}
+EVIDENCE_ROLE_IDS = {
+    "thesis-research-synthesizer",
+    "thesis-source-verifier",
+    "thesis-citation-checker",
+    "academic-source-acquirer",
+    "academic-source-verifier",
+    "academic-evidence-cartographer",
+    "academic-citation-checker",
+}
+EVIDENCE_BLOCKER_CATEGORIES = {
+    "citation",
+    "dynamic-material",
+    "primary-support",
+    "process",
+    "verification",
+}
+FINALIZER_ROLE_IDS = {"academic-finalizer"}
 
 
 @dataclass(frozen=True)
@@ -154,13 +175,28 @@ def validate_role_result_payload(
     if status_errors:
         return None, status_errors
 
+    verdict, verdict_blockers, verdict_errors = _validate_verdict(payload.get("verdict"), context=context)
+    if verdict_errors:
+        return None, verdict_errors
+    blockers.extend(verdict_blockers)
+
+    role_errors = _validate_role_specific_contract(
+        status=str(status),
+        context=context,
+        blockers=blockers,
+        artifacts=artifacts,
+        checkpoint_evidence=payload.get("checkpoint_evidence"),
+    )
+    if role_errors:
+        return None, role_errors
+
     return (
         ValidatedRoleResult(
             status=str(status),
             checkpoints=tuple(context.required_checkpoints),
             blockers=tuple(blockers),
             artifacts=tuple(artifacts),
-            verdict=payload.get("verdict") if isinstance(payload.get("verdict"), dict) else None,
+            verdict=verdict,
         ),
         [],
     )
@@ -266,7 +302,11 @@ def _validate_checkpoint_evidence(
     if not context.required_checkpoints:
         return []
     if not isinstance(raw_evidence, dict):
-        code = "role-result-success-without-evidence" if status == "succeeded" else "role-result-checkpoint-evidence-missing"
+        code = (
+            "role-result-success-without-evidence"
+            if status == "succeeded"
+            else "role-result-checkpoint-evidence-missing"
+        )
         return [_blocker(code, "Checkpoint evidence must be an object.", category="process")]
 
     artifact_paths = {item.path for item in artifacts}
@@ -285,7 +325,9 @@ def _validate_checkpoint_evidence(
     if not missing and not invalid:
         return []
 
-    code = "role-result-success-without-evidence" if status == "succeeded" else "role-result-checkpoint-evidence-invalid"
+    code = (
+        "role-result-success-without-evidence" if status == "succeeded" else "role-result-checkpoint-evidence-invalid"
+    )
     return [
         _blocker(
             code,
@@ -421,6 +463,157 @@ def _validate_status_blocker_consistency(status: str, blockers: list[dict[str, A
             )
         ]
     return []
+
+
+def _validate_verdict(
+    raw_verdict: object,
+    *,
+    context: RoleResultContext,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    requires_verdict = context.evaluator or context.role_id in EVALUATOR_ROLE_IDS
+    if raw_verdict is None:
+        if requires_verdict:
+            return (
+                None,
+                [],
+                [
+                    _blocker(
+                        "role-result-evaluator-verdict-missing",
+                        "Independent evaluator did not report a structured verdict.",
+                        category="verdict",
+                    )
+                ],
+            )
+        return None, [], []
+
+    if not isinstance(raw_verdict, dict):
+        return (
+            None,
+            [],
+            [
+                _blocker(
+                    "role-result-evaluator-verdict-invalid"
+                    if requires_verdict
+                    else "role-result-role-contract-invalid",
+                    "Reported verdict must be an object or null.",
+                    category="verdict",
+                )
+            ],
+        )
+
+    verdicts, errors = extract_structured_verdicts(
+        {"role-result": f"```verdict\n{json.dumps(raw_verdict, ensure_ascii=False)}\n```"}
+    )
+    if errors:
+        return (
+            None,
+            [],
+            [
+                _blocker(
+                    "role-result-evaluator-verdict-invalid"
+                    if requires_verdict
+                    else "role-result-role-contract-invalid",
+                    "Reported verdict does not match the role/lane contract.",
+                    category="verdict",
+                    details={"errors": [error.code for error in errors]},
+                )
+            ],
+        )
+
+    candidates = [item for item in verdicts if item.lane == context.lane]
+    if requires_verdict:
+        candidates = [item for item in candidates if item.kind == "submission-evaluator"]
+    if len(candidates) != 1:
+        return (
+            None,
+            [],
+            [
+                _blocker(
+                    "role-result-evaluator-verdict-invalid"
+                    if requires_verdict
+                    else "role-result-role-contract-invalid",
+                    "Reported verdict does not match the role/lane contract.",
+                    category="verdict",
+                )
+            ],
+        )
+
+    verdict = candidates[0]
+    return verdict.to_dict(), [item.to_dict() for item in verdict.blockers], []
+
+
+def _validate_role_specific_contract(
+    *,
+    status: str,
+    context: RoleResultContext,
+    blockers: list[dict[str, Any]],
+    artifacts: list[ArtifactRecord],
+    checkpoint_evidence: object,
+) -> list[dict[str, Any]]:
+    if status != "succeeded":
+        evidence_errors = _validate_evidence_role_blockers(context=context, blockers=blockers)
+        return evidence_errors
+
+    if context.finalizer or context.role_id in FINALIZER_ROLE_IDS:
+        required_outputs = set(context.required_output_paths)
+        artifact_paths = {artifact.path for artifact in artifacts}
+        if required_outputs and not artifact_paths.intersection(required_outputs):
+            return [
+                _blocker(
+                    "role-result-finalizer-artifact-missing",
+                    "Successful finalizer result must include at least one required finalization artifact.",
+                    category="artifact",
+                    details={
+                        "required_output_paths": sorted(required_outputs),
+                        "artifact_paths": sorted(artifact_paths),
+                    },
+                )
+            ]
+
+    if context.role_id in EVIDENCE_ROLE_IDS and not _has_any_checkpoint_evidence(checkpoint_evidence):
+        return [
+            _blocker(
+                "role-result-success-without-evidence",
+                "Successful evidence role result must include checkpoint evidence.",
+                category="process",
+            )
+        ]
+
+    return []
+
+
+def _validate_evidence_role_blockers(
+    *,
+    context: RoleResultContext,
+    blockers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if context.role_id not in EVIDENCE_ROLE_IDS:
+        return []
+    invalid = [item for item in blockers if item.get("category") not in EVIDENCE_BLOCKER_CATEGORIES]
+    if not invalid:
+        return []
+    return [
+        _blocker(
+            "role-result-role-contract-invalid",
+            "Evidence role blockers must use evidence-support categories.",
+            category="process",
+            details={
+                "invalid_categories": sorted(
+                    {item["category"] for item in invalid if isinstance(item.get("category"), str)}
+                ),
+                "allowed_categories": sorted(EVIDENCE_BLOCKER_CATEGORIES),
+            },
+        )
+    ]
+
+
+def _has_any_checkpoint_evidence(raw_evidence: object) -> bool:
+    if not isinstance(raw_evidence, dict):
+        return False
+    for value in raw_evidence.values():
+        if isinstance(value, list) and any(isinstance(item, str) and item.strip() for item in value):
+            return True
+    return False
 
 
 def _sandbox_relative_path(raw_path: object, sandbox_dir: Path) -> str | None:
