@@ -105,6 +105,65 @@ class RoleResultContractStatusTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("role-result-blocker-code-invalid", _codes(blockers))
 
+    def test_blocker_repairable_must_be_boolean_when_present(self) -> None:
+        payload = _valid_payload(
+            status="blocked",
+            blockers=[_valid_blocker(repairable="false")],
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
+
+    def test_blocker_details_must_be_object_when_present(self) -> None:
+        payload = _valid_payload(
+            status="blocked",
+            blockers=[_valid_blocker(details="citation support is missing")],
+        )
+
+        result, blockers = validate_role_result_payload(payload, _context())
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
+
+    def test_blocker_core_fields_must_be_strings(self) -> None:
+        cases = {
+            "category": _StringLike("citation"),
+            "code": 404,
+            "message": 404,
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                payload = _valid_payload(
+                    status="blocked",
+                    blockers=[_valid_blocker(**{field: value})],
+                )
+
+                result, blockers = validate_role_result_payload(payload, _context())
+
+                self.assertIsNone(result)
+                self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
+
+    def test_blocker_blocks_statuses_must_be_non_empty_strings(self) -> None:
+        cases = (
+            "submission-ready",
+            [123],
+            [""],
+            ["submission-ready", ""],
+        )
+        for value in cases:
+            with self.subTest(blocks_statuses=value):
+                payload = _valid_payload(
+                    status="blocked",
+                    blockers=[_valid_blocker(blocks_statuses=value)],
+                )
+
+                result, blockers = validate_role_result_payload(payload, _context())
+
+                self.assertIsNone(result)
+                self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
+
 
 def _context(
     *,
@@ -166,6 +225,25 @@ def _valid_payload(
         "artifacts": [{"path": artifact_path, "sha256": HASH}],
         "verdict": verdict,
     }
+
+
+def _valid_blocker(**overrides: Any) -> dict[str, Any]:
+    blocker: dict[str, Any] = {
+        "category": "citation",
+        "code": "citation-gap",
+        "message": "Citation support remains incomplete.",
+        "repairable": True,
+    }
+    blocker.update(overrides)
+    return blocker
+
+
+class _StringLike:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def __str__(self) -> str:
+        return self._text
 
 
 def _codes(blockers: list[dict[str, Any]]) -> set[str]:

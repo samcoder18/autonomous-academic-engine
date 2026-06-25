@@ -305,9 +305,20 @@ def _validate_blockers(raw_blockers: object) -> tuple[list[dict[str, Any]], list
         if not isinstance(item, dict):
             return [], [_blocker("role-result-blocker-schema-invalid", "Role blocker must be an object.")]
 
-        category = str(item.get("category") or "").strip()
-        code = str(item.get("code") or "").strip()
-        message = str(item.get("message") or "").strip()
+        raw_category = item.get("category")
+        raw_code = item.get("code")
+        raw_message = item.get("message")
+        if not isinstance(raw_category, str) or not isinstance(raw_code, str) or not isinstance(raw_message, str):
+            return [], [
+                _blocker(
+                    "role-result-blocker-schema-invalid",
+                    "Role blocker must include string category, code, and message.",
+                )
+            ]
+
+        category = raw_category.strip()
+        code = raw_code.strip()
+        message = raw_message.strip()
         if not category or not code or not message:
             return [], [
                 _blocker(
@@ -332,20 +343,52 @@ def _validate_blockers(raw_blockers: object) -> tuple[list[dict[str, Any]], list
                 )
             ]
 
+        repairable = item.get("repairable", True)
+        if "repairable" in item and not isinstance(repairable, bool):
+            return [], [
+                _blocker(
+                    "role-result-blocker-schema-invalid",
+                    "Role blocker repairable flag must be boolean.",
+                )
+            ]
+
         normalized: dict[str, Any] = {
             "category": category,
             "code": code,
             "message": message,
-            "repairable": bool(item.get("repairable", True)),
+            "repairable": repairable,
         }
-        raw_statuses = item.get("blocks_statuses")
-        if isinstance(raw_statuses, list):
-            statuses = [str(value).strip() for value in raw_statuses if str(value).strip()]
-            if statuses:
-                normalized["blocks_statuses"] = statuses
-        details = item.get("details")
-        if isinstance(details, dict) and details:
-            normalized["details"] = details
+        if "blocks_statuses" in item:
+            raw_statuses = item.get("blocks_statuses")
+            if not isinstance(raw_statuses, list):
+                return [], [
+                    _blocker(
+                        "role-result-blocker-schema-invalid",
+                        "Role blocker blocks_statuses must be a list of non-empty strings.",
+                    )
+                ]
+            statuses: list[str] = []
+            for value in raw_statuses:
+                if not isinstance(value, str) or not value.strip():
+                    return [], [
+                        _blocker(
+                            "role-result-blocker-schema-invalid",
+                            "Role blocker blocks_statuses must be a list of non-empty strings.",
+                        )
+                    ]
+                statuses.append(value.strip())
+            normalized["blocks_statuses"] = statuses
+        if "details" in item:
+            details = item.get("details")
+            if not isinstance(details, dict):
+                return [], [
+                    _blocker(
+                        "role-result-blocker-schema-invalid",
+                        "Role blocker details must be an object.",
+                    )
+                ]
+            if details:
+                normalized["details"] = details
         blockers.append(normalized)
 
     return blockers, []
