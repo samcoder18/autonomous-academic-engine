@@ -165,6 +165,79 @@ class RoleResultContractStatusTests(unittest.TestCase):
                 self.assertIn("role-result-blocker-schema-invalid", _codes(blockers))
 
 
+class RoleResultContractRoleSpecificTests(unittest.TestCase):
+    def test_evaluator_requires_structured_verdict(self) -> None:
+        context = _context(
+            role_id="thesis-submission-evaluator",
+            evaluator=True,
+        )
+        payload = _valid_payload(role_id="thesis-submission-evaluator")
+
+        result, blockers = validate_role_result_payload(payload, context)
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-evaluator-verdict-missing", _codes(blockers))
+
+    def test_evidence_role_blockers_use_evidence_taxonomy(self) -> None:
+        context = _context(role_id="academic-source-verifier", lane="article", action="article")
+        payload = _valid_payload(
+            role_id="academic-source-verifier",
+            lane="article",
+            action="article",
+            status="blocked",
+            blockers=[
+                {
+                    "category": "logic",
+                    "code": "logic-gap",
+                    "message": "This is not an evidence-role blocker category.",
+                    "repairable": True,
+                }
+            ],
+        )
+
+        result, blockers = validate_role_result_payload(payload, context)
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-role-contract-invalid", _codes(blockers))
+
+    def test_finalizer_requires_required_output_artifact(self) -> None:
+        artifact_path = "works/demo/articles/final/unrelated.md"
+        checklist_path = "works/demo/articles/final/demo-checklist.md"
+        context = _context(
+            role_id="academic-finalizer",
+            lane="article",
+            action="finalize",
+            checkpoints=(
+                "context-loaded",
+                "finalizer-gates-checked",
+                "checklist-updated",
+                "docx-exported-or-skipped",
+                "terminal-status-issued",
+            ),
+            artifact_path=artifact_path,
+            finalizer=True,
+            required_output_paths=(checklist_path,),
+        )
+        payload = _valid_payload(
+            role_id="academic-finalizer",
+            lane="article",
+            action="finalize",
+            artifact_path=artifact_path,
+            checkpoints=(
+                "context-loaded",
+                "finalizer-gates-checked",
+                "checklist-updated",
+                "docx-exported-or-skipped",
+                "terminal-status-issued",
+            ),
+        )
+
+        result, blockers = validate_role_result_payload(payload, context)
+
+        self.assertIsNone(result)
+        self.assertIn("role-result-finalizer-artifact-missing", _codes(blockers))
+
+
 def _context(
     *,
     role_id: str = "thesis-style-editor",
