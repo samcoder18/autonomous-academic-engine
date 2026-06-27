@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from academic_engine.action_specs import AllowedWriteScope, ExecutionContract, RepairPolicy
-from academic_engine.repair_kernel import Blocker, build_repair_decision, build_repair_plan
+from academic_engine.repair_kernel import (
+    Blocker,
+    build_repair_decision,
+    build_repair_plan,
+    run_bounded_repair_loop,
+)
 
 
 def _scope(name: str) -> AllowedWriteScope:
@@ -207,6 +212,50 @@ class RepairKernelStepRoutingTests(unittest.TestCase):
         self.assertEqual(decision.action, "stop")
         self.assertEqual(decision.reason, "repair-limit-reached")
         self.assertEqual(decision.terminal_reason, "max-repair-iterations")
+
+    def test_thesis_citation_blocker_routes_to_thesis_citation_checker(self) -> None:
+        blocker = Blocker(category="citation", code="missing-footnote", message="Missing footnote.")
+
+        plan = build_repair_plan(
+            contract=_contract(lane="thesis", action="verify", scopes=("canonical-target", "sync", "draft")),
+            blockers=[blocker],
+            repair_iteration=1,
+        )
+
+        self.assertEqual(len(plan.steps), 1)
+        self.assertEqual(plan.steps[0].assigned_role, "thesis-citation-checker")
+        self.assertEqual(plan.steps[0].rerun_gate, "citation-check")
+
+    def test_bounded_repair_loop_passes_steps_to_repair_callback(self) -> None:
+        blocker = Blocker(
+            category="primary-support",
+            code="unsupported-claim",
+            message="Strong claim is missing primary support.",
+        )
+        seen_roles: list[str] = []
+
+        def repair_fn(plan):
+            seen_roles.extend(step.assigned_role for step in plan.steps)
+            return {"patched": True}
+
+        def evaluate_fn(plan, repair_result):
+            self.assertEqual([step.rerun_gate for step in plan.steps], ["source-verification"])
+            self.assertTrue(repair_result["patched"])
+            return []
+
+        outcome = run_bounded_repair_loop(
+            contract=_contract(scopes=("evidence-pack", "draft")),
+            initial_blockers=[blocker],
+            repair_fn=repair_fn,
+            evaluate_fn=evaluate_fn,
+        )
+
+        self.assertEqual(seen_roles, ["academic-source-verifier"])
+        self.assertEqual(outcome.terminal_reason, "ready")
+        self.assertEqual(outcome.repair_iteration, 1)
+        self.assertEqual(outcome.remaining_blockers, ())
+        self.assertEqual(len(outcome.plans), 1)
+        self.assertEqual(outcome.plans[0].steps[0].assigned_role, "academic-source-verifier")
 
 
 if __name__ == "__main__":
