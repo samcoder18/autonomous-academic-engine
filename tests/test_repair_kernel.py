@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from academic_engine.action_specs import AllowedWriteScope, ExecutionContract, RepairPolicy
-from academic_engine.repair_kernel import Blocker, build_repair_plan
+from academic_engine.repair_kernel import Blocker, build_repair_decision, build_repair_plan
 
 
 def _scope(name: str) -> AllowedWriteScope:
@@ -158,6 +158,55 @@ class RepairKernelStepRoutingTests(unittest.TestCase):
 
         self.assertEqual(plan.steps, ())
         self.assertEqual(plan.blockers, ())
+
+    def test_decision_stops_when_no_allowed_write_scope_matches(self) -> None:
+        blocker = Blocker(
+            category="primary-support",
+            code="unsupported-claim",
+            message="Strong claim is missing primary support.",
+        )
+
+        decision = build_repair_decision(
+            contract=_contract(scopes=("article-root",)),
+            blockers=[blocker],
+            repair_iteration=0,
+        )
+
+        self.assertEqual(decision.action, "stop")
+        self.assertEqual(decision.reason, "no-safe-repair-steps")
+        self.assertEqual(decision.terminal_reason, "blocked-primary-support")
+        self.assertEqual(decision.blocker_count, 1)
+
+    def test_decision_repairs_when_at_least_one_safe_step_exists(self) -> None:
+        blocker = Blocker(
+            category="citation",
+            code="missing-footnote",
+            message="Missing footnote.",
+        )
+
+        decision = build_repair_decision(
+            contract=_contract(scopes=("draft", "checklist")),
+            blockers=[blocker],
+            repair_iteration=0,
+        )
+
+        self.assertEqual(decision.action, "repair")
+        self.assertEqual(decision.reason, "repairable-blockers-available")
+        self.assertEqual(decision.repair_iteration, 1)
+        self.assertEqual(decision.blocker_count, 1)
+
+    def test_decision_still_stops_at_max_iterations(self) -> None:
+        blocker = Blocker(category="citation", code="persistent-gap", message="Citation gap remains.")
+
+        decision = build_repair_decision(
+            contract=_contract(scopes=("draft", "checklist"), max_iterations=2),
+            blockers=[blocker],
+            repair_iteration=2,
+        )
+
+        self.assertEqual(decision.action, "stop")
+        self.assertEqual(decision.reason, "repair-limit-reached")
+        self.assertEqual(decision.terminal_reason, "max-repair-iterations")
 
 
 if __name__ == "__main__":

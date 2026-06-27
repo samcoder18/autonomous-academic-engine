@@ -281,10 +281,10 @@ def build_repair_decision(
         )
 
     plan = build_repair_plan(contract=contract, blockers=normalized, repair_iteration=repair_iteration + 1)
-    if not plan.blockers:
+    if not plan.steps:
         return RepairDecision(
             action="stop",
-            reason="no-safe-repairs",
+            reason="no-safe-repair-steps",
             repair_iteration=repair_iteration,
             terminal_reason=determine_terminal_reason(normalized),
             blocker_count=len(normalized),
