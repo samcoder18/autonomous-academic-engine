@@ -16,6 +16,7 @@ from academic_engine.action_specs import (
     RepairPolicy,
     RequiredArtifact,
 )
+from academic_engine.executors import ExecutorUnavailableError, RoleExecutionContext
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
 from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
@@ -404,6 +405,84 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.execution_status, "succeeded")
         self.assertEqual(result.role_runs[0].attempt_count, 2)
         self.assertEqual(attempts["thesis-style-editor"], 2)
+
+    def test_executor_router_receives_trusted_role_context(self) -> None:
+        contexts: list[RoleExecutionContext] = []
+        target = self.target
+        root = self.root
+
+        class RecordingRouter:
+            def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+                contexts.append(context)
+                if context.role_id == "thesis-style-editor":
+                    path = context.sandbox_dir / target.relative_to(root)
+                    path.write_text("# Updated through router\n", encoding="utf-8")
+                _write_role_result(
+                    context.output_file,
+                    prompt,
+                    context.sandbox_dir,
+                    [target.relative_to(root)],
+                    verdict=(
+                        _evaluator_payload("submission-ready")
+                        if context.role_id == "thesis-submission-evaluator"
+                        else None
+                    ),
+                )
+
+        router = RecordingRouter()
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=True,
+            model="test-model",
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(
+            [context.role_id for context in contexts],
+            ["thesis-style-editor", "thesis-submission-evaluator"],
+        )
+        first = contexts[0]
+        self.assertEqual(first.workflow_id, result.workflow_id)
+        self.assertEqual(first.role_run_id, "01-thesis-style-editor")
+        self.assertEqual(first.work_id, "demo")
+        self.assertEqual(first.lane, "thesis")
+        self.assertEqual(first.action, "style-pass")
+        self.assertTrue(first.use_search)
+        self.assertEqual(first.model, "test-model")
+        self.assertFalse(first.is_evaluator)
+        self.assertFalse(first.is_verifier)
+        self.assertFalse(first.is_finalizer)
+        second = contexts[1]
+        self.assertTrue(second.is_evaluator)
+        self.assertFalse(second.is_verifier)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Updated through router\n")
+
+    def test_executor_unavailable_fails_closed_with_stable_blocker(self) -> None:
+        class UnavailableRouter:
+            def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+                raise ExecutorUnavailableError("executor `stub-api` is not available")
+
+        result = WorkflowEngine(self.root, executor_router=UnavailableRouter()).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(result.role_runs[0].attempt_count, 1)
+        self.assertTrue(any(item["code"] == "executor-unavailable" for item in result.blockers))
+        self.assertEqual(result.promotion.status, "blocked")
 
     def test_role_timeout_retries_once_then_fails(self) -> None:
         attempts = 0

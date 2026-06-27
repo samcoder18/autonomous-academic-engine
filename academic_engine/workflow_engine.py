@@ -10,13 +10,22 @@ import tempfile
 import time
 import tomllib
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .action_specs import ExecutionContract
+from .executors import (
+    CallableRoleExecutor,
+    ExecutorRouter,
+    ExecutorUnavailableError,
+    LegacyRoleExecutor,
+    RoleExecutionContext,
+    RoleExecutorProtocol,
+    build_executor_router,
+)
 from .role_result_contract import (
     ROLE_RESULT_VERSION,
     ArtifactRecord,
@@ -41,8 +50,6 @@ READINESS_ORDER = {
     "blocked-runtime": 2,
     "not-evaluated": 3,
 }
-
-RoleExecutor = Callable[[Path, str, Path, bool, str | None], None]
 
 
 @dataclass(frozen=True)
@@ -260,12 +267,20 @@ class WorkflowEngine:
         self,
         root_dir: str | Path,
         *,
-        role_executor: RoleExecutor,
+        executor_router: RoleExecutorProtocol | None = None,
+        role_executor: LegacyRoleExecutor | None = None,
         role_timeout_seconds: int = ROLE_TIMEOUT_SECONDS,
         workflow_timeout_seconds: int = WORKFLOW_TIMEOUT_SECONDS,
     ):
+        if executor_router is not None and role_executor is not None:
+            raise ValueError("Pass either executor_router or role_executor, not both.")
         self.root_dir = Path(root_dir).resolve()
-        self.role_executor = role_executor
+        if executor_router is not None:
+            self.executor_router = executor_router
+        elif role_executor is not None:
+            self.executor_router = ExecutorRouter(default_executor=CallableRoleExecutor(role_executor))
+        else:
+            self.executor_router = build_executor_router()
         self.role_timeout_seconds = role_timeout_seconds
         self.workflow_timeout_seconds = workflow_timeout_seconds
 
@@ -555,10 +570,29 @@ class WorkflowEngine:
             role.attempt_count = attempt
             try:
                 started = time.monotonic()
-                self.role_executor(sandbox_dir, prompt, output_file, use_search, model)
+                context = RoleExecutionContext(
+                    workflow_id=workflow.workflow_id,
+                    role_run_id=role_run_id,
+                    role_id=node.role_id,
+                    work_id=workflow.work_id,
+                    lane=workflow.lane,
+                    action=workflow.action,
+                    sandbox_dir=sandbox_dir,
+                    output_file=output_file,
+                    use_search=use_search,
+                    model=model,
+                    timeout_seconds=self.role_timeout_seconds,
+                    is_evaluator=node.evaluator,
+                    is_verifier=node.role_id in {"thesis-source-verifier", "academic-source-verifier"},
+                    is_finalizer=node.finalizer,
+                )
+                self.executor_router.execute(context, prompt)
                 if time.monotonic() - started > self.role_timeout_seconds:
                     raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
                 error = None
+                break
+            except ExecutorUnavailableError as exc:
+                error = exc
                 break
             except (OSError, TimeoutError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 error = exc
@@ -580,7 +614,10 @@ class WorkflowEngine:
         if error is not None:
             role.status = "failed"
             role.error = str(error)
-            role.blockers.append(_runtime_blocker("role-execution-failed", f"{node.role_id}: {error}"))
+            if isinstance(error, ExecutorUnavailableError):
+                role.blockers.append(_runtime_blocker("executor-unavailable", f"{node.role_id}: {error}"))
+            else:
+                role.blockers.append(_runtime_blocker("role-execution-failed", f"{node.role_id}: {error}"))
         else:
             role_result, result_blockers = _parse_role_result(
                 output_file,
