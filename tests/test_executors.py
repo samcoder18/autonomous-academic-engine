@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from academic_engine.executors import (
     CallableRoleExecutor,
+    CodexCliExecutor,
     ExecutorRouter,
     ExecutorUnavailableError,
     RoleExecutionContext,
@@ -184,9 +185,10 @@ class ExecutorTests(unittest.TestCase):
 
     def test_empty_environment_uses_codex_cli_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            router = build_executor_router()
+            router = build_executor_router({})
 
         self.assertIsInstance(router, ExecutorRouter)
+        self.assertIsInstance(router.default_executor, CodexCliExecutor)
 
 
 if __name__ == "__main__":

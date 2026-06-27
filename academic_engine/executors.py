@@ -143,7 +143,6 @@ class ExecutorRouter:
 
 
 def build_executor_router(
-    *,
     environ: Mapping[str, str] | None = None,
     registry: Mapping[str, RoleExecutorProtocol] | None = None,
 ) -> ExecutorRouter:
