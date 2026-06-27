@@ -120,30 +120,93 @@ class RepairOutcome:
 
 
 SOURCE_REPAIR_CATEGORIES = {"dynamic-material", "primary-support", "source", "verification"}
+CITATION_REPAIR_CATEGORIES = {"citation"}
+LOGIC_REPAIR_CATEGORIES = {"logic", "review"}
+STANDARDS_REPAIR_CATEGORIES = {"standards", "standards-consistency"}
+STYLE_REPAIR_CATEGORIES = {"style"}
+
 SOURCE_SCOPE_NAMES = ("evidence", "ledger", "source", "sync", "requested-target", "canonical-target", "target")
+CITATION_SCOPE_NAMES = ("draft", "final-markdown", "checklist", "review", "ledger", "requested-target", "target")
+LOGIC_SCOPE_NAMES = ("draft", "final-markdown", "review", "checklist", "canonical-target", "requested-target", "target")
+STANDARDS_SCOPE_NAMES = ("checklist", "final-markdown", "docx", "standards", "requested-target", "target")
+STYLE_SCOPE_NAMES = ("draft", "final-markdown", "canonical-target", "full-draft", "requested-target", "target")
 
 
-def _role_for_source(lane: str) -> str:
-    return "thesis-source-verifier" if lane == "thesis" else "academic-source-verifier"
+@dataclass(frozen=True)
+class _RepairRoute:
+    assigned_role: str
+    rerun_gate: str
+    preferred_scope_names: tuple[str, ...]
+    stop_condition: str
+    reason: str
+    safe: bool = True
+
+
+def _route_for_blocker(*, lane: str, category: str) -> _RepairRoute | None:
+    if category in RUNTIME_BLOCKER_CATEGORIES:
+        return None
+    if category in SOURCE_REPAIR_CATEGORIES:
+        return _RepairRoute(
+            assigned_role="thesis-source-verifier" if lane == "thesis" else "academic-source-verifier",
+            rerun_gate="source-verification",
+            preferred_scope_names=SOURCE_SCOPE_NAMES,
+            stop_condition="blocker-cleared-or-reroute-required",
+            reason="Primary support blockers require verifier evidence before drafting or finalization.",
+        )
+    if category in CITATION_REPAIR_CATEGORIES:
+        return _RepairRoute(
+            assigned_role="thesis-citation-checker" if lane == "thesis" else "academic-citation-checker",
+            rerun_gate="citation-check",
+            preferred_scope_names=CITATION_SCOPE_NAMES,
+            stop_condition="blocker-cleared-or-reroute-required",
+            reason="Citation blockers require a citation check before evaluator promotion.",
+        )
+    if category in LOGIC_REPAIR_CATEGORIES:
+        return _RepairRoute(
+            assigned_role="thesis-argument-critic" if lane == "thesis" else "academic-counterargument-critic",
+            rerun_gate="argument-review",
+            preferred_scope_names=LOGIC_SCOPE_NAMES,
+            stop_condition="blocker-cleared-or-reroute-required",
+            reason="Logic and review blockers require a critic pass before evaluator promotion.",
+        )
+    if category in STANDARDS_REPAIR_CATEGORIES:
+        return _RepairRoute(
+            assigned_role="thesis-submission-evaluator" if lane == "thesis" else "academic-finalizer",
+            rerun_gate="standards-check",
+            preferred_scope_names=STANDARDS_SCOPE_NAMES,
+            stop_condition="blocker-cleared-or-downgrade-preserved",
+            reason="Standards blockers must remain visible until the checklist or gate confirms resolution.",
+        )
+    if category in STYLE_REPAIR_CATEGORIES:
+        return _RepairRoute(
+            assigned_role="thesis-style-editor" if lane == "thesis" else "academic-draft-writer",
+            rerun_gate="style-review",
+            preferred_scope_names=STYLE_SCOPE_NAMES,
+            stop_condition="blocker-cleared-or-reroute-required",
+            reason="Style blockers may be repaired only when the contract allows non-safe repair.",
+            safe=False,
+        )
+    return None
 
 
 def _build_repair_steps(*, contract: ExecutionContract, blockers: tuple[Blocker, ...]) -> tuple[RepairStep, ...]:
     steps: list[RepairStep] = []
     for blocker in blockers:
-        if blocker.category not in SOURCE_REPAIR_CATEGORIES:
+        route = _route_for_blocker(lane=contract.lane, category=blocker.category)
+        if route is None:
             continue
-        scopes = _matching_write_scopes(contract.allowed_write_scopes, SOURCE_SCOPE_NAMES)
+        scopes = _matching_write_scopes(contract.allowed_write_scopes, route.preferred_scope_names)
         if not scopes:
             continue
         steps.append(
             RepairStep(
                 blocker=blocker,
-                assigned_role=_role_for_source(contract.lane),
+                assigned_role=route.assigned_role,
                 allowed_write_scopes=scopes,
-                rerun_gate="source-verification",
-                stop_condition="blocker-cleared-or-reroute-required",
-                safe=True,
-                reason="Primary support blockers require verifier evidence before drafting or finalization.",
+                rerun_gate=route.rerun_gate,
+                stop_condition=route.stop_condition,
+                safe=route.safe,
+                reason=route.reason,
             )
         )
     return tuple(steps)

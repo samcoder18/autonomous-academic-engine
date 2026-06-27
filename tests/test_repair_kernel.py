@@ -79,6 +79,86 @@ class RepairKernelStepRoutingTests(unittest.TestCase):
         self.assertEqual(payload["blockers"][0]["code"], "unsupported-claim")
         self.assertEqual(payload["focus_areas"], ["primary-support"])
 
+    def test_citation_blocker_routes_to_citation_checker(self) -> None:
+        blocker = Blocker(category="citation", code="missing-footnote", message="Missing footnote.")
+
+        plan = build_repair_plan(
+            contract=_contract(scopes=("draft", "checklist", "review")),
+            blockers=[blocker],
+            repair_iteration=1,
+        )
+
+        self.assertEqual(len(plan.steps), 1)
+        step = plan.steps[0]
+        self.assertEqual(step.assigned_role, "academic-citation-checker")
+        self.assertEqual(step.rerun_gate, "citation-check")
+        self.assertEqual([scope.name for scope in step.allowed_write_scopes], ["draft", "checklist", "review"])
+
+    def test_logic_blocker_routes_to_counterargument_critic(self) -> None:
+        blocker = Blocker(category="logic", code="overclaim", message="Conclusion overstates support.")
+
+        plan = build_repair_plan(
+            contract=_contract(scopes=("draft", "final-markdown", "review")),
+            blockers=[blocker],
+            repair_iteration=1,
+        )
+
+        self.assertEqual(len(plan.steps), 1)
+        step = plan.steps[0]
+        self.assertEqual(step.assigned_role, "academic-counterargument-critic")
+        self.assertEqual(step.rerun_gate, "argument-review")
+
+    def test_standards_blocker_routes_to_finalizer_when_not_safe_only(self) -> None:
+        blocker = Blocker(
+            category="standards-consistency",
+            code="missing-format-profile",
+            message="Formatting profile is incomplete.",
+        )
+
+        plan = build_repair_plan(
+            contract=_contract(scopes=("checklist", "final-markdown", "docx")),
+            blockers=[blocker],
+            repair_iteration=1,
+        )
+
+        self.assertEqual(len(plan.steps), 1)
+        step = plan.steps[0]
+        self.assertEqual(step.assigned_role, "academic-finalizer")
+        self.assertEqual(step.rerun_gate, "standards-check")
+
+    def test_safe_only_filters_style_and_standards_steps(self) -> None:
+        blockers = [
+            Blocker(category="style", code="flat-prose", message="Style needs polish."),
+            Blocker(category="standards", code="formatting-gap", message="Formatting profile is incomplete."),
+        ]
+
+        plan = build_repair_plan(
+            contract=_contract(scopes=("draft", "checklist"), safe_only=True),
+            blockers=blockers,
+            repair_iteration=1,
+        )
+
+        self.assertEqual(plan.steps, ())
+        self.assertEqual(plan.blockers, ())
+        self.assertEqual(plan.focus_areas, ())
+
+    def test_unrepairable_blocker_does_not_create_step(self) -> None:
+        blocker = Blocker(
+            category="citation",
+            code="missing-source",
+            message="Citation source is unavailable.",
+            repairable=False,
+        )
+
+        plan = build_repair_plan(
+            contract=_contract(scopes=("draft", "checklist")),
+            blockers=[blocker],
+            repair_iteration=1,
+        )
+
+        self.assertEqual(plan.steps, ())
+        self.assertEqual(plan.blockers, ())
+
 
 if __name__ == "__main__":
     unittest.main()
