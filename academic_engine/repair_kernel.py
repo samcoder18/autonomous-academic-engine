@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .action_specs import ExecutionContract
+from .action_specs import AllowedWriteScope, ExecutionContract
 
 RUNTIME_BLOCKER_CATEGORIES = {"artifact", "codex", "external", "process", "runtime"}
 PRIMARY_SUPPORT_CATEGORIES = {"citation", "dynamic-material", "primary-support", "verification"}
@@ -56,6 +56,28 @@ class RepairDecision:
 
 
 @dataclass(frozen=True)
+class RepairStep:
+    blocker: Blocker
+    assigned_role: str
+    allowed_write_scopes: tuple[AllowedWriteScope, ...]
+    rerun_gate: str
+    stop_condition: str
+    safe: bool
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "blocker": self.blocker.to_dict(),
+            "assigned_role": self.assigned_role,
+            "allowed_write_scopes": [item.to_dict() for item in self.allowed_write_scopes],
+            "rerun_gate": self.rerun_gate,
+            "stop_condition": self.stop_condition,
+            "safe": self.safe,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
 class RepairPlan:
     lane: str
     action: str
@@ -64,6 +86,7 @@ class RepairPlan:
     focus_areas: tuple[str, ...]
     safe_only: bool
     max_iterations: int
+    steps: tuple[RepairStep, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +97,7 @@ class RepairPlan:
             "focus_areas": list(self.focus_areas),
             "safe_only": self.safe_only,
             "max_iterations": self.max_iterations,
+            "steps": [item.to_dict() for item in self.steps],
         }
 
 
@@ -95,6 +119,48 @@ class RepairOutcome:
         }
 
 
+SOURCE_REPAIR_CATEGORIES = {"dynamic-material", "primary-support", "source", "verification"}
+SOURCE_SCOPE_NAMES = ("evidence", "ledger", "source", "sync", "requested-target", "canonical-target", "target")
+
+
+def _role_for_source(lane: str) -> str:
+    return "thesis-source-verifier" if lane == "thesis" else "academic-source-verifier"
+
+
+def _build_repair_steps(*, contract: ExecutionContract, blockers: tuple[Blocker, ...]) -> tuple[RepairStep, ...]:
+    steps: list[RepairStep] = []
+    for blocker in blockers:
+        if blocker.category not in SOURCE_REPAIR_CATEGORIES:
+            continue
+        scopes = _matching_write_scopes(contract.allowed_write_scopes, SOURCE_SCOPE_NAMES)
+        if not scopes:
+            continue
+        steps.append(
+            RepairStep(
+                blocker=blocker,
+                assigned_role=_role_for_source(contract.lane),
+                allowed_write_scopes=scopes,
+                rerun_gate="source-verification",
+                stop_condition="blocker-cleared-or-reroute-required",
+                safe=True,
+                reason="Primary support blockers require verifier evidence before drafting or finalization.",
+            )
+        )
+    return tuple(steps)
+
+
+def _matching_write_scopes(
+    scopes: tuple[AllowedWriteScope, ...],
+    preferred_names: tuple[str, ...],
+) -> tuple[AllowedWriteScope, ...]:
+    matches: list[AllowedWriteScope] = []
+    for scope in scopes:
+        name = scope.name.lower()
+        if any(preferred in name for preferred in preferred_names):
+            matches.append(scope)
+    return tuple(matches)
+
+
 def build_repair_plan(
     *,
     contract: ExecutionContract,
@@ -106,6 +172,7 @@ def build_repair_plan(
     if contract.repair_policy.safe_only:
         repairable = tuple(item for item in repairable if item.category in SAFE_REPAIR_CATEGORIES)
     focus_areas = tuple(dict.fromkeys(item.category for item in repairable))
+    steps = _build_repair_steps(contract=contract, blockers=repairable)
     return RepairPlan(
         lane=contract.lane,
         action=contract.action,
@@ -114,6 +181,7 @@ def build_repair_plan(
         focus_areas=focus_areas,
         safe_only=contract.repair_policy.safe_only,
         max_iterations=contract.repair_policy.max_iterations,
+        steps=steps,
     )
 
 
