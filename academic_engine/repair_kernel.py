@@ -176,6 +176,7 @@ def _route_for_blocker(*, lane: str, category: str) -> _RepairRoute | None:
             preferred_scope_names=STANDARDS_SCOPE_NAMES,
             stop_condition="blocker-cleared-or-downgrade-preserved",
             reason="Standards blockers must remain visible until the checklist or gate confirms resolution.",
+            safe=False,
         )
     if category in STYLE_REPAIR_CATEGORIES:
         return _RepairRoute(

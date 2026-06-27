@@ -84,6 +84,33 @@ class RepairKernelStepRoutingTests(unittest.TestCase):
         self.assertEqual(payload["blockers"][0]["code"], "unsupported-claim")
         self.assertEqual(payload["focus_areas"], ["primary-support"])
 
+    def test_primary_support_blocker_without_matching_scope_builds_no_steps(self) -> None:
+        blocker = Blocker(
+            category="primary-support",
+            code="unsupported-claim",
+            message="Strong claim is missing primary support.",
+            repairable=True,
+            blocks_statuses=("submission-ready",),
+        )
+
+        plan = build_repair_plan(contract=_contract(scopes=("article-root",)), blockers=[blocker], repair_iteration=1)
+
+        self.assertEqual(plan.steps, ())
+
+    def test_source_repair_step_matches_scope_names_case_insensitively(self) -> None:
+        blocker = Blocker(
+            category="primary-support",
+            code="unsupported-claim",
+            message="Strong claim is missing primary support.",
+            repairable=True,
+            blocks_statuses=("submission-ready",),
+        )
+
+        plan = build_repair_plan(contract=_contract(scopes=("Evidence-Pack",)), blockers=[blocker], repair_iteration=1)
+
+        self.assertEqual(len(plan.steps), 1)
+        self.assertEqual([scope.name for scope in plan.steps[0].allowed_write_scopes], ["Evidence-Pack"])
+
     def test_citation_blocker_routes_to_citation_checker(self) -> None:
         blocker = Blocker(category="citation", code="missing-footnote", message="Missing footnote.")
 
@@ -130,6 +157,7 @@ class RepairKernelStepRoutingTests(unittest.TestCase):
         step = plan.steps[0]
         self.assertEqual(step.assigned_role, "academic-finalizer")
         self.assertEqual(step.rerun_gate, "standards-check")
+        self.assertFalse(step.safe)
 
     def test_safe_only_filters_style_and_standards_steps(self) -> None:
         blockers = [
