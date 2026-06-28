@@ -54,6 +54,7 @@ from academic_engine.autonomous_scheduler import (
     start_multi_work_daemon_process,
 )
 from academic_engine.contract_gates import evaluate_contract_gates
+from academic_engine.executors import CallableRoleExecutor, ExecutorRouter
 from academic_engine.finalization_engine import evaluate_article_finalization
 from academic_engine.guarded_prose import load_guarded_prose_rules
 from academic_engine.one_shot import ONE_SHOT_REPORT_VERSION
@@ -5217,6 +5218,36 @@ class ArticleBundleLifecycleTests(unittest.TestCase):
         self.assertFalse(payload["bundle_files"]["draft"]["exists"])
         self.assertIn("Saved article bundle state", stdout.getvalue())
 
+    def test_launch_academic_explicit_unknown_evaluator_executor_fails_closed(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+        env = {
+            "CODEX_BIN": str(self.fake_codex),
+            "ACADEMIC_ENGINE_EVALUATOR_EXECUTOR": "missing-executor",
+        }
+
+        with patch.dict(os.environ, env, clear=False):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "launch-academic",
+                        "review",
+                        "articles/drafts/demo.md",
+                        "--no-search",
+                        "--workflow-id",
+                        "worker-unknown-executor-test",
+                    ],
+                    root_dir=self.root,
+                )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr.getvalue(), "")
+        workflow_path = self.root / "output" / "runs" / "worker-unknown-executor-test" / "workflow.json"
+        self.assertTrue(workflow_path.exists())
+        payload = json.loads(workflow_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["execution_status"], "failed")
+        self.assertTrue(any(item["code"] == "executor-unavailable" for item in payload["blockers"]))
+
     def test_article_bundle_status_reads_manifest_and_lists_manifest_only_slug(self) -> None:
         runs_dir = self.root / TEST_WORK_ROOT / "articles" / "runs"
         runs_dir.mkdir(parents=True, exist_ok=True)
@@ -5403,7 +5434,8 @@ class WorkCliTests(unittest.TestCase):
             ) -> None:
                 write_fake_role_result(sandbox, prompt, out_file)
 
-            with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
+            router = ExecutorRouter(default_executor=CallableRoleExecutor(fake_run_codex))
+            with patch.object(work_cli_module, "build_executor_router", return_value=router):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -5526,7 +5558,8 @@ class WorkCliTests(unittest.TestCase):
             ) -> None:
                 write_fake_role_result(sandbox, prompt, out_file)
 
-            with patch.object(work_cli_module, "_run_codex", side_effect=fake_run_codex):
+            router = ExecutorRouter(default_executor=CallableRoleExecutor(fake_run_codex))
+            with patch.object(work_cli_module, "build_executor_router", return_value=router):
                 stdout = StringIO()
                 stderr = StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):

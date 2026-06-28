@@ -33,6 +33,7 @@ from .engine_service import (
     RetryJobRequest,
     SubmitWorkflowJobRequest,
 )
+from .executors import build_executor_router
 from .job_queue import JobQueueError
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .orchestrator_support import WorkflowError
@@ -49,7 +50,7 @@ from .utils import resolve_executable
 from .work_bootstrap import ALL_ARTIFACT_TYPES, WorkBootstrapError
 from .work_cli_autonomous import handle_autonomous_cli
 from .work_state import format_work_state_summary
-from .workflow_engine import ROLE_TIMEOUT_SECONDS, WorkflowEngine
+from .workflow_engine import WorkflowEngine
 from .workspace import (
     TargetResolution,
     WorkConfig,
@@ -1958,7 +1959,7 @@ def _run_role_workflow(
     model: str | None,
     metadata: dict[str, Any],
 ) -> Any:
-    engine = WorkflowEngine(root_dir, role_executor=_run_codex)
+    engine = WorkflowEngine(root_dir, executor_router=build_executor_router())
     return engine.run(
         workflow_id=workflow_id,
         work_id=work.slug,
@@ -2025,44 +2026,6 @@ def _copy_workflow_output(workflow_run: Any, destination: Path) -> None:
     )
 
 
-def _run_codex(root_dir: Path, prompt: str, out_file: Path, use_search: bool, model: str | None) -> None:
-    codex_bin = _resolve_codex_bin()
-    cmd = [codex_bin]
-    if use_search:
-        cmd.append("--search")
-    cmd.extend(["exec", "-C", str(root_dir), "--skip-git-repo-check", "--full-auto", "-o", str(out_file)])
-    chosen_model = model or os.environ.get("CODEX_MODEL")
-    if chosen_model:
-        cmd.extend(["-m", chosen_model])
-    try:
-        subprocess.run(
-            cmd + ["-"],
-            input=prompt,
-            text=True,
-            check=True,
-            timeout=ROLE_TIMEOUT_SECONDS,
-        )
-    except FileNotFoundError:
-        print(
-            f"Ошибка: не найден исполняемый файл `{codex_bin}`. "
-            "Установите Codex CLI или задайте переменную окружения CODEX_BIN.",
-            file=sys.stderr,
-        )
-        raise
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"Ошибка: команда Codex завершилась с кодом {exc.returncode}. См. вывод процесса выше.",
-            file=sys.stderr,
-        )
-        raise
-    except subprocess.TimeoutExpired:
-        print(
-            f"Ошибка: роль Codex превысила timeout {ROLE_TIMEOUT_SECONDS} секунд.",
-            file=sys.stderr,
-        )
-        raise
-
-
 def _run_pandoc(input_md: Path, output_docx: Path) -> None:
     pandoc_bin = _resolve_pandoc_bin()
     if pandoc_bin is None:
@@ -2092,24 +2055,6 @@ def _resolve_pandoc_bin() -> str | None:
         "pandoc",
         extra_candidates=("/opt/homebrew/bin/pandoc", "/usr/local/bin/pandoc"),
     )
-
-
-def _resolve_codex_bin() -> str:
-    configured = os.environ.get("CODEX_BIN")
-    resolved = resolve_executable(
-        configured,
-        "codex",
-        extra_candidates=("/Applications/Codex.app/Contents/Resources/codex",),
-    )
-    if resolved:
-        return resolved
-    requested = (configured or "codex").strip() or "codex"
-    print(
-        f"Ошибка: не найден исполняемый файл `{requested}`. "
-        "Установите Codex CLI или задайте переменную окружения CODEX_BIN.",
-        file=sys.stderr,
-    )
-    raise FileNotFoundError(requested)
 
 
 def _read_notes(root_dir: Path, raw: str | None) -> str:
