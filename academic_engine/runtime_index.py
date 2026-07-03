@@ -5,6 +5,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .orchestrator import WorkflowOrchestrator
+from .runtime_status import RuntimeRecord, load_runtime_record
+from .state import RuntimeStore
 from .utils import utc_now
 from .workspace import load_workspace_config, resolve_work_config
 
@@ -74,6 +77,33 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 """
 
+WORK_INSERT_SQL = """
+INSERT INTO works (
+  work_id, title, artifact_type, active_lanes_json, status, known_blocker_count,
+  suggested_next_action_json, work_state_json, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+RUN_INSERT_SQL = """
+INSERT INTO runs (
+  record_id, workflow_id, work_id, lane, action, status, stage, readiness_status,
+  promotion_status, started_at, finished_at, summary, runtime_dir, status_path, source, record_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+BLOCKER_INSERT_SQL = """
+INSERT INTO blockers (
+  blocker_id, work_id, run_record_id, lane, category, code, message, repairable,
+  blocks_statuses_json, source, details_json, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+ARTIFACT_INSERT_SQL = """
+INSERT INTO artifacts (
+  artifact_id, work_id, run_record_id, lane, artifact_type, path, "exists", source, metadata_json, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
 
 def runtime_index_path(root_dir: str | Path) -> Path:
     return Path(root_dir).expanduser().resolve() / "output" / "runtime" / RUNTIME_INDEX_FILENAME
@@ -92,92 +122,480 @@ class RuntimeIndex:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         refreshed_at = utc_now()
         workspace = load_workspace_config(self.root_dir)
+        store = RuntimeStore(self.root_dir)
+        orchestrator = WorkflowOrchestrator(self.root_dir, store=store)
 
-        works_indexed = 0
+        work_rows: list[tuple[Any, ...]] = []
+        blocker_rows: list[tuple[Any, ...]] = []
+        artifact_rows: list[tuple[Any, ...]] = []
+        for work_id in sorted(workspace.works):
+            work = resolve_work_config(workspace, work_id=work_id)
+            work_state = orchestrator.get_work_state(work_id=work.slug)
+            work_rows.append(_work_row(work, work_state, refreshed_at))
+            blocker_rows.extend(_work_blocker_rows(work.slug, work_state, refreshed_at))
+            artifact_rows.extend(_work_artifact_rows(work.slug, work_state, refreshed_at))
+
+        runtime_records = [
+            record
+            for run_dir in store.list_run_dirs()
+            if (record := load_runtime_record(run_dir, "workflow-run")) is not None
+        ]
+        run_rows = [_run_row(record) for record in runtime_records]
+        for record in runtime_records:
+            blocker_rows.extend(_runtime_blocker_rows(record, refreshed_at))
+            artifact_rows.extend(_runtime_artifact_rows(record, refreshed_at))
+
+        counts: dict[str, int]
         with sqlite3.connect(self.index_path) as conn:
             conn.executescript(SCHEMA_SQL)
             for table in ("index_metadata", "works", "runs", "blockers", "artifacts"):
                 conn.execute(f"DELETE FROM {table}")
-
-            for work_id in sorted(workspace.works):
-                work = resolve_work_config(workspace, work_id=work_id)
-                conn.execute(
-                    """
-                    INSERT INTO works (
-                      work_id,
-                      title,
-                      artifact_type,
-                      active_lanes_json,
-                      status,
-                      known_blocker_count,
-                      suggested_next_action_json,
-                      work_state_json,
-                      updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        work.slug,
-                        work.title,
-                        work.artifact_type,
-                        _json(list(work.active_lanes)),
-                        "indexed",
-                        0,
-                        _json(None),
-                        _json({}),
-                        refreshed_at,
-                    ),
-                )
-                works_indexed += 1
-
-            metadata = {
-                "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
-                "refreshed_at": refreshed_at,
-                "works_indexed": str(works_indexed),
-                "runs_indexed": "0",
-                "blockers_indexed": "0",
-                "artifacts_indexed": "0",
+            conn.executemany(WORK_INSERT_SQL, work_rows)
+            conn.executemany(RUN_INSERT_SQL, run_rows)
+            conn.executemany(BLOCKER_INSERT_SQL, blocker_rows)
+            conn.executemany(ARTIFACT_INSERT_SQL, artifact_rows)
+            counts = {
+                "works_indexed": _table_count(conn, "works"),
+                "runs_indexed": _table_count(conn, "runs"),
+                "blockers_indexed": _table_count(conn, "blockers"),
+                "artifacts_indexed": _table_count(conn, "artifacts"),
             }
-            conn.executemany(
-                "INSERT INTO index_metadata (key, value) VALUES (?, ?)",
-                sorted(metadata.items()),
-            )
+            _write_metadata(conn, refreshed_at=refreshed_at, counts=counts)
 
-        return {
-            "kind": "runtime-index-refresh",
-            "version": RUNTIME_INDEX_VERSION,
-            "status": "refreshed",
-            "index_path": str(self.index_path),
-            "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
-            "refreshed_at": refreshed_at,
-            "works_indexed": works_indexed,
-            "runs_indexed": 0,
-            "blockers_indexed": 0,
-            "artifacts_indexed": 0,
-        }
+        return _refresh_payload(self.index_path, refreshed_at=refreshed_at, counts=counts)
 
     def get_index(self, *, work_id: str | None = None, limit: int = 20) -> dict[str, Any]:
         if not self.index_path.exists():
+            return _missing_payload(self.index_path)
+        with sqlite3.connect(self.index_path) as conn:
+            conn.row_factory = sqlite3.Row
+            metadata = _metadata(conn)
             return {
                 "kind": "runtime-index",
                 "version": RUNTIME_INDEX_VERSION,
-                "status": "missing",
+                "status": "ready",
                 "index_path": str(self.index_path),
-                "schema_version": None,
-                "refreshed_at": None,
-                "works": [],
-                "recent_runs": [],
-                "blockers": [],
-                "artifacts": [],
+                "schema_version": metadata.get("schema_version"),
+                "refreshed_at": metadata.get("refreshed_at"),
+                "works": _select_works(conn, work_id),
+                "recent_runs": _select_runs(conn, work_id, limit),
+                "blockers": _select_blockers(conn, work_id),
+                "artifacts": _select_artifacts(conn, work_id, limit),
             }
-        return {
-            "kind": "runtime-index",
-            "version": RUNTIME_INDEX_VERSION,
-            "status": "ready",
-            "index_path": str(self.index_path),
-            "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
-            "refreshed_at": None,
-            "works": [],
-            "recent_runs": [],
-            "blockers": [],
-            "artifacts": [],
+
+
+def _work_row(work: Any, work_state: dict[str, Any], refreshed_at: str) -> tuple[Any, ...]:
+    return (
+        work.slug,
+        work.title,
+        work.artifact_type,
+        _json(list(work.active_lanes)),
+        _work_status(work_state),
+        int(work_state.get("known_blocker_count") or 0),
+        _json(work_state.get("suggested_next_action")),
+        _json(work_state),
+        refreshed_at,
+    )
+
+
+def _work_status(work_state: dict[str, Any]) -> str:
+    runtime = work_state.get("runtime") if isinstance(work_state.get("runtime"), dict) else {}
+    active_run = runtime.get("active_run") if isinstance(runtime, dict) else None
+    if isinstance(active_run, dict):
+        return "running"
+    return "blocked" if int(work_state.get("known_blocker_count") or 0) else "ready"
+
+
+def _run_row(record: RuntimeRecord) -> tuple[Any, ...]:
+    return (
+        record.record_id,
+        record.workflow_id,
+        record.work_id,
+        record.lane,
+        record.action,
+        record.status,
+        record.stage,
+        record.readiness_status,
+        record.promotion_status,
+        record.started_at,
+        record.finished_at,
+        record.summary,
+        record.runtime_dir,
+        record.status_path,
+        record.source,
+        _json(record.to_dict()),
+    )
+
+
+def _blocker_row(
+    *,
+    blocker_id: str,
+    work_id: str | None,
+    run_record_id: str | None,
+    lane: str | None,
+    blocker: dict[str, Any],
+    source: str,
+    created_at: str | None,
+) -> tuple[Any, ...]:
+    blocks_statuses = blocker.get("blocks_statuses")
+    if not isinstance(blocks_statuses, list):
+        blocks_statuses = []
+    return (
+        blocker_id,
+        work_id,
+        run_record_id,
+        lane,
+        _text(blocker.get("category")),
+        _text(blocker.get("code")),
+        _text(blocker.get("message")),
+        1 if blocker.get("repairable") else 0,
+        _json(blocks_statuses),
+        source,
+        _json(blocker),
+        created_at,
+    )
+
+
+def _work_blocker_rows(
+    work_id: str,
+    work_state: dict[str, Any],
+    refreshed_at: str,
+) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    known_blockers = work_state.get("known_blockers")
+    if not isinstance(known_blockers, list):
+        return rows
+    for index, blocker in enumerate(known_blockers):
+        if not isinstance(blocker, dict):
+            continue
+        category = _text(blocker.get("category")) or "unknown"
+        code = _text(blocker.get("code")) or "unknown"
+        rows.append(
+            _blocker_row(
+                blocker_id=f"work:{work_id}:{index}:{category}:{code}",
+                work_id=work_id,
+                run_record_id=_text(blocker.get("record_id")),
+                lane=_text(blocker.get("lane")),
+                blocker=blocker,
+                source="work-state",
+                created_at=refreshed_at,
+            )
+        )
+    return rows
+
+
+def _runtime_blocker_rows(record: RuntimeRecord, refreshed_at: str) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    for index, blocker in enumerate(record.blockers):
+        if not isinstance(blocker, dict):
+            continue
+        category = _text(blocker.get("category")) or "unknown"
+        code = _text(blocker.get("code")) or "unknown"
+        rows.append(
+            _blocker_row(
+                blocker_id=f"run:{record.record_id}:{index}:{category}:{code}",
+                work_id=record.work_id,
+                run_record_id=record.record_id,
+                lane=record.lane,
+                blocker=blocker,
+                source="runtime-record",
+                created_at=record.finished_at or record.started_at or refreshed_at,
+            )
+        )
+    return rows
+
+
+def _runtime_artifact_rows(record: RuntimeRecord, refreshed_at: str) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    for name, payload in sorted(record.attachments.items()):
+        if not isinstance(payload, dict):
+            continue
+        raw_path = _text(payload.get("path"))
+        if not raw_path:
+            continue
+        rows.append(
+            (
+                f"run:{record.record_id}:{name}",
+                record.work_id,
+                record.record_id,
+                record.lane,
+                name,
+                raw_path,
+                1 if payload.get("exists") else 0,
+                "runtime-attachment",
+                _json(payload),
+                refreshed_at,
+            )
+        )
+    return rows
+
+
+def _work_artifact_rows(work_id: str, work_state: dict[str, Any], refreshed_at: str) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    for index, item in enumerate(_artifact_dicts(work_state)):
+        path = _text(item.get("path"))
+        if not path:
+            continue
+        lane = _text(item.get("lane"))
+        artifact_type = _text(item.get("artifact_id")) or _text(item.get("kind")) or "work-artifact"
+        rows.append(
+            (
+                f"work:{work_id}:{index}:{path}",
+                work_id,
+                None,
+                lane,
+                artifact_type,
+                path,
+                1 if item.get("exists") else 0,
+                "work-state",
+                _json(item),
+                refreshed_at,
+            )
+        )
+    return rows
+
+
+def _artifact_dicts(value: Any) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        if "path" in value:
+            items.append(value)
+        for child in value.values():
+            items.extend(_artifact_dicts(child))
+    elif isinstance(value, list):
+        for child in value:
+            items.extend(_artifact_dicts(child))
+    return items
+
+
+def _metadata(conn: sqlite3.Connection) -> dict[str, str]:
+    return {str(row["key"]): str(row["value"]) for row in conn.execute("SELECT key, value FROM index_metadata")}
+
+
+def _write_metadata(conn: sqlite3.Connection, *, refreshed_at: str, counts: dict[str, int]) -> None:
+    metadata = {
+        "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
+        "refreshed_at": refreshed_at,
+        **{key: str(value) for key, value in counts.items()},
+    }
+    conn.executemany(
+        "INSERT INTO index_metadata (key, value) VALUES (?, ?)",
+        sorted(metadata.items()),
+    )
+
+
+def _refresh_payload(index_path: Path, *, refreshed_at: str, counts: dict[str, int]) -> dict[str, Any]:
+    return {
+        "kind": "runtime-index-refresh",
+        "version": RUNTIME_INDEX_VERSION,
+        "status": "refreshed",
+        "index_path": str(index_path),
+        "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
+        "refreshed_at": refreshed_at,
+        "works_indexed": counts["works_indexed"],
+        "runs_indexed": counts["runs_indexed"],
+        "blockers_indexed": counts["blockers_indexed"],
+        "artifacts_indexed": counts["artifacts_indexed"],
+    }
+
+
+def _missing_payload(index_path: Path) -> dict[str, Any]:
+    return {
+        "kind": "runtime-index",
+        "version": RUNTIME_INDEX_VERSION,
+        "status": "missing",
+        "index_path": str(index_path),
+        "schema_version": None,
+        "refreshed_at": None,
+        "works": [],
+        "recent_runs": [],
+        "blockers": [],
+        "artifacts": [],
+    }
+
+
+def _select_works(conn: sqlite3.Connection, work_id: str | None) -> list[dict[str, Any]]:
+    if work_id:
+        rows = conn.execute(
+            """
+            SELECT work_id, title, artifact_type, active_lanes_json, status, known_blocker_count,
+                   suggested_next_action_json, work_state_json, updated_at
+            FROM works
+            WHERE work_id = ?
+            ORDER BY work_id
+            """,
+            (work_id,),
+        )
+    else:
+        rows = conn.execute(
+            """
+            SELECT work_id, title, artifact_type, active_lanes_json, status, known_blocker_count,
+                   suggested_next_action_json, work_state_json, updated_at
+            FROM works
+            ORDER BY work_id
+            """
+        )
+    return [
+        {
+            "work_id": row["work_id"],
+            "title": row["title"],
+            "artifact_type": row["artifact_type"],
+            "active_lanes": _load_json(row["active_lanes_json"], []),
+            "status": row["status"],
+            "known_blocker_count": row["known_blocker_count"],
+            "suggested_next_action": _load_json(row["suggested_next_action_json"], None),
+            "work_state": _load_json(row["work_state_json"], {}),
+            "updated_at": row["updated_at"],
         }
+        for row in rows
+    ]
+
+
+def _select_runs(conn: sqlite3.Connection, work_id: str | None, limit: int) -> list[dict[str, Any]]:
+    safe_limit = max(0, int(limit))
+    if work_id:
+        rows = conn.execute(
+            """
+            SELECT record_id, workflow_id, work_id, lane, action, status, stage, readiness_status,
+                   promotion_status, started_at, finished_at, summary, runtime_dir, status_path, source, record_json
+            FROM runs
+            WHERE work_id = ?
+            ORDER BY COALESCE(finished_at, started_at, '') DESC, record_id DESC
+            LIMIT ?
+            """,
+            (work_id, safe_limit),
+        )
+    else:
+        rows = conn.execute(
+            """
+            SELECT record_id, workflow_id, work_id, lane, action, status, stage, readiness_status,
+                   promotion_status, started_at, finished_at, summary, runtime_dir, status_path, source, record_json
+            FROM runs
+            ORDER BY COALESCE(finished_at, started_at, '') DESC, record_id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
+    return [
+        {
+            "record_id": row["record_id"],
+            "workflow_id": row["workflow_id"],
+            "work_id": row["work_id"],
+            "lane": row["lane"],
+            "action": row["action"],
+            "status": row["status"],
+            "stage": row["stage"],
+            "readiness_status": row["readiness_status"],
+            "promotion_status": row["promotion_status"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "summary": row["summary"],
+            "runtime_dir": row["runtime_dir"],
+            "status_path": row["status_path"],
+            "source": row["source"],
+            "record": _load_json(row["record_json"], {}),
+        }
+        for row in rows
+    ]
+
+
+def _select_blockers(conn: sqlite3.Connection, work_id: str | None) -> list[dict[str, Any]]:
+    if work_id:
+        rows = conn.execute(
+            """
+            SELECT blocker_id, work_id, run_record_id, lane, category, code, message, repairable,
+                   blocks_statuses_json, source, details_json, created_at
+            FROM blockers
+            WHERE work_id = ?
+            ORDER BY blocker_id
+            """,
+            (work_id,),
+        )
+    else:
+        rows = conn.execute(
+            """
+            SELECT blocker_id, work_id, run_record_id, lane, category, code, message, repairable,
+                   blocks_statuses_json, source, details_json, created_at
+            FROM blockers
+            ORDER BY blocker_id
+            """
+        )
+    return [
+        {
+            "blocker_id": row["blocker_id"],
+            "work_id": row["work_id"],
+            "run_record_id": row["run_record_id"],
+            "lane": row["lane"],
+            "category": row["category"],
+            "code": row["code"],
+            "message": row["message"],
+            "repairable": bool(row["repairable"]),
+            "blocks_statuses": _load_json(row["blocks_statuses_json"], []),
+            "source": row["source"],
+            "details": _load_json(row["details_json"], {}),
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+def _select_artifacts(conn: sqlite3.Connection, work_id: str | None, limit: int) -> list[dict[str, Any]]:
+    safe_limit = max(0, int(limit))
+    if work_id:
+        rows = conn.execute(
+            """
+            SELECT artifact_id, work_id, run_record_id, lane, artifact_type, path, "exists",
+                   source, metadata_json, updated_at
+            FROM artifacts
+            WHERE work_id = ?
+            ORDER BY updated_at DESC, source, artifact_id
+            LIMIT ?
+            """,
+            (work_id, safe_limit),
+        )
+    else:
+        rows = conn.execute(
+            """
+            SELECT artifact_id, work_id, run_record_id, lane, artifact_type, path, "exists",
+                   source, metadata_json, updated_at
+            FROM artifacts
+            ORDER BY updated_at DESC, source, artifact_id
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
+    return [
+        {
+            "artifact_id": row["artifact_id"],
+            "work_id": row["work_id"],
+            "run_record_id": row["run_record_id"],
+            "lane": row["lane"],
+            "artifact_type": row["artifact_type"],
+            "path": row["path"],
+            "exists": bool(row["exists"]),
+            "source": row["source"],
+            "metadata": _load_json(row["metadata_json"], {}),
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def _table_count(conn: sqlite3.Connection, table: str) -> int:
+    return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def _load_json(value: str | None, default: Any) -> Any:
+    if value is None:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def _text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
