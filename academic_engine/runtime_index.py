@@ -144,6 +144,8 @@ class RuntimeIndex:
         for record in runtime_records:
             blocker_rows.extend(_runtime_blocker_rows(record, refreshed_at))
             artifact_rows.extend(_runtime_artifact_rows(record, refreshed_at))
+        blocker_rows = _dedupe_blocker_rows(blocker_rows)
+        artifact_rows = _dedupe_artifact_rows(artifact_rows)
 
         counts: dict[str, int]
         with sqlite3.connect(self.index_path) as conn:
@@ -332,7 +334,7 @@ def _runtime_artifact_rows(record: RuntimeRecord, refreshed_at: str) -> list[tup
 
 def _work_artifact_rows(work_id: str, work_state: dict[str, Any], refreshed_at: str) -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
-    for index, item in enumerate(_artifact_dicts(work_state)):
+    for item in _artifact_dicts(work_state):
         path = _text(item.get("path"))
         if not path:
             continue
@@ -340,7 +342,7 @@ def _work_artifact_rows(work_id: str, work_state: dict[str, Any], refreshed_at: 
         artifact_type = _text(item.get("artifact_id")) or _text(item.get("kind")) or "work-artifact"
         rows.append(
             (
-                f"work:{work_id}:{index}:{path}",
+                f"work:{work_id}:{lane or 'none'}:{artifact_type}:{path}",
                 work_id,
                 None,
                 lane,
@@ -358,7 +360,7 @@ def _work_artifact_rows(work_id: str, work_state: dict[str, Any], refreshed_at: 
 def _artifact_dicts(value: Any) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     if isinstance(value, dict):
-        if "path" in value:
+        if "path" in value and "exists" in value:
             items.append(value)
         for child in value.values():
             items.extend(_artifact_dicts(child))
@@ -366,6 +368,33 @@ def _artifact_dicts(value: Any) -> list[dict[str, Any]]:
         for child in value:
             items.extend(_artifact_dicts(child))
     return items
+
+
+def _dedupe_blocker_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    by_key: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+    order: list[tuple[Any, ...]] = []
+    for row in rows:
+        key = (row[1], row[3], row[4], row[5], row[6], row[8])
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = row
+            order.append(key)
+            continue
+        if row[9] == "work-state" and existing[9] != "work-state":
+            by_key[key] = row
+    return [by_key[key] for key in order]
+
+
+def _dedupe_artifact_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    by_id: dict[Any, tuple[Any, ...]] = {}
+    order: list[Any] = []
+    for row in rows:
+        artifact_id = row[0]
+        if artifact_id in by_id:
+            continue
+        by_id[artifact_id] = row
+        order.append(artifact_id)
+    return [by_id[artifact_id] for artifact_id in order]
 
 
 def _metadata(conn: sqlite3.Connection) -> dict[str, str]:

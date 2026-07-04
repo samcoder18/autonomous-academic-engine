@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from academic_engine.runtime_index import RuntimeIndex, runtime_index_path
+from academic_engine.runtime_index import RuntimeIndex, _work_artifact_rows, runtime_index_path
 from academic_engine.runtime_status import build_runtime_status, write_status
 
 
@@ -203,6 +203,98 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             artifact_paths = {item["path"] for item in payload["artifacts"]}
             self.assertTrue(any(path.endswith("articles/drafts/demo.md") for path in artifact_paths))
             self.assertTrue(any(path.endswith("articles/evidence/demo.md") for path in artifact_paths))
+
+    def test_refresh_deduplicates_runtime_blockers_in_flat_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_runtime_fixture(root)
+
+            refresh = RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(refresh["blockers_indexed"], 1)
+            self.assertEqual(len(payload["blockers"]), 1)
+            self.assertEqual(payload["blockers"][0]["source"], "work-state")
+            self.assertEqual(payload["blockers"][0]["code"], "missing-evidence")
+
+    def test_artifact_hydration_preserves_exists_boolean(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_runtime_fixture(root)
+
+            RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            draft = next(item for item in payload["artifacts"] if item["path"].endswith("articles/drafts/demo.md"))
+            evidence = next(item for item in payload["artifacts"] if item["path"].endswith("articles/evidence/demo.md"))
+            self.assertIs(draft["exists"], True)
+            self.assertIs(evidence["exists"], False)
+
+    def test_get_index_filters_unknown_work_to_empty_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_runtime_fixture(root)
+
+            RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index(work_id="missing-work")
+
+            self.assertEqual(payload["works"], [])
+            self.assertEqual(payload["recent_runs"], [])
+            self.assertEqual(payload["blockers"], [])
+            self.assertEqual(payload["artifacts"], [])
+
+    def test_zero_limit_keeps_works_and_blockers_but_omits_runs_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_runtime_fixture(root)
+
+            RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index(limit=0)
+
+            self.assertEqual(payload["works"][0]["work_id"], "starter-work")
+            self.assertGreaterEqual(len(payload["blockers"]), 1)
+            self.assertEqual(payload["recent_runs"], [])
+            self.assertEqual(payload["artifacts"], [])
+
+    def test_work_artifact_rows_ignore_path_dicts_without_exists_flag(self) -> None:
+        rows = _work_artifact_rows(
+            "starter-work",
+            {
+                "note": {"path": "works/starter-work/readme.md"},
+                "artifact": {"path": "works/starter-work/articles/drafts/demo.md", "exists": True},
+            },
+            "2026-07-03T10:00:00+00:00",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][5], "works/starter-work/articles/drafts/demo.md")
+        self.assertEqual(rows[0][6], 1)
+
+    def test_malformed_json_columns_fall_back_to_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_runtime_fixture(root)
+            RuntimeIndex(root).refresh()
+
+            with sqlite3.connect(runtime_index_path(root)) as conn:
+                conn.execute(
+                    "UPDATE works SET active_lanes_json = ? WHERE work_id = ?",
+                    ("{malformed", "starter-work"),
+                )
+                conn.execute(
+                    "UPDATE runs SET record_json = ? WHERE record_id = ?",
+                    ("{malformed", "default:20260703-article-review"),
+                )
+
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(payload["works"][0]["active_lanes"], [])
+            self.assertEqual(payload["recent_runs"][0]["record"], {})
 
     def test_delete_index_does_not_change_work_status_decision(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
