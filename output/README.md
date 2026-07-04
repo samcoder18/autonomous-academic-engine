@@ -7,7 +7,7 @@
 - `output/docx/` — Word-версии thesis lane и article lane (создаются `scripts/export_docx.sh` и `scripts/export_academic_docx.sh`; требуется установленный [Pandoc](https://pandoc.org));
 - `output/codex/` — финальные сообщения автономных запусков через `codex exec`;
 - `output/runs/<workflow-id>/` — локальный `workflow-run/v1`: `workflow.json`, `events.jsonl`, `gates.json`, sandbox, `roles/*/{request,result}.json` и `promotion.json`;
-- `output/runtime/` — локальное состояние активных запусков и автономного daemon, не коммитится;
+- `output/runtime/` — локальное состояние активных запусков и автономного daemon, не коммитится; `runtime-index.sqlite` внутри этой директории является удаляемым cache/index для UI/API и не является источником истины;
 - при необходимости позже можно добавить `output/pdf/`.
 
 ## Политика версионирования
