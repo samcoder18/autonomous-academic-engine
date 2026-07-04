@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from academic_engine.runtime_index import RuntimeIndex, _work_artifact_rows, runtime_index_path
+from academic_engine.runtime_index import (
+    RuntimeIndex,
+    _blocker_row,
+    _dedupe_blocker_rows,
+    _work_artifact_rows,
+    runtime_index_path,
+)
 from academic_engine.runtime_status import build_runtime_status, write_status
 
 
@@ -217,6 +223,70 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             self.assertEqual(len(payload["blockers"]), 1)
             self.assertEqual(payload["blockers"][0]["source"], "work-state")
             self.assertEqual(payload["blockers"][0]["code"], "missing-evidence")
+
+    def test_blocker_dedupe_preserves_distinct_targets_and_profiles(self) -> None:
+        base_blocker = {
+            "category": "standards-consistency",
+            "code": "profile-gap",
+            "message": "Profile issue.",
+            "repairable": True,
+            "blocks_statuses": ["submission-ready"],
+        }
+        rows = [
+            _blocker_row(
+                blocker_id="run:review:0:standards-consistency:profile-gap",
+                work_id="starter-work",
+                run_record_id="review-run",
+                lane="article",
+                blocker={**base_blocker, "target": "articles/drafts/a.md", "profile_id": "journal-a"},
+                source="runtime-record",
+                created_at="2026-07-03T10:00:00+00:00",
+            ),
+            _blocker_row(
+                blocker_id="work:starter-work:0:standards-consistency:profile-gap",
+                work_id="starter-work",
+                run_record_id="review-run",
+                lane="article",
+                blocker={**base_blocker, "target": "articles/drafts/a.md", "profile_id": "journal-a"},
+                source="work-state",
+                created_at="2026-07-03T10:01:00+00:00",
+            ),
+            _blocker_row(
+                blocker_id="work:starter-work:1:standards-consistency:profile-gap",
+                work_id="starter-work",
+                run_record_id="review-run",
+                lane="article",
+                blocker={**base_blocker, "target": "articles/drafts/b.md", "profile_id": "journal-a"},
+                source="work-state",
+                created_at="2026-07-03T10:01:00+00:00",
+            ),
+            _blocker_row(
+                blocker_id="work:starter-work:2:standards-consistency:profile-gap",
+                work_id="starter-work",
+                run_record_id="review-run",
+                lane="article",
+                blocker={**base_blocker, "target": "articles/drafts/a.md", "profile_id": "journal-b"},
+                source="work-state",
+                created_at="2026-07-03T10:01:00+00:00",
+            ),
+        ]
+
+        deduped = _dedupe_blocker_rows(rows)
+
+        self.assertEqual(len(deduped), 3)
+        self.assertEqual(deduped[0][9], "work-state")
+        identities = {
+            (json.loads(row[10]).get("target"), json.loads(row[10]).get("profile_id"))
+            for row in deduped
+        }
+        self.assertEqual(
+            identities,
+            {
+                ("articles/drafts/a.md", "journal-a"),
+                ("articles/drafts/b.md", "journal-a"),
+                ("articles/drafts/a.md", "journal-b"),
+            },
+        )
 
     def test_artifact_hydration_preserves_exists_boolean(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

@@ -374,7 +374,7 @@ def _dedupe_blocker_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
     by_key: dict[tuple[Any, ...], tuple[Any, ...]] = {}
     order: list[tuple[Any, ...]] = []
     for row in rows:
-        key = (row[1], row[3], row[4], row[5], row[6], row[8])
+        key = _blocker_semantic_key(row)
         existing = by_key.get(key)
         if existing is None:
             by_key[key] = row
@@ -383,6 +383,35 @@ def _dedupe_blocker_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
         if row[9] == "work-state" and existing[9] != "work-state":
             by_key[key] = row
     return [by_key[key] for key in order]
+
+
+def _blocker_semantic_key(row: tuple[Any, ...]) -> tuple[Any, ...]:
+    details = _load_json(row[10], {})
+    return (
+        row[1],
+        row[3],
+        row[4],
+        row[5],
+        row[6],
+        row[8],
+        _blocker_identity(details, "target"),
+        _blocker_identity(details, "profile_id"),
+        _blocker_identity(details, "artifact"),
+        _blocker_identity(details, "artifact_id"),
+        _blocker_identity(details, "path"),
+    )
+
+
+def _blocker_identity(payload: Any, key: str) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    nested = payload.get("details")
+    if value is None and isinstance(nested, dict):
+        value = nested.get(key)
+    if isinstance(value, (dict, list)):
+        return _json(value)
+    return _text(value)
 
 
 def _dedupe_artifact_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
