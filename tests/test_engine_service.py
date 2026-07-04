@@ -191,6 +191,35 @@ class EngineServiceDelegationTests(unittest.TestCase):
         self.assertEqual(payload["work_id"], "demo-work")
         self.assertEqual(instances[0].export_calls, [{"subject": "thesis", "work_id": "demo-work"}])
 
+    def test_runtime_index_methods_use_default_runtime_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            _prepare_workspace(root)
+            starter_dir = root / "works" / "starter-work"
+            (starter_dir / "work.toml").write_text(
+                'slug = "starter-work"\n'
+                'title = "Starter work"\n'
+                'topic = "Starter topic"\n'
+                'artifact_type = "article"\n'
+                'language = "ru"\n'
+                'active_lanes = ["article"]\n'
+                'work_canon = "work-canon.md"\n',
+                encoding="utf-8",
+            )
+            (starter_dir / "work-canon.md").write_text("# Starter work\n", encoding="utf-8")
+            EngineService(root).create_work(
+                CreateWorkRequest(slug="index-demo", title="Index demo", artifact_type="article")
+            )
+
+            refresh = EngineService(root).refresh_runtime_index()
+            payload = EngineService(root).get_runtime_index(work_id="index-demo", limit=5)
+
+            self.assertEqual(refresh["kind"], "runtime-index-refresh")
+            self.assertEqual(refresh["status"], "refreshed")
+            self.assertEqual(payload["kind"], "runtime-index")
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual([item["work_id"] for item in payload["works"]], ["index-demo"])
+
 
 class EngineServiceStopJobTests(unittest.TestCase):
     def setUp(self) -> None:

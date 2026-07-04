@@ -9,6 +9,7 @@ from .autonomous_runner import stop_autonomous_run
 from .export_explain import explain_export as _explain_export
 from .job_queue import JobQueue, WorkflowJobSpec
 from .orchestrator import WorkflowOrchestrator
+from .runtime_index import RuntimeIndex
 from .work_bootstrap import WorkBootstrapRequest, bootstrap_work
 from .workspace import load_workspace_config, resolve_work_config
 
@@ -197,6 +198,12 @@ class EngineService:
 
     def explain_export(self, subject: str, *, work_id: str | None = None) -> dict[str, Any]:
         return self._export_explainer(self.root_dir, subject, work_id=work_id)
+
+    def refresh_runtime_index(self) -> dict[str, Any]:
+        return RuntimeIndex(self.root_dir).refresh()
+
+    def get_runtime_index(self, *, work_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+        return RuntimeIndex(self.root_dir).get_index(work_id=work_id, limit=limit)
 
     def _orchestrator(self) -> Any:
         return self._orchestrator_factory(self.root_dir)
