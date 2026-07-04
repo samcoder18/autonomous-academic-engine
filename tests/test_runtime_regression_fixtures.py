@@ -47,7 +47,7 @@ class RuntimeRegressionFixtureTests(unittest.TestCase):
             status["finalization_check"]["effective_readiness_status"],
             "strong-draft-with-blockers",
         )
-        self.assertTrue(blocker_codes & {"evidence-coverage-gap", "submission-missing-evidence"})
+        self.assertIn("submission-missing-evidence", blocker_codes)
 
     def test_vkr_without_originality_corpus_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
