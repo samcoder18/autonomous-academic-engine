@@ -43,6 +43,43 @@ class RuntimeIndexMissingDatabaseTests(unittest.TestCase):
             self.assertFalse(runtime_index_path(root).exists())
 
 
+class RuntimeIndexFailurePayloadTests(unittest.TestCase):
+    def test_get_index_returns_structured_failure_for_corrupt_sqlite_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            index_path = runtime_index_path(root)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text("not a sqlite database", encoding="utf-8")
+
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(payload["kind"], "runtime-index")
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["error"]["code"], "runtime-index-sqlite-error")
+            self.assertEqual(payload["works"], [])
+            self.assertEqual(payload["recent_runs"], [])
+            self.assertEqual(payload["blockers"], [])
+            self.assertEqual(payload["artifacts"], [])
+
+    def test_refresh_returns_structured_failure_for_corrupt_sqlite_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            index_path = runtime_index_path(root)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text("not a sqlite database", encoding="utf-8")
+
+            payload = RuntimeIndex(root).refresh()
+
+            self.assertEqual(payload["kind"], "runtime-index-refresh")
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["error"]["code"], "runtime-index-sqlite-error")
+            self.assertEqual(payload["works_indexed"], 0)
+            self.assertEqual(payload["runs_indexed"], 0)
+            self.assertEqual(payload["blockers_indexed"], 0)
+            self.assertEqual(payload["artifacts_indexed"], 0)
+
+
 MINIMAL_WORKSPACE_TOML = """\
 version = 1
 default_work = "starter-work"
@@ -258,6 +295,7 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             self.assertGreaterEqual(refresh["blockers_indexed"], 1)
             self.assertGreaterEqual(refresh["artifacts_indexed"], 2)
             self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["works"][0]["status"], "blocked")
             self.assertEqual(payload["works"][0]["work_id"], "starter-work")
             self.assertEqual(payload["works"][0]["known_blocker_count"], 1)
             self.assertEqual(payload["recent_runs"][0]["record_id"], "default:20260703-article-review")
@@ -309,6 +347,35 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             self.assertEqual(payload["recent_runs"][0]["record_id"], "wf-canonical-run")
             self.assertEqual(payload["recent_runs"][0]["source"], "workflow-v1")
             self.assertTrue(payload["recent_runs"][0]["status_path"].endswith("output/runs/wf-canonical/workflow.json"))
+
+    def test_refresh_reports_warning_for_unreadable_runtime_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            bad_run_dir = root / "output" / "runs" / "bad-run"
+            bad_run_dir.mkdir(parents=True, exist_ok=True)
+            (bad_run_dir / "workflow.json").write_text("{malformed", encoding="utf-8")
+
+            refresh = RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(refresh["runs_indexed"], 0)
+            self.assertEqual(payload["recent_runs"], [])
+            self.assertEqual(refresh["warnings_count"], 1)
+            self.assertEqual(refresh["warnings"][0]["code"], "runtime-record-unreadable")
+            self.assertEqual(refresh["warnings"][0]["source"], "canonical-run")
+            self.assertTrue(refresh["warnings"][0]["path"].endswith("output/runs/bad-run"))
+
+    def test_work_without_known_blockers_uses_neutral_idle_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+
+            RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(payload["works"][0]["known_blocker_count"], 0)
+            self.assertEqual(payload["works"][0]["status"], "idle")
 
     def test_refresh_deduplicates_runtime_blockers_in_flat_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

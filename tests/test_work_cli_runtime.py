@@ -8,6 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from academic_engine.runtime_index import runtime_index_path
 from tests.test_academic_engine import (
     TEST_ARTICLE_CHECKLIST,
     TEST_THESIS_SECTION,
@@ -262,6 +263,26 @@ class WorkCliRuntimeTests(unittest.TestCase):
             self.assertIn("Works:", stdout.getvalue())
             self.assertIn("Recent runs:", stdout.getvalue())
             self.assertNotIn("{", stdout.getvalue())
+
+    def test_runtime_index_status_cli_returns_failed_payload_for_corrupt_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            index_path = runtime_index_path(root)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            index_path.write_text("not a sqlite database", encoding="utf-8")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["runtime-index", "status"], root_dir=root)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertNotIn("Traceback", stdout.getvalue())
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "runtime-index")
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(payload["error"]["code"], "runtime-index-sqlite-error")
 
     def test_readme_and_agents_keep_runtime_command_truth_in_sync(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

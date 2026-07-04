@@ -1064,11 +1064,11 @@ def runtime_index_cli(root_dir: Path, args: Any) -> int:
     else:
         return 1
     _print_runtime_index_payload(payload, as_json=args.as_json)
-    return 0
+    return 1 if payload.get("status") == "failed" else 0
 
 
 def _print_runtime_index_payload(payload: dict[str, Any], *, as_json: bool) -> None:
-    if as_json:
+    if as_json or payload.get("status") == "failed":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 

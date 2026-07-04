@@ -136,11 +136,13 @@ class RuntimeIndex:
             artifact_rows.extend(_work_artifact_rows(work.slug, work_state, refreshed_at))
 
         runtime_records: list[RuntimeRecord] = []
+        warnings: list[dict[str, Any]] = []
         seen_record_ids: set[str] = set()
         seen_workflow_ids: set[str] = set()
         for run_dir in _runtime_record_dirs(self.root_dir, store):
             record = load_runtime_record(run_dir, "workflow-run")
             if record is None:
+                warnings.append(_runtime_record_warning(self.root_dir, run_dir))
                 continue
             if record.record_id in seen_record_ids:
                 continue
@@ -158,42 +160,48 @@ class RuntimeIndex:
         artifact_rows = _dedupe_artifact_rows(artifact_rows)
 
         counts: dict[str, int]
-        with sqlite3.connect(self.index_path) as conn:
-            conn.executescript(SCHEMA_SQL)
-            for table in ("index_metadata", "works", "runs", "blockers", "artifacts"):
-                conn.execute(f"DELETE FROM {table}")
-            conn.executemany(WORK_INSERT_SQL, work_rows)
-            conn.executemany(RUN_INSERT_SQL, run_rows)
-            conn.executemany(BLOCKER_INSERT_SQL, blocker_rows)
-            conn.executemany(ARTIFACT_INSERT_SQL, artifact_rows)
-            counts = {
-                "works_indexed": _table_count(conn, "works"),
-                "runs_indexed": _table_count(conn, "runs"),
-                "blockers_indexed": _table_count(conn, "blockers"),
-                "artifacts_indexed": _table_count(conn, "artifacts"),
-            }
-            _write_metadata(conn, refreshed_at=refreshed_at, counts=counts)
+        try:
+            with sqlite3.connect(self.index_path) as conn:
+                conn.executescript(SCHEMA_SQL)
+                for table in ("index_metadata", "works", "runs", "blockers", "artifacts"):
+                    conn.execute(f"DELETE FROM {table}")
+                conn.executemany(WORK_INSERT_SQL, work_rows)
+                conn.executemany(RUN_INSERT_SQL, run_rows)
+                conn.executemany(BLOCKER_INSERT_SQL, blocker_rows)
+                conn.executemany(ARTIFACT_INSERT_SQL, artifact_rows)
+                counts = {
+                    "works_indexed": _table_count(conn, "works"),
+                    "runs_indexed": _table_count(conn, "runs"),
+                    "blockers_indexed": _table_count(conn, "blockers"),
+                    "artifacts_indexed": _table_count(conn, "artifacts"),
+                }
+                _write_metadata(conn, refreshed_at=refreshed_at, counts=counts, warnings=warnings)
+        except sqlite3.DatabaseError as exc:
+            return _refresh_failed_payload(self.index_path, refreshed_at=refreshed_at, error=exc, warnings=warnings)
 
-        return _refresh_payload(self.index_path, refreshed_at=refreshed_at, counts=counts)
+        return _refresh_payload(self.index_path, refreshed_at=refreshed_at, counts=counts, warnings=warnings)
 
     def get_index(self, *, work_id: str | None = None, limit: int = 20) -> dict[str, Any]:
         if not self.index_path.exists():
             return _missing_payload(self.index_path)
-        with sqlite3.connect(self.index_path) as conn:
-            conn.row_factory = sqlite3.Row
-            metadata = _metadata(conn)
-            return {
-                "kind": "runtime-index",
-                "version": RUNTIME_INDEX_VERSION,
-                "status": "ready",
-                "index_path": str(self.index_path),
-                "schema_version": metadata.get("schema_version"),
-                "refreshed_at": metadata.get("refreshed_at"),
-                "works": _select_works(conn, work_id),
-                "recent_runs": _select_runs(conn, work_id, limit),
-                "blockers": _select_blockers(conn, work_id),
-                "artifacts": _select_artifacts(conn, work_id, limit),
-            }
+        try:
+            with sqlite3.connect(self.index_path) as conn:
+                conn.row_factory = sqlite3.Row
+                metadata = _metadata(conn)
+                return {
+                    "kind": "runtime-index",
+                    "version": RUNTIME_INDEX_VERSION,
+                    "status": "ready",
+                    "index_path": str(self.index_path),
+                    "schema_version": metadata.get("schema_version"),
+                    "refreshed_at": metadata.get("refreshed_at"),
+                    "works": _select_works(conn, work_id),
+                    "recent_runs": _select_runs(conn, work_id, limit),
+                    "blockers": _select_blockers(conn, work_id),
+                    "artifacts": _select_artifacts(conn, work_id, limit),
+                }
+        except sqlite3.DatabaseError as exc:
+            return _index_failed_payload(self.index_path, error=exc)
 
 
 def _runtime_record_dirs(root_dir: Path, store: RuntimeStore) -> list[Path]:
@@ -202,6 +210,20 @@ def _runtime_record_dirs(root_dir: Path, store: RuntimeStore) -> list[Path]:
     if canonical_runs_dir.exists():
         canonical_dirs = sorted((path for path in canonical_runs_dir.iterdir() if path.is_dir()), reverse=True)
     return [*canonical_dirs, *store.list_run_dirs()]
+
+
+def _runtime_record_warning(root_dir: Path, run_dir: Path) -> dict[str, Any]:
+    source = "runtime-store"
+    try:
+        run_dir.resolve().relative_to((root_dir / "output" / "runs").resolve())
+        source = "canonical-run"
+    except ValueError:
+        pass
+    return {
+        "code": "runtime-record-unreadable",
+        "source": source,
+        "path": str(run_dir),
+    }
 
 
 def _work_row(work: Any, work_state: dict[str, Any], refreshed_at: str) -> tuple[Any, ...]:
@@ -223,7 +245,7 @@ def _work_status(work_state: dict[str, Any]) -> str:
     active_run = runtime.get("active_run") if isinstance(runtime, dict) else None
     if isinstance(active_run, dict):
         return "running"
-    return "blocked" if int(work_state.get("known_blocker_count") or 0) else "ready"
+    return "blocked" if int(work_state.get("known_blocker_count") or 0) else "idle"
 
 
 def _run_row(record: RuntimeRecord) -> tuple[Any, ...]:
@@ -448,10 +470,17 @@ def _metadata(conn: sqlite3.Connection) -> dict[str, str]:
     return {str(row["key"]): str(row["value"]) for row in conn.execute("SELECT key, value FROM index_metadata")}
 
 
-def _write_metadata(conn: sqlite3.Connection, *, refreshed_at: str, counts: dict[str, int]) -> None:
+def _write_metadata(
+    conn: sqlite3.Connection,
+    *,
+    refreshed_at: str,
+    counts: dict[str, int],
+    warnings: list[dict[str, Any]],
+) -> None:
     metadata = {
         "schema_version": RUNTIME_INDEX_SCHEMA_VERSION,
         "refreshed_at": refreshed_at,
+        "warnings_count": str(len(warnings)),
         **{key: str(value) for key, value in counts.items()},
     }
     conn.executemany(
@@ -460,7 +489,29 @@ def _write_metadata(conn: sqlite3.Connection, *, refreshed_at: str, counts: dict
     )
 
 
-def _refresh_payload(index_path: Path, *, refreshed_at: str, counts: dict[str, int]) -> dict[str, Any]:
+def _empty_counts() -> dict[str, int]:
+    return {
+        "works_indexed": 0,
+        "runs_indexed": 0,
+        "blockers_indexed": 0,
+        "artifacts_indexed": 0,
+    }
+
+
+def _sqlite_error(exc: sqlite3.DatabaseError) -> dict[str, str]:
+    return {
+        "code": "runtime-index-sqlite-error",
+        "message": str(exc),
+    }
+
+
+def _refresh_payload(
+    index_path: Path,
+    *,
+    refreshed_at: str,
+    counts: dict[str, int],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
     return {
         "kind": "runtime-index-refresh",
         "version": RUNTIME_INDEX_VERSION,
@@ -472,6 +523,42 @@ def _refresh_payload(index_path: Path, *, refreshed_at: str, counts: dict[str, i
         "runs_indexed": counts["runs_indexed"],
         "blockers_indexed": counts["blockers_indexed"],
         "artifacts_indexed": counts["artifacts_indexed"],
+        "warnings_count": len(warnings),
+        "warnings": warnings,
+    }
+
+
+def _refresh_failed_payload(
+    index_path: Path,
+    *,
+    refreshed_at: str,
+    error: sqlite3.DatabaseError,
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = _refresh_payload(
+        index_path,
+        refreshed_at=refreshed_at,
+        counts=_empty_counts(),
+        warnings=warnings,
+    )
+    payload["status"] = "failed"
+    payload["error"] = _sqlite_error(error)
+    return payload
+
+
+def _index_failed_payload(index_path: Path, *, error: sqlite3.DatabaseError) -> dict[str, Any]:
+    return {
+        "kind": "runtime-index",
+        "version": RUNTIME_INDEX_VERSION,
+        "status": "failed",
+        "index_path": str(index_path),
+        "schema_version": None,
+        "refreshed_at": None,
+        "works": [],
+        "recent_runs": [],
+        "blockers": [],
+        "artifacts": [],
+        "error": _sqlite_error(error),
     }
 
 
