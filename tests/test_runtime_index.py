@@ -186,6 +186,63 @@ def write_runtime_fixture(root: Path) -> Path:
     return run_dir
 
 
+def write_canonical_workflow_fixture(
+    root: Path,
+    *,
+    workflow_id: str = "wf-canonical",
+    run_id: str = "wf-canonical",
+) -> Path:
+    run_dir = root / "output" / "runs" / workflow_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "workflow.json").write_text(
+        json.dumps(
+            {
+                "version": "workflow-run/v1",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "work_id": "starter-work",
+                "lane": "article",
+                "action": "finalize",
+                "execution_status": "failed",
+                "status": "failed",
+                "readiness_status": "strong-draft-with-blockers",
+                "promotion_status": "blocked",
+                "started_at": "2026-07-03T11:00:00+00:00",
+                "finished_at": "2026-07-03T11:10:00+00:00",
+                "gates": [
+                    {
+                        "name": "primary-support",
+                        "status": "failed",
+                        "message": "Primary evidence is incomplete.",
+                    }
+                ],
+                "gate_summary": {"failed": 1, "passed": 0},
+                "promotion": {"status": "blocked", "reason": "primary-support"},
+                "blockers": [
+                    {
+                        "category": "primary-support",
+                        "code": "canonical-evidence-gap",
+                        "message": "Canonical workflow needs primary-source support.",
+                        "repairable": True,
+                        "blocks_statuses": ["submission-ready"],
+                    }
+                ],
+                "role_runs": [
+                    {
+                        "role_id": "academic-submission-evaluator",
+                        "status": "failed",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return run_dir
+
+
 class RuntimeIndexRefreshContentTests(unittest.TestCase):
     def test_refresh_indexes_work_state_runs_blockers_and_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -209,6 +266,49 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             artifact_paths = {item["path"] for item in payload["artifacts"]}
             self.assertTrue(any(path.endswith("articles/drafts/demo.md") for path in artifact_paths))
             self.assertTrue(any(path.endswith("articles/evidence/demo.md") for path in artifact_paths))
+
+    def test_refresh_indexes_canonical_workflow_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_canonical_workflow_fixture(root)
+
+            refresh = RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(refresh["runs_indexed"], 1)
+            self.assertEqual(payload["recent_runs"][0]["workflow_id"], "wf-canonical")
+            blocker_codes = {item["code"] for item in payload["blockers"]}
+            self.assertIn("canonical-evidence-gap", blocker_codes)
+
+    def test_refresh_prefers_canonical_workflow_when_runtime_copy_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            write_canonical_workflow_fixture(root, run_id="wf-canonical-run")
+            run_dir = root / "output" / "runtime" / "runs" / "wf-canonical-runtime"
+            status = build_runtime_status(
+                record_id="wf-runtime-copy",
+                entity_kind="workflow-run",
+                status="succeeded",
+                stage="completed",
+                work_id="starter-work",
+                lane="article",
+                action="finalize",
+                started_at="2026-07-03T11:01:00+00:00",
+                finished_at="2026-07-03T11:11:00+00:00",
+                summary="Runtime cache copy.",
+            )
+            status["workflow_id"] = "wf-canonical"
+            write_status(run_dir / "status.json", status)
+
+            refresh = RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(refresh["runs_indexed"], 1)
+            self.assertEqual(payload["recent_runs"][0]["record_id"], "wf-canonical-run")
+            self.assertEqual(payload["recent_runs"][0]["source"], "workflow-v1")
+            self.assertTrue(payload["recent_runs"][0]["status_path"].endswith("output/runs/wf-canonical/workflow.json"))
 
     def test_refresh_deduplicates_runtime_blockers_in_flat_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

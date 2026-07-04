@@ -135,11 +135,21 @@ class RuntimeIndex:
             blocker_rows.extend(_work_blocker_rows(work.slug, work_state, refreshed_at))
             artifact_rows.extend(_work_artifact_rows(work.slug, work_state, refreshed_at))
 
-        runtime_records = [
-            record
-            for run_dir in store.list_run_dirs()
-            if (record := load_runtime_record(run_dir, "workflow-run")) is not None
-        ]
+        runtime_records: list[RuntimeRecord] = []
+        seen_record_ids: set[str] = set()
+        seen_workflow_ids: set[str] = set()
+        for run_dir in _runtime_record_dirs(self.root_dir, store):
+            record = load_runtime_record(run_dir, "workflow-run")
+            if record is None:
+                continue
+            if record.record_id in seen_record_ids:
+                continue
+            if record.workflow_id and record.workflow_id in seen_workflow_ids:
+                continue
+            seen_record_ids.add(record.record_id)
+            if record.workflow_id:
+                seen_workflow_ids.add(record.workflow_id)
+            runtime_records.append(record)
         run_rows = [_run_row(record) for record in runtime_records]
         for record in runtime_records:
             blocker_rows.extend(_runtime_blocker_rows(record, refreshed_at))
@@ -184,6 +194,14 @@ class RuntimeIndex:
                 "blockers": _select_blockers(conn, work_id),
                 "artifacts": _select_artifacts(conn, work_id, limit),
             }
+
+
+def _runtime_record_dirs(root_dir: Path, store: RuntimeStore) -> list[Path]:
+    canonical_runs_dir = root_dir / "output" / "runs"
+    canonical_dirs: list[Path] = []
+    if canonical_runs_dir.exists():
+        canonical_dirs = sorted((path for path in canonical_runs_dir.iterdir() if path.is_dir()), reverse=True)
+    return [*canonical_dirs, *store.list_run_dirs()]
 
 
 def _work_row(work: Any, work_state: dict[str, Any], refreshed_at: str) -> tuple[Any, ...]:
