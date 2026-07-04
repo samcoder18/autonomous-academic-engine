@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from academic_engine.runtime_index import (
@@ -128,7 +129,7 @@ def prepare_minimal_workspace(root: Path) -> None:
         'language = "ru"\n'
         'topic = "Demo topic"\n'
         'work_canon = "work-canon.md"\n'
-        '\n[article]\n'
+        "\n[article]\n"
         'profile = "ru-law-article-v1"\n'
         'root_dir = "articles"\n'
         'docx_subdir = "articles"\n'
@@ -138,7 +139,7 @@ def prepare_minimal_workspace(root: Path) -> None:
         'drafts_dir = "articles/drafts"\n'
         'reviews_dir = "articles/reviews"\n'
         'final_dir = "articles/final"\n'
-        '[article.paths]\n'
+        "[article.paths]\n"
         'briefs = "articles/briefs"\n'
         'evidence = "articles/evidence"\n'
         'drafts = "articles/drafts"\n'
@@ -164,19 +165,10 @@ class RuntimeIndexRefreshMetadataTests(unittest.TestCase):
             self.assertEqual(payload["status"], "refreshed")
             self.assertEqual(payload["works_indexed"], 1)
             self.assertTrue(runtime_index_path(root).exists())
-            with sqlite3.connect(runtime_index_path(root)) as conn:
-                tables = {
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    )
-                }
-                self.assertGreaterEqual(
-                    tables, {"index_metadata", "works", "runs", "blockers", "artifacts"}
-                )
-                refreshed_at = conn.execute(
-                    "SELECT value FROM index_metadata WHERE key = 'refreshed_at'"
-                ).fetchone()
+            with closing(sqlite3.connect(runtime_index_path(root))) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                self.assertGreaterEqual(tables, {"index_metadata", "works", "runs", "blockers", "artifacts"})
+                refreshed_at = conn.execute("SELECT value FROM index_metadata WHERE key = 'refreshed_at'").fetchone()
                 self.assertIsNotNone(refreshed_at)
 
 
@@ -458,10 +450,7 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
 
         self.assertEqual(len(deduped), 3)
         self.assertEqual(deduped[0][9], "work-state")
-        identities = {
-            (json.loads(row[10]).get("target"), json.loads(row[10]).get("profile_id"))
-            for row in deduped
-        }
+        identities = {(json.loads(row[10]).get("target"), json.loads(row[10]).get("profile_id")) for row in deduped}
         self.assertEqual(
             identities,
             {
@@ -534,15 +523,16 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             write_runtime_fixture(root)
             RuntimeIndex(root).refresh()
 
-            with sqlite3.connect(runtime_index_path(root)) as conn:
-                conn.execute(
-                    "UPDATE works SET active_lanes_json = ? WHERE work_id = ?",
-                    ("{malformed", "starter-work"),
-                )
-                conn.execute(
-                    "UPDATE runs SET record_json = ? WHERE record_id = ?",
-                    ("{malformed", "default:20260703-article-review"),
-                )
+            with closing(sqlite3.connect(runtime_index_path(root))) as conn:
+                with conn:
+                    conn.execute(
+                        "UPDATE works SET active_lanes_json = ? WHERE work_id = ?",
+                        ("{malformed", "starter-work"),
+                    )
+                    conn.execute(
+                        "UPDATE runs SET record_json = ? WHERE record_id = ?",
+                        ("{malformed", "default:20260703-article-review"),
+                    )
 
             payload = RuntimeIndex(root).get_index()
 

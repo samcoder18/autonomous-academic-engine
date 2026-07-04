@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -165,21 +166,22 @@ class RuntimeIndex:
 
         counts: dict[str, int]
         try:
-            with sqlite3.connect(self.index_path) as conn:
-                conn.executescript(SCHEMA_SQL)
-                for table in ("index_metadata", "works", "runs", "blockers", "artifacts"):
-                    conn.execute(f"DELETE FROM {table}")
-                conn.executemany(WORK_INSERT_SQL, work_rows)
-                conn.executemany(RUN_INSERT_SQL, run_rows)
-                conn.executemany(BLOCKER_INSERT_SQL, blocker_rows)
-                conn.executemany(ARTIFACT_INSERT_SQL, artifact_rows)
-                counts = {
-                    "works_indexed": _table_count(conn, "works"),
-                    "runs_indexed": _table_count(conn, "runs"),
-                    "blockers_indexed": _table_count(conn, "blockers"),
-                    "artifacts_indexed": _table_count(conn, "artifacts"),
-                }
-                _write_metadata(conn, refreshed_at=refreshed_at, counts=counts, warnings=warnings)
+            with closing(sqlite3.connect(self.index_path)) as conn:
+                with conn:
+                    conn.executescript(SCHEMA_SQL)
+                    for table in ("index_metadata", "works", "runs", "blockers", "artifacts"):
+                        conn.execute(f"DELETE FROM {table}")
+                    conn.executemany(WORK_INSERT_SQL, work_rows)
+                    conn.executemany(RUN_INSERT_SQL, run_rows)
+                    conn.executemany(BLOCKER_INSERT_SQL, blocker_rows)
+                    conn.executemany(ARTIFACT_INSERT_SQL, artifact_rows)
+                    counts = {
+                        "works_indexed": _table_count(conn, "works"),
+                        "runs_indexed": _table_count(conn, "runs"),
+                        "blockers_indexed": _table_count(conn, "blockers"),
+                        "artifacts_indexed": _table_count(conn, "artifacts"),
+                    }
+                    _write_metadata(conn, refreshed_at=refreshed_at, counts=counts, warnings=warnings)
         except sqlite3.DatabaseError as exc:
             return _refresh_failed_payload(self.index_path, refreshed_at=refreshed_at, error=exc, warnings=warnings)
 
@@ -189,7 +191,7 @@ class RuntimeIndex:
         if not self.index_path.exists():
             return _missing_payload(self.index_path)
         try:
-            with sqlite3.connect(self.index_path) as conn:
+            with closing(sqlite3.connect(self.index_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 metadata = _metadata(conn)
                 return {
