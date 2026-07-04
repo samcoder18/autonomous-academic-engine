@@ -284,6 +284,26 @@ class WorkCliRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "failed")
             self.assertEqual(payload["error"]["code"], "runtime-index-sqlite-error")
 
+    def test_runtime_index_refresh_human_summary_reports_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            bad_run_dir = root / "output" / "runs" / "bad-run"
+            (bad_run_dir / "workflow.json").mkdir(parents=True, exist_ok=True)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["runtime-index", "refresh"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Warnings: 1", stdout.getvalue())
+            self.assertIn("runtime-record-unreadable", stdout.getvalue())
+            self.assertIn("output/runs/bad-run", stdout.getvalue())
+
     def test_readme_and_agents_keep_runtime_command_truth_in_sync(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         readme = (repo_root / "README.md").read_text(encoding="utf-8")

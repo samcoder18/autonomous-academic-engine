@@ -1074,11 +1074,17 @@ def _print_runtime_index_payload(payload: dict[str, Any], *, as_json: bool) -> N
 
     kind = payload.get("kind")
     if kind == "runtime-index-refresh":
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
         print(f"Runtime index refreshed: {payload.get('status')}")
         print(f"Works: {payload.get('works_indexed') or 0}")
         print(f"Recent runs: {payload.get('runs_indexed') or 0}")
         print(f"Blockers: {payload.get('blockers_indexed') or 0}")
         print(f"Artifacts: {payload.get('artifacts_indexed') or 0}")
+        print(f"Warnings: {len(warnings)}")
+        for warning in warnings[:5]:
+            if not isinstance(warning, dict):
+                continue
+            print(f"- {warning.get('code')}: {warning.get('path')}")
         print(f"Index path: {payload.get('index_path')}")
         return
 

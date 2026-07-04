@@ -140,7 +140,11 @@ class RuntimeIndex:
         seen_record_ids: set[str] = set()
         seen_workflow_ids: set[str] = set()
         for run_dir in _runtime_record_dirs(self.root_dir, store):
-            record = load_runtime_record(run_dir, "workflow-run")
+            try:
+                record = load_runtime_record(run_dir, "workflow-run")
+            except OSError as exc:
+                warnings.append(_runtime_record_warning(self.root_dir, run_dir, error=exc))
+                continue
             if record is None:
                 warnings.append(_runtime_record_warning(self.root_dir, run_dir))
                 continue
@@ -212,18 +216,21 @@ def _runtime_record_dirs(root_dir: Path, store: RuntimeStore) -> list[Path]:
     return [*canonical_dirs, *store.list_run_dirs()]
 
 
-def _runtime_record_warning(root_dir: Path, run_dir: Path) -> dict[str, Any]:
+def _runtime_record_warning(root_dir: Path, run_dir: Path, *, error: OSError | None = None) -> dict[str, Any]:
     source = "runtime-store"
     try:
         run_dir.resolve().relative_to((root_dir / "output" / "runs").resolve())
         source = "canonical-run"
     except ValueError:
         pass
-    return {
+    warning = {
         "code": "runtime-record-unreadable",
         "source": source,
         "path": str(run_dir),
     }
+    if error is not None:
+        warning["error"] = str(error)
+    return warning
 
 
 def _work_row(work: Any, work_state: dict[str, Any], refreshed_at: str) -> tuple[Any, ...]:

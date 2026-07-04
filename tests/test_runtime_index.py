@@ -366,6 +366,22 @@ class RuntimeIndexRefreshContentTests(unittest.TestCase):
             self.assertEqual(refresh["warnings"][0]["source"], "canonical-run")
             self.assertTrue(refresh["warnings"][0]["path"].endswith("output/runs/bad-run"))
 
+    def test_refresh_reports_warning_when_runtime_record_read_raises_oserror(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            prepare_minimal_workspace(root)
+            bad_run_dir = root / "output" / "runs" / "bad-run"
+            (bad_run_dir / "workflow.json").mkdir(parents=True, exist_ok=True)
+
+            refresh = RuntimeIndex(root).refresh()
+            payload = RuntimeIndex(root).get_index()
+
+            self.assertEqual(refresh["runs_indexed"], 0)
+            self.assertEqual(payload["recent_runs"], [])
+            self.assertEqual(refresh["warnings_count"], 1)
+            self.assertEqual(refresh["warnings"][0]["code"], "runtime-record-unreadable")
+            self.assertIn("error", refresh["warnings"][0])
+
     def test_work_without_known_blockers_uses_neutral_idle_status(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
