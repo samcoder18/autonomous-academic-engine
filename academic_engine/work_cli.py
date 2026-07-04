@@ -192,6 +192,17 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    runtime_index_parser = subparsers.add_parser("runtime-index")
+    runtime_index_subparsers = runtime_index_parser.add_subparsers(dest="runtime_index_command", required=True)
+
+    runtime_index_refresh = runtime_index_subparsers.add_parser("refresh")
+    runtime_index_refresh.add_argument("--json", action="store_true", dest="as_json")
+
+    runtime_index_status = runtime_index_subparsers.add_parser("status")
+    runtime_index_status.add_argument("--work", dest="work_id")
+    runtime_index_status.add_argument("--limit", type=int, default=20)
+    runtime_index_status.add_argument("--json", action="store_true", dest="as_json")
+
     jobs_parser = subparsers.add_parser("jobs")
     jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)
 
@@ -396,6 +407,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "runtime-index":
+            return runtime_index_cli(root_path, args)
         if args.command == "jobs":
             return jobs_cli(root_path, args)
         if args.command == "job-inspect":
@@ -1040,6 +1053,45 @@ def work_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -
     else:
         print(format_work_state_summary(state))
     return 0
+
+
+def runtime_index_cli(root_dir: Path, args: Any) -> int:
+    service = EngineService(root_dir)
+    if args.runtime_index_command == "refresh":
+        payload = service.refresh_runtime_index()
+    elif args.runtime_index_command == "status":
+        payload = service.get_runtime_index(work_id=args.work_id, limit=args.limit)
+    else:
+        return 1
+    _print_runtime_index_payload(payload, as_json=args.as_json)
+    return 0
+
+
+def _print_runtime_index_payload(payload: dict[str, Any], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    kind = payload.get("kind")
+    if kind == "runtime-index-refresh":
+        print(f"Runtime index refreshed: {payload.get('status')}")
+        print(f"Works: {payload.get('works_indexed') or 0}")
+        print(f"Recent runs: {payload.get('runs_indexed') or 0}")
+        print(f"Blockers: {payload.get('blockers_indexed') or 0}")
+        print(f"Artifacts: {payload.get('artifacts_indexed') or 0}")
+        print(f"Index path: {payload.get('index_path')}")
+        return
+
+    works = payload.get("works") if isinstance(payload.get("works"), list) else []
+    recent_runs = payload.get("recent_runs") if isinstance(payload.get("recent_runs"), list) else []
+    blockers = payload.get("blockers") if isinstance(payload.get("blockers"), list) else []
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else []
+    print(f"Runtime index: {payload.get('status')}")
+    print(f"Refreshed at: {payload.get('refreshed_at') or 'n/a'}")
+    print(f"Works: {len(works)}")
+    print(f"Recent runs: {len(recent_runs)}")
+    print(f"Blockers: {len(blockers)}")
+    print(f"Artifacts: {len(artifacts)}")
 
 
 def jobs_cli(root_dir: Path, args: Any) -> int:

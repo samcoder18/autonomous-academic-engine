@@ -206,6 +206,59 @@ class WorkCliRuntimeTests(unittest.TestCase):
             self.assertTrue(any(item["category"] == "contract-gate" for item in payload["known_blockers"]))
             self.assertEqual(payload["suggested_next_action"]["action_id"], "article-repair")
 
+    def test_runtime_index_refresh_and_status_cli_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["runtime-index", "refresh", "--json"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            refresh = json.loads(stdout.getvalue())
+            self.assertEqual(refresh["kind"], "runtime-index-refresh")
+            self.assertEqual(refresh["status"], "refreshed")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    ["runtime-index", "status", "--work", TEST_WORK_ID, "--limit", "3", "--json"],
+                    root_dir=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["kind"], "runtime-index")
+            self.assertEqual(payload["status"], "ready")
+            self.assertEqual(payload["works"][0]["work_id"], TEST_WORK_ID)
+
+    def test_runtime_index_status_cli_human_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            build_fake_repo(root)
+            write_raw_manifest(root, "thesis-v1")
+            write_raw_manifest(root, "ru-law-article-v1")
+            work_cli_module.main(["runtime-index", "refresh"], root_dir=root)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["runtime-index", "status"], root_dir=root)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertIn("Runtime index:", stdout.getvalue())
+            self.assertIn("Works:", stdout.getvalue())
+            self.assertIn("Recent runs:", stdout.getvalue())
+            self.assertNotIn("{", stdout.getvalue())
+
     def test_readme_and_agents_keep_runtime_command_truth_in_sync(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         readme = (repo_root / "README.md").read_text(encoding="utf-8")
