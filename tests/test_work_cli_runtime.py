@@ -245,7 +245,11 @@ class WorkCliRuntimeTests(unittest.TestCase):
             build_fake_repo(root)
             write_raw_manifest(root, "thesis-v1")
             write_raw_manifest(root, "ru-law-article-v1")
-            work_cli_module.main(["runtime-index", "refresh"], root_dir=root)
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()) as setup_stderr:
+                refresh_code = work_cli_module.main(["runtime-index", "refresh"], root_dir=root)
+
+            self.assertEqual(refresh_code, 0)
+            self.assertEqual(setup_stderr.getvalue(), "")
 
             stdout = StringIO()
             stderr = StringIO()
