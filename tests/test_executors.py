@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -11,9 +12,12 @@ from academic_engine.executors import (
     CodexCliExecutor,
     ExecutorRouter,
     ExecutorUnavailableError,
+    OpenRouterChatClient,
+    ProviderExecutionError,
     RoleExecutionContext,
     StubApiExecutor,
     build_executor_router,
+    build_openrouter_executor,
 )
 
 
@@ -189,6 +193,152 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertIsInstance(router, ExecutorRouter)
         self.assertIsInstance(router.default_executor, CodexCliExecutor)
+
+
+class FakeOpenRouterTransport:
+    def __init__(self, *, status: int = 200, body: bytes | None = None, exc: Exception | None = None):
+        self.status = status
+        self.body = body if body is not None else b'{"choices":[{"message":{"content":"provider-output"}}]}'
+        self.exc = exc
+        self.requests: list[tuple[object, float]] = []
+
+    def __call__(self, request: object, timeout: float) -> tuple[int, bytes]:
+        self.requests.append((request, timeout))
+        if self.exc is not None:
+            raise self.exc
+        return self.status, self.body
+
+
+class OpenRouterProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.output = self.root / "roles" / "01-provider" / "output.md"
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def context(self) -> RoleExecutionContext:
+        return RoleExecutionContext(
+            workflow_id="workflow-provider",
+            role_run_id="01-academic-submission-evaluator",
+            role_id="academic-submission-evaluator",
+            work_id="demo",
+            lane="article",
+            action="review",
+            sandbox_dir=self.root,
+            output_file=self.output,
+            use_search=False,
+            model=None,
+            timeout_seconds=17,
+            is_evaluator=True,
+        )
+
+    def test_openrouter_client_builds_chat_completion_payload_and_headers(self) -> None:
+        transport = FakeOpenRouterTransport()
+        client = OpenRouterChatClient(transport=transport)
+
+        content = client.complete(
+            prompt="evaluate this",
+            model="openrouter/test-model",
+            api_key="secret-key",
+            timeout_seconds=17,
+            http_referer="https://deploy.example",
+            app_title="Academic Engine",
+        )
+
+        self.assertEqual(content, "provider-output")
+        request, timeout = transport.requests[0]
+        self.assertEqual(timeout, 17)
+        self.assertEqual(request.full_url, "https://openrouter.ai/api/v1/chat/completions")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(
+            payload,
+            {
+                "model": "openrouter/test-model",
+                "messages": [{"role": "user", "content": "evaluate this"}],
+                "stream": False,
+            },
+        )
+        headers = dict(request.header_items())
+        self.assertEqual(headers["Authorization"], "Bearer secret-key")
+        self.assertEqual(headers["Content-type"], "application/json")
+        self.assertEqual(headers["Accept"], "application/json")
+        self.assertEqual(headers["Http-referer"], "https://deploy.example")
+        self.assertEqual(headers["X-openrouter-title"], "Academic Engine")
+
+    def test_openai_compatible_executor_requires_key_and_model(self) -> None:
+        executor = build_openrouter_executor(environ={}, transport=FakeOpenRouterTransport())
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            executor.execute(self.context(), "prompt")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-config-missing")
+        self.assertIn("OPENROUTER_API_KEY", str(caught.exception))
+        self.assertIn("ACADEMIC_ENGINE_OPENROUTER_MODEL", str(caught.exception))
+
+    def test_openai_compatible_executor_writes_model_content_to_output_file(self) -> None:
+        transport = FakeOpenRouterTransport(
+            body=b'{"choices":[{"message":{"content":"```role-result/v1\\n{}\\n```"}}]}'
+        )
+        executor = build_openrouter_executor(
+            environ={
+                "OPENROUTER_API_KEY": "secret-key",
+                "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            },
+            transport=transport,
+        )
+
+        executor.execute(self.context(), "prompt")
+
+        self.assertEqual(self.output.read_text(encoding="utf-8"), "```role-result/v1\n{}\n```")
+        request, timeout = transport.requests[0]
+        self.assertEqual(timeout, 17)
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["messages"], [{"role": "user", "content": "prompt"}])
+
+    def test_openrouter_auth_errors_use_auth_blocker(self) -> None:
+        executor = build_openrouter_executor(
+            environ={
+                "OPENROUTER_API_KEY": "secret-key",
+                "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            },
+            transport=FakeOpenRouterTransport(status=401, body=b'{"error":"bad key"}'),
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            executor.execute(self.context(), "prompt")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-auth-failed")
+        self.assertNotIn("secret-key", str(caught.exception))
+
+    def test_openrouter_http_errors_use_http_blocker(self) -> None:
+        executor = build_openrouter_executor(
+            environ={
+                "OPENROUTER_API_KEY": "secret-key",
+                "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            },
+            transport=FakeOpenRouterTransport(status=500, body=b'{"error":"temporary"}'),
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            executor.execute(self.context(), "prompt")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-http-failed")
+
+    def test_openrouter_invalid_response_shape_uses_invalid_response_blocker(self) -> None:
+        executor = build_openrouter_executor(
+            environ={
+                "OPENROUTER_API_KEY": "secret-key",
+                "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            },
+            transport=FakeOpenRouterTransport(body=b'{"choices":[{"message":{}}]}'),
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            executor.execute(self.context(), "prompt")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-response-invalid")
 
 
 if __name__ == "__main__":
