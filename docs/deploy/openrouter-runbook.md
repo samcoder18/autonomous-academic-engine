@@ -1,0 +1,162 @@
+# OpenRouter Deploy Runbook
+
+## Purpose
+
+This runbook explains how to enable the existing OpenRouter executor route for evaluator and verifier roles, verify it with a live smoke check, diagnose provider failures, and roll back to the Codex CLI default route.
+
+It does not authorize OpenRouter as the default executor. Writer and finalizer roles still require Codex CLI because they need sandbox-aware file-writing behavior.
+
+## Hard Boundaries
+
+- Default executor remains `codex-cli`.
+- OpenRouter may be routed only to evaluator and verifier roles.
+- `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is forbidden in this slice.
+- Live provider calls are never part of ordinary CI or unit tests.
+- Provider secrets must not be committed, printed, copied into docs, or serialized into `output/runs/`.
+- `WorkflowEngine` remains the authority for prompts, role-result validation, gates, blockers, readiness, repairs, and promotion.
+
+## Environment Contract
+
+| Variable | Required | Secret | Purpose |
+| --- | --- | --- | --- |
+| `OPENROUTER_API_KEY` | Yes for live smoke and live route | Yes | OpenRouter bearer token. |
+| `ACADEMIC_ENGINE_OPENROUTER_MODEL` | Yes for live smoke and live route | No | OpenRouter model slug, for example `provider/model-slug`. |
+| `ACADEMIC_ENGINE_EVALUATOR_EXECUTOR` | Yes to route evaluator through OpenRouter | No | Set to `openrouter` only after smoke passes. |
+| `ACADEMIC_ENGINE_VERIFIER_EXECUTOR` | Yes to route verifier through OpenRouter | No | Set to `openrouter` only after smoke passes. |
+| `ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST` | Yes only for smoke | No | Set to `1` for `provider-smoke openrouter`; unset after smoke. |
+| `ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER` | Optional | No | Optional OpenRouter app attribution header. |
+| `ACADEMIC_ENGINE_OPENROUTER_APP_TITLE` | Optional | No | Optional OpenRouter app title attribution header. |
+| `OPS_ALERT_LOG_PATH` | Optional | No | Existing daemon ops-alert tee log path for long-running local operations. |
+
+## Secret Handling
+
+Use shell exports, a local untracked `.env`, or the deployment platform's secret store. Do not commit `.env`.
+
+The repository may contain `.env.example` with empty or redacted values. It must never contain a real OpenRouter key.
+
+If a key is printed to a terminal transcript, committed, or written into `output/runs/`, rotate it before continuing deployment.
+
+## Pre-Deploy Checks
+
+Run from the repository root:
+
+```bash
+git status --short --branch
+python3 -m unittest discover -s tests -q
+```
+
+Expected:
+
+- git status shows no unrelated uncommitted tracked changes;
+- unit tests pass without network access.
+
+Choose a model before live verification. Prefer a model that reliably follows fenced `role-result/v1` instructions for evaluator and verifier roles.
+
+## Live Smoke
+
+Set only the provider secret, model, and explicit live-smoke flag:
+
+```bash
+export OPENROUTER_API_KEY="<set-in-shell-or-secret-store>"
+export ACADEMIC_ENGINE_OPENROUTER_MODEL="provider/model-slug"
+export ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1
+python3 -m academic_engine.work_cli provider-smoke openrouter
+unset ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST
+```
+
+Expected success output shape:
+
+```text
+[provider-smoke] provider: openrouter
+[provider-smoke] model: provider/model-slug
+[provider-smoke] response_chars: <number>
+[provider-smoke] preview: provider-smoke-ok
+```
+
+The smoke command must not print `OPENROUTER_API_KEY` or the bearer value.
+
+## Enable Evaluator And Verifier Routes
+
+Enable OpenRouter only after the live smoke succeeds:
+
+```bash
+export ACADEMIC_ENGINE_EVALUATOR_EXECUTOR=openrouter
+export ACADEMIC_ENGINE_VERIFIER_EXECUTOR=openrouter
+unset ACADEMIC_ENGINE_DEFAULT_EXECUTOR
+```
+
+Do not set `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter`.
+
+## First Workflow Check
+
+Use a non-critical work bundle first. Prefer an article or thesis workflow where evaluator or verifier roles are expected to run, and keep the target explicit with `--work`.
+
+After the workflow starts, capture the `workflow_id` from CLI output and inspect runtime artifacts:
+
+```bash
+python3 -m academic_engine.work_cli work-status --json
+python3 -m academic_engine.work_cli runtime-index refresh --json
+python3 -m academic_engine.work_cli runtime-index status --json
+```
+
+For a specific run, inspect:
+
+```text
+output/runs/<workflow_id>/workflow.json
+output/runs/<workflow_id>/events.jsonl
+output/runs/<workflow_id>/roles/
+```
+
+Expected:
+
+- provider route is used only for evaluator and verifier roles;
+- blockers are machine-readable if the provider fails;
+- no secret value appears in workflow JSON, events, role output, stdout, or stderr.
+
+## Diagnostics Matrix
+
+| Code | Likely Cause | Operator Action | Rollback Needed |
+| --- | --- | --- | --- |
+| `provider-config-missing` | Missing key, missing model, or missing explicit live-smoke flag. | Set `OPENROUTER_API_KEY`, set `ACADEMIC_ENGINE_OPENROUTER_MODEL`, or set `ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1` for smoke only. Rerun smoke. | No, unless a workflow is blocked and should continue with Codex. |
+| `provider-auth-failed` | OpenRouter rejected the key or account access. | Rotate or replace the key, check account/billing/model access, rerun smoke. | Yes for active workflow rollout: unset evaluator/verifier route env. |
+| `provider-http-failed` | Timeout, network error, OpenRouter 5xx, or non-auth HTTP failure. | Check local network/proxy, OpenRouter status, model availability, and rerun smoke. | Yes if a production workflow is waiting on provider recovery. |
+| `provider-response-invalid` | OpenRouter response JSON is malformed, empty, or lacks `choices[0].message.content`. | Retry smoke once, then switch model if repeated. If workflow output exists but role-result validation fails, treat it as model contract failure. | Yes if repeated for the selected model. |
+| `provider-route-forbidden` | OpenRouter was selected for the default executor route. | Unset `ACADEMIC_ENGINE_DEFAULT_EXECUTOR`; keep only evaluator/verifier route env. | No after env is corrected. |
+| `role-result-schema-invalid` | Provider returned text but not a valid `role-result/v1` payload. | Switch to a model that follows the role-result contract or roll back evaluator/verifier routes to Codex CLI. | Yes if repeated for the selected model. |
+
+## Observability Surfaces
+
+Start with the command that failed:
+
+- smoke failure: stderr from `provider-smoke openrouter`;
+- workflow failure: `output/runs/<workflow_id>/workflow.json`;
+- role-level failure: role output and role result under `output/runs/<workflow_id>/roles/`;
+- current work summary: `python3 -m academic_engine.work_cli work-status --json`;
+- indexed runtime summary: `runtime-index refresh --json` followed by `runtime-index status --json`;
+- daemon operations: stderr/logging and optional `OPS_ALERT_LOG_PATH`.
+
+Provider diagnostics must stay safe to paste into issue reports. Include blocker code, model slug, route name, workflow id, and role id. Do not include `OPENROUTER_API_KEY`.
+
+## Rollback
+
+Roll back provider routing by unsetting route-specific env:
+
+```bash
+unset ACADEMIC_ENGINE_EVALUATOR_EXECUTOR
+unset ACADEMIC_ENGINE_VERIFIER_EXECUTOR
+unset ACADEMIC_ENGINE_DEFAULT_EXECUTOR
+```
+
+Then rerun the relevant command. With no explicit executor env, the router returns to Codex CLI default behavior.
+
+## Rollout Policy
+
+Use this order:
+
+1. Local deterministic tests pass without network.
+2. `provider-smoke openrouter` passes with explicit live flag.
+3. One non-critical evaluator/verifier workflow is run with OpenRouter routes enabled.
+4. Runtime artifacts are inspected for blocker clarity and secret absence.
+5. Only then use OpenRouter routes on normal evaluator/verifier workflows.
+
+Do not expand OpenRouter to writer, finalizer, or default executor routes until a separate safe file-write bridge design is approved and implemented.
