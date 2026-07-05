@@ -251,7 +251,7 @@ ACADEMIC_ENGINE_OPENROUTER_MODEL=
 
 # Optional OpenRouter app attribution headers.
 # ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER=https://your-deploy-domain.example
-# ACADEMIC_ENGINE_OPENROUTER_APP_TITLE=Academic Engine
+# ACADEMIC_ENGINE_OPENROUTER_APP_TITLE="Academic Engine"
 
 # Explicit live-smoke opt-in. Set only for the smoke command, then unset.
 # ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1
