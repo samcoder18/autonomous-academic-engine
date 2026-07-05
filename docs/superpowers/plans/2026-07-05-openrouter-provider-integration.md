@@ -538,7 +538,7 @@ Add `ProviderExecutionError` to the import from `academic_engine.executors` in `
 from academic_engine.executors import ExecutorUnavailableError, ProviderExecutionError, RoleExecutionContext
 ```
 
-Add this test method to `WorkflowEngineTests` near `test_executor_unavailable_fails_without_retrying`:
+Add this test method to `WorkflowEngineTests` near `test_executor_unavailable_fails_closed_with_stable_blocker`:
 
 ```python
     def test_provider_execution_error_records_provider_blocker_code(self) -> None:
@@ -605,7 +605,7 @@ Replace it with:
 Run:
 
 ```bash
-python3 -m pytest tests/test_workflow_engine.py::WorkflowEngineTests::test_provider_execution_error_records_provider_blocker_code tests/test_workflow_engine.py::WorkflowEngineTests::test_executor_unavailable_fails_without_retrying -q
+python3 -m pytest tests/test_workflow_engine.py::WorkflowEngineTests::test_provider_execution_error_records_provider_blocker_code tests/test_workflow_engine.py::WorkflowEngineTests::test_executor_unavailable_fails_closed_with_stable_blocker -q
 ```
 
 Expected: both tests pass.
