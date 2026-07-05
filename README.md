@@ -190,9 +190,12 @@ Run an explicit live smoke check before using the route:
 ```bash
 export ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1
 python3 -m academic_engine.work_cli provider-smoke openrouter
+unset ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST
 ```
 
 Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is intentionally rejected until a safe file-write bridge exists for writer/finalizer roles.
+
+Deploy runbook and diagnostics matrix: [docs/deploy/openrouter-runbook.md](docs/deploy/openrouter-runbook.md). Redacted local env template: [.env.example](.env.example).
 
 ## Launcher / CLI
 
