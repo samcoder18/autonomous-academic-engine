@@ -33,7 +33,7 @@ from .engine_service import (
     RetryJobRequest,
     SubmitWorkflowJobRequest,
 )
-from .executors import build_executor_router
+from .executors import ProviderExecutionError, build_executor_router, run_provider_smoke
 from .job_queue import JobQueueError
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .orchestrator_support import WorkflowError
@@ -191,6 +191,9 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     work_status_parser = subparsers.add_parser("work-status")
     work_status_parser.add_argument("--work", dest="work_id")
     work_status_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    provider_smoke_parser = subparsers.add_parser("provider-smoke")
+    provider_smoke_parser.add_argument("provider", choices=("openrouter",))
 
     runtime_index_parser = subparsers.add_parser("runtime-index")
     runtime_index_subparsers = runtime_index_parser.add_subparsers(dest="runtime_index_command", required=True)
@@ -407,6 +410,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return standards_status(root_path, args.profile_id)
         if args.command == "work-status":
             return work_status(root_path, args.work_id, as_json=args.as_json)
+        if args.command == "provider-smoke":
+            return provider_smoke_cli(args.provider)
         if args.command == "runtime-index":
             return runtime_index_cli(root_path, args)
         if args.command == "jobs":
@@ -1052,6 +1057,19 @@ def work_status(root_dir: Path, work_id: str | None, *, as_json: bool = False) -
         print(json.dumps(state, ensure_ascii=False, indent=2))
     else:
         print(format_work_state_summary(state))
+    return 0
+
+
+def provider_smoke_cli(provider: str) -> int:
+    try:
+        result = run_provider_smoke(provider)
+    except ProviderExecutionError as exc:
+        print(f"[provider-smoke] {exc.blocker_code}: {exc}", file=sys.stderr)
+        return 1
+    print(f"[provider-smoke] provider: {result.provider_id}")
+    print(f"[provider-smoke] model: {result.model}")
+    print(f"[provider-smoke] response_chars: {result.content_length}")
+    print(f"[provider-smoke] preview: {result.preview}")
     return 0
 
 

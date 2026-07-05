@@ -54,7 +54,7 @@ from academic_engine.autonomous_scheduler import (
     start_multi_work_daemon_process,
 )
 from academic_engine.contract_gates import evaluate_contract_gates
-from academic_engine.executors import CallableRoleExecutor, ExecutorRouter
+from academic_engine.executors import CallableRoleExecutor, ExecutorRouter, ProviderExecutionError, ProviderSmokeResult
 from academic_engine.finalization_engine import evaluate_article_finalization
 from academic_engine.guarded_prose import load_guarded_prose_rules
 from academic_engine.one_shot import ONE_SHOT_REPORT_VERSION
@@ -5290,6 +5290,48 @@ class ArticleBundleLifecycleTests(unittest.TestCase):
 
 
 class WorkCliTests(unittest.TestCase):
+    def test_provider_smoke_cli_prints_safe_success_summary(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+        result = ProviderSmokeResult(
+            provider_id="openrouter",
+            model="openrouter/test-model",
+            content_length=17,
+            preview="provider-smoke-ok",
+        )
+
+        with patch.object(work_cli_module, "run_provider_smoke", return_value=result):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["provider-smoke", "openrouter"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("[provider-smoke] provider: openrouter", stdout.getvalue())
+        self.assertIn("[provider-smoke] model: openrouter/test-model", stdout.getvalue())
+        self.assertIn("[provider-smoke] response_chars: 17", stdout.getvalue())
+        self.assertIn("[provider-smoke] preview: provider-smoke-ok", stdout.getvalue())
+        self.assertNotIn("OPENROUTER_API_KEY", stdout.getvalue())
+
+    def test_provider_smoke_cli_reports_provider_error_without_secret(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch.object(
+            work_cli_module,
+            "run_provider_smoke",
+            side_effect=ProviderExecutionError(
+                "provider-auth-failed", "openrouter authentication failed with HTTP 401"
+            ),
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(["provider-smoke", "openrouter"])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("provider-auth-failed", stderr.getvalue())
+        self.assertIn("openrouter authentication failed", stderr.getvalue())
+        self.assertNotIn("secret", stderr.getvalue())
+
     def test_standards_intake_creates_manifest_and_normalized_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

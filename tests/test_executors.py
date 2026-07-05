@@ -15,10 +15,12 @@ from academic_engine.executors import (
     OpenAICompatibleExecutor,
     OpenRouterChatClient,
     ProviderExecutionError,
+    ProviderSmokeResult,
     RoleExecutionContext,
     StubApiExecutor,
     build_executor_router,
     build_openrouter_executor,
+    run_provider_smoke,
 )
 
 
@@ -261,6 +263,46 @@ class OpenRouterProviderTests(unittest.TestCase):
             timeout_seconds=17,
             is_evaluator=True,
         )
+
+    def test_provider_smoke_requires_explicit_live_flag(self) -> None:
+        with self.assertRaises(ProviderExecutionError) as caught:
+            run_provider_smoke(
+                "openrouter",
+                environ={
+                    "OPENROUTER_API_KEY": "secret-key",
+                    "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+                },
+                transport=FakeOpenRouterTransport(),
+            )
+
+        self.assertEqual(caught.exception.blocker_code, "provider-config-missing")
+        self.assertIn("ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1", str(caught.exception))
+
+    def test_provider_smoke_runs_one_safe_prompt_when_enabled(self) -> None:
+        transport = FakeOpenRouterTransport(body=b'{"choices":[{"message":{"content":"provider-smoke-ok"}}]}')
+
+        result = run_provider_smoke(
+            "openrouter",
+            environ={
+                "OPENROUTER_API_KEY": "secret-key",
+                "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+                "ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST": "1",
+            },
+            transport=transport,
+        )
+
+        self.assertEqual(
+            result,
+            ProviderSmokeResult(
+                provider_id="openrouter",
+                model="openrouter/test-model",
+                content_length=len("provider-smoke-ok"),
+                preview="provider-smoke-ok",
+            ),
+        )
+        request, _ = transport.requests[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["messages"], [{"role": "user", "content": "Respond with exactly: provider-smoke-ok"}])
 
     def test_openrouter_client_builds_chat_completion_payload_and_headers(self) -> None:
         transport = FakeOpenRouterTransport()

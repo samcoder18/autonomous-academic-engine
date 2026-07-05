@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,14 @@ class ProviderExecutionError(ExecutorUnavailableError):
     def __init__(self, blocker_code: str, message: str):
         super().__init__(message)
         self.blocker_code = blocker_code
+
+
+@dataclass(frozen=True)
+class ProviderSmokeResult:
+    provider_id: str
+    model: str
+    content_length: int
+    preview: str
 
 
 def _urllib_transport(request: urlrequest.Request, timeout: float) -> tuple[int, bytes]:
@@ -317,6 +326,54 @@ def build_openrouter_executor(
         environ=env,
         http_referer_env="ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER",
         app_title_env="ACADEMIC_ENGINE_OPENROUTER_APP_TITLE",
+    )
+
+
+def run_provider_smoke(
+    provider_id: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    transport: HttpTransport | None = None,
+) -> ProviderSmokeResult:
+    if provider_id != "openrouter":
+        raise ProviderExecutionError("provider-config-missing", f"provider `{provider_id}` is not supported")
+    env = environ if environ is not None else os.environ
+    if _clean_env_value(env.get("ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST")) != "1":
+        raise ProviderExecutionError(
+            "provider-config-missing",
+            "Set ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1 to run provider smoke.",
+        )
+    model = _clean_env_value(env.get("ACADEMIC_ENGINE_OPENROUTER_MODEL"))
+    if model is None:
+        raise ProviderExecutionError(
+            "provider-config-missing",
+            "openrouter requires ACADEMIC_ENGINE_OPENROUTER_MODEL",
+        )
+    with tempfile.TemporaryDirectory() as tempdir:
+        root = Path(tempdir)
+        output_file = root / "output.md"
+        context = RoleExecutionContext(
+            workflow_id="provider-smoke-openrouter",
+            role_run_id="01-provider-smoke-openrouter",
+            role_id="provider-smoke-openrouter",
+            work_id="provider-smoke",
+            lane="provider",
+            action="smoke",
+            sandbox_dir=root,
+            output_file=output_file,
+            use_search=False,
+            model=None,
+            timeout_seconds=30,
+        )
+        executor = build_openrouter_executor(environ=env, transport=transport)
+        executor.execute(context, "Respond with exactly: provider-smoke-ok")
+        content = output_file.read_text(encoding="utf-8")
+    preview = " ".join(content.split())[:120]
+    return ProviderSmokeResult(
+        provider_id="openrouter",
+        model=model,
+        content_length=len(content),
+        preview=preview,
     )
 
 
