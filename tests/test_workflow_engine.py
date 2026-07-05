@@ -16,7 +16,7 @@ from academic_engine.action_specs import (
     RepairPolicy,
     RequiredArtifact,
 )
-from academic_engine.executors import ExecutorUnavailableError, RoleExecutionContext
+from academic_engine.executors import ExecutorUnavailableError, ProviderExecutionError, RoleExecutionContext
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
 from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
@@ -483,6 +483,36 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.role_runs[0].attempt_count, 1)
         self.assertTrue(any(item["code"] == "executor-unavailable" for item in result.blockers))
         self.assertEqual(result.promotion.status, "blocked")
+
+    def test_provider_execution_error_records_provider_blocker_code(self) -> None:
+        class ProviderFailureRouter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+                self.calls += 1
+                raise ProviderExecutionError(
+                    "provider-auth-failed",
+                    "openrouter authentication failed with HTTP 401",
+                )
+
+        router = ProviderFailureRouter()
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(router.calls, 1)
+        self.assertEqual(result.execution_status, "failed")
+        self.assertTrue(any(item["code"] == "provider-auth-failed" for item in result.blockers))
+        self.assertFalse(any(item["code"] == "executor-unavailable" for item in result.blockers))
 
     def test_role_timeout_retries_once_then_fails(self) -> None:
         attempts = 0

@@ -615,7 +615,8 @@ class WorkflowEngine:
             role.status = "failed"
             role.error = str(error)
             if isinstance(error, ExecutorUnavailableError):
-                role.blockers.append(_runtime_blocker("executor-unavailable", f"{node.role_id}: {error}"))
+                blocker_code = getattr(error, "blocker_code", "executor-unavailable")
+                role.blockers.append(_runtime_blocker(str(blocker_code), f"{node.role_id}: {error}"))
             else:
                 role.blockers.append(_runtime_blocker("role-execution-failed", f"{node.role_id}: {error}"))
         else:
