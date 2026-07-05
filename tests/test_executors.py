@@ -12,6 +12,7 @@ from academic_engine.executors import (
     CodexCliExecutor,
     ExecutorRouter,
     ExecutorUnavailableError,
+    OpenAICompatibleExecutor,
     OpenRouterChatClient,
     ProviderExecutionError,
     RoleExecutionContext,
@@ -193,6 +194,33 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertIsInstance(router, ExecutorRouter)
         self.assertIsInstance(router.default_executor, CodexCliExecutor)
+
+    def test_build_router_registers_openrouter_for_evaluator_and_verifier_routes(self) -> None:
+        environ = {
+            "OPENROUTER_API_KEY": "secret-key",
+            "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            "ACADEMIC_ENGINE_EVALUATOR_EXECUTOR": "openrouter",
+            "ACADEMIC_ENGINE_VERIFIER_EXECUTOR": "openrouter",
+        }
+
+        router = build_executor_router(environ=environ)
+
+        self.assertIsInstance(router.evaluator_executor, OpenAICompatibleExecutor)
+        self.assertIsInstance(router.verifier_executor, OpenAICompatibleExecutor)
+        self.assertIsInstance(router.default_executor, CodexCliExecutor)
+
+    def test_openrouter_default_route_fails_closed_with_provider_code(self) -> None:
+        environ = {
+            "OPENROUTER_API_KEY": "secret-key",
+            "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+            "ACADEMIC_ENGINE_DEFAULT_EXECUTOR": "openrouter",
+        }
+        router = build_executor_router(environ=environ)
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(self.context(), "prompt")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
 
 
 class FakeOpenRouterTransport:

@@ -247,6 +247,18 @@ class UnavailableExecutor:
         raise ExecutorUnavailableError(f"executor `{self.executor_id}` is not available")
 
 
+class ForbiddenProviderRouteExecutor:
+    def __init__(self, executor_id: str, route_name: str):
+        self.executor_id = executor_id
+        self.route_name = route_name
+
+    def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+        raise ProviderExecutionError(
+            "provider-route-forbidden",
+            f"executor `{self.executor_id}` is not allowed for {self.route_name} route in this slice",
+        )
+
+
 @dataclass(frozen=True)
 class ExecutorRouter:
     default_executor: RoleExecutorProtocol
@@ -277,9 +289,9 @@ def build_executor_router(
     verifier_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_VERIFIER_EXECUTOR"))
 
     return ExecutorRouter(
-        default_executor=_executor_for(default_id, available),
-        evaluator_executor=_executor_for(evaluator_id, available) if evaluator_id else None,
-        verifier_executor=_executor_for(verifier_id, available) if verifier_id else None,
+        default_executor=_executor_for(default_id, available, route_name="default"),
+        evaluator_executor=_executor_for(evaluator_id, available, route_name="evaluator") if evaluator_id else None,
+        verifier_executor=_executor_for(verifier_id, available, route_name="verifier") if verifier_id else None,
     )
 
 
@@ -287,6 +299,7 @@ def _default_registry(environ: Mapping[str, str]) -> dict[str, RoleExecutorProto
     return {
         "codex-cli": CodexCliExecutor(environ=environ),
         "stub-api": StubApiExecutor(),
+        "openrouter": build_openrouter_executor(environ=environ),
     }
 
 
@@ -307,7 +320,14 @@ def build_openrouter_executor(
     )
 
 
-def _executor_for(executor_id: str, registry: Mapping[str, RoleExecutorProtocol]) -> RoleExecutorProtocol:
+def _executor_for(
+    executor_id: str,
+    registry: Mapping[str, RoleExecutorProtocol],
+    *,
+    route_name: str,
+) -> RoleExecutorProtocol:
+    if route_name == "default" and executor_id == "openrouter":
+        return ForbiddenProviderRouteExecutor(executor_id, route_name)
     return registry.get(executor_id) or UnavailableExecutor(executor_id)
 
 
