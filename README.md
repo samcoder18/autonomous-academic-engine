@@ -167,6 +167,33 @@ Known limits и unknowns: [meta/autonomous-engine-unknowns-2026-04-19.md](meta/a
 - Live-режим opt-in per-connector: `SOURCES_PRAVO_GOV_ENABLE=1`, `SOURCES_SUDACT_ENABLE=1`, `SOURCES_CBR_ENABLE=1`, `SOURCES_ELIBRARY_ENABLE=1`, `SOURCES_CYBERLENINKA_ENABLE=1`, `SOURCES_SEMANTIC_SCHOLAR_ENABLE=1`, `SOURCES_VAK_ENABLE=1`, `SOURCES_WEB_FALLBACK_ENABLE=1`.
 - HTTP-транспорт инъектируем (`HttpClient(transport=...)`), так что тесты парсинга HTML проходят без urllib. Вторая линия защиты от случайных сетевых вызовов.
 
+### OpenRouter provider route
+
+Codex CLI remains the default executor. OpenRouter can be enabled only for evaluator and verifier roles in this slice:
+
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-redacted"
+export ACADEMIC_ENGINE_OPENROUTER_MODEL="provider/model-slug"
+export ACADEMIC_ENGINE_EVALUATOR_EXECUTOR=openrouter
+export ACADEMIC_ENGINE_VERIFIER_EXECUTOR=openrouter
+```
+
+Optional deploy attribution:
+
+```bash
+export ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER="https://your-deploy-domain.example"
+export ACADEMIC_ENGINE_OPENROUTER_APP_TITLE="Academic Engine"
+```
+
+Run an explicit live smoke check before using the route:
+
+```bash
+export ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST=1
+python3 -m academic_engine.work_cli provider-smoke openrouter
+```
+
+Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is intentionally rejected until a safe file-write bridge exists for writer/finalizer roles.
+
 ## Launcher / CLI
 
 Верхнеуровневые команды:
