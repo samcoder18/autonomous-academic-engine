@@ -380,7 +380,7 @@ Expected:
 Run:
 
 ```bash
-rg -n "sk-or-v1-[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9._-]{20,}|OPENROUTER_API_KEY=\\S+" README.md docs/deploy/openrouter-runbook.md .env.example
+rg -n "sk-or-v1-[A-Za-z0-9_-]{20,}|Bearer [A-Za-z0-9._-]{20,}|OPENROUTER_API_KEY=(sk-or-v1-[A-Za-z0-9_-]{20,}|[A-Za-z0-9._-]{20,})" README.md docs/deploy/openrouter-runbook.md .env.example
 ```
 
 Expected: no matches. The literal redacted example `sk-or-v1-redacted` is acceptable because it is not a real-looking key.
