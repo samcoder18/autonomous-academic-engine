@@ -16,7 +16,13 @@ from academic_engine.action_specs import (
     RepairPolicy,
     RequiredArtifact,
 )
-from academic_engine.executors import ExecutorUnavailableError, ProviderExecutionError, RoleExecutionContext
+from academic_engine.executors import (
+    CallableRoleExecutor,
+    ExecutorRouter,
+    ExecutorUnavailableError,
+    ProviderExecutionError,
+    RoleExecutionContext,
+)
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
 from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
@@ -462,6 +468,51 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertTrue(second.is_evaluator)
         self.assertFalse(second.is_verifier)
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Updated through router\n")
+
+    def test_workflow_persists_executor_route_trace(self) -> None:
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Role ID: thesis-style-editor" in prompt:
+                path = sandbox / self.target.relative_to(self.root)
+                path.write_text("# Updated through traced router\n", encoding="utf-8")
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            evaluator_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+        )
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.role_runs[0].executor_route, "default")
+        self.assertEqual(result.role_runs[0].executor_id, "codex-cli")
+        self.assertEqual(result.role_runs[1].executor_route, "evaluator")
+        self.assertEqual(result.role_runs[1].executor_id, "openrouter")
+
+        workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
+        self.assertEqual(workflow_payload["role_runs"][0]["executor_route"], "default")
+        self.assertEqual(workflow_payload["role_runs"][0]["executor_id"], "codex-cli")
+        self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
+        self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "openrouter")
 
     def test_executor_unavailable_fails_closed_with_stable_blocker(self) -> None:
         class UnavailableRouter:

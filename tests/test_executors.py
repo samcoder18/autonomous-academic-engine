@@ -110,6 +110,36 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(len(verifier.calls), 1)
         self.assertEqual(self.output.read_text(encoding="utf-8"), "verifier:thesis-source-verifier:verify")
 
+    def test_router_describes_selected_executor_route(self) -> None:
+        default = RecordingExecutor("default")
+        evaluator = RecordingExecutor("evaluator")
+        verifier = RecordingExecutor("verifier")
+        router = ExecutorRouter(
+            default_executor=default,
+            evaluator_executor=evaluator,
+            verifier_executor=verifier,
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+            verifier_executor_id="openrouter",
+        )
+
+        self.assertEqual(
+            router.describe_selection(self.context()).to_dict(),
+            {"route_name": "default", "executor_id": "codex-cli"},
+        )
+        self.assertEqual(
+            router.describe_selection(
+                self.context("academic-submission-evaluator", is_evaluator=True)
+            ).to_dict(),
+            {"route_name": "evaluator", "executor_id": "openrouter"},
+        )
+        self.assertEqual(
+            router.describe_selection(
+                self.context("academic-source-verifier", is_verifier=True)
+            ).to_dict(),
+            {"route_name": "verifier", "executor_id": "openrouter"},
+        )
+
     def test_unset_specific_routes_inherit_default(self) -> None:
         default = RecordingExecutor("default")
         router = ExecutorRouter(default_executor=default)
