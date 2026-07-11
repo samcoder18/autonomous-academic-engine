@@ -18,6 +18,12 @@ OutputStrategy = Callable[["RoleExecutionContext", str], None]
 HttpTransport = Callable[[urlrequest.Request, float], tuple[int, bytes]]
 
 
+OPENROUTER_ALLOWED_ROLE_ROUTES = {
+    "academic-source-verifier": "verifier",
+    "academic-submission-evaluator": "evaluator",
+}
+
+
 class ExecutorUnavailableError(RuntimeError):
     """Raised when an explicitly selected executor cannot run a role."""
 
@@ -301,6 +307,11 @@ class ExecutorRouter:
         return ExecutorSelection("default", self.default_executor_id)
 
     def _select(self, context: RoleExecutionContext) -> RoleExecutorProtocol:
+        selection = self.describe_selection(context)
+        if selection.executor_id == "openrouter":
+            expected_route = OPENROUTER_ALLOWED_ROLE_ROUTES.get(context.role_id)
+            if expected_route != selection.route_name:
+                return ForbiddenProviderRouteExecutor(selection.executor_id, selection.route_name)
         if context.is_evaluator and self.evaluator_executor is not None:
             return self.evaluator_executor
         if context.is_verifier and self.verifier_executor is not None:

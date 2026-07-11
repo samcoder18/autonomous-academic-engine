@@ -136,6 +136,64 @@ class ExecutorTests(unittest.TestCase):
             {"route_name": "verifier", "executor_id": "openrouter"},
         )
 
+    def test_openrouter_evaluator_route_runs_academic_evaluator(self) -> None:
+        default = RecordingExecutor("default")
+        evaluator = RecordingExecutor("evaluator")
+        router = ExecutorRouter(
+            default_executor=default,
+            evaluator_executor=evaluator,
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+        )
+
+        router.execute(
+            self.context("academic-submission-evaluator", is_evaluator=True),
+            "evaluate",
+        )
+
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(evaluator.calls), 1)
+
+    def test_openrouter_evaluator_route_rejects_thesis_role_without_fallback(self) -> None:
+        default = RecordingExecutor("default")
+        evaluator = RecordingExecutor("evaluator")
+        router = ExecutorRouter(
+            default_executor=default,
+            evaluator_executor=evaluator,
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(
+                self.context("thesis-submission-evaluator", is_evaluator=True),
+                "evaluate",
+            )
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(evaluator.calls), 0)
+
+    def test_openrouter_verifier_route_rejects_thesis_role_without_fallback(self) -> None:
+        default = RecordingExecutor("default")
+        verifier = RecordingExecutor("verifier")
+        router = ExecutorRouter(
+            default_executor=default,
+            verifier_executor=verifier,
+            default_executor_id="codex-cli",
+            verifier_executor_id="openrouter",
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(
+                self.context("thesis-source-verifier", is_verifier=True),
+                "verify",
+            )
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(verifier.calls), 0)
+
     def test_unset_specific_routes_inherit_default(self) -> None:
         default = RecordingExecutor("default")
         router = ExecutorRouter(default_executor=default)
