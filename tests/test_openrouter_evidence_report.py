@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
 
 

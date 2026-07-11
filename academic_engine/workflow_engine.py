@@ -596,11 +596,7 @@ class WorkflowEngine:
                     role.executor_id = selection.executor_id
                 else:
                     role.executor_route = (
-                        "evaluator"
-                        if context.is_evaluator
-                        else "verifier"
-                        if context.is_verifier
-                        else "default"
+                        "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
                     )
                     role.executor_id = "custom"
                 self.executor_router.execute(context, prompt)

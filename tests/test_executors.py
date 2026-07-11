@@ -128,15 +128,11 @@ class ExecutorTests(unittest.TestCase):
             {"route_name": "default", "executor_id": "codex-cli"},
         )
         self.assertEqual(
-            router.describe_selection(
-                self.context("academic-submission-evaluator", is_evaluator=True)
-            ).to_dict(),
+            router.describe_selection(self.context("academic-submission-evaluator", is_evaluator=True)).to_dict(),
             {"route_name": "evaluator", "executor_id": "openrouter"},
         )
         self.assertEqual(
-            router.describe_selection(
-                self.context("academic-source-verifier", is_verifier=True)
-            ).to_dict(),
+            router.describe_selection(self.context("academic-source-verifier", is_verifier=True)).to_dict(),
             {"route_name": "verifier", "executor_id": "openrouter"},
         )
 
