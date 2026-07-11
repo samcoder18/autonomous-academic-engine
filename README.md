@@ -197,6 +197,8 @@ Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXEC
 
 Deploy runbook and diagnostics matrix: [docs/deploy/openrouter-runbook.md](docs/deploy/openrouter-runbook.md). Redacted local env template: [.env.example](.env.example).
 
+For deploy rollout beyond provider smoke, use the controlled live workflow smoke and sanitized evidence report flow in [docs/deploy/openrouter-runbook.md](docs/deploy/openrouter-runbook.md).
+
 ## Launcher / CLI
 
 Верхнеуровневые команды:

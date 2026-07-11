@@ -36,6 +36,18 @@ class ProviderSmokeResult:
     preview: str
 
 
+@dataclass(frozen=True)
+class ExecutorSelection:
+    route_name: str
+    executor_id: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "route_name": self.route_name,
+            "executor_id": self.executor_id,
+        }
+
+
 def _urllib_transport(request: urlrequest.Request, timeout: float) -> tuple[int, bytes]:
     try:
         with urlrequest.urlopen(request, timeout=timeout) as response:
@@ -273,10 +285,20 @@ class ExecutorRouter:
     default_executor: RoleExecutorProtocol
     evaluator_executor: RoleExecutorProtocol | None = None
     verifier_executor: RoleExecutorProtocol | None = None
+    default_executor_id: str = "custom"
+    evaluator_executor_id: str | None = None
+    verifier_executor_id: str | None = None
 
     def execute(self, context: RoleExecutionContext, prompt: str) -> None:
         executor = self._select(context)
         executor.execute(context, prompt)
+
+    def describe_selection(self, context: RoleExecutionContext) -> ExecutorSelection:
+        if context.is_evaluator and self.evaluator_executor is not None:
+            return ExecutorSelection("evaluator", self.evaluator_executor_id or "custom")
+        if context.is_verifier and self.verifier_executor is not None:
+            return ExecutorSelection("verifier", self.verifier_executor_id or "custom")
+        return ExecutorSelection("default", self.default_executor_id)
 
     def _select(self, context: RoleExecutionContext) -> RoleExecutorProtocol:
         if context.is_evaluator and self.evaluator_executor is not None:
@@ -301,6 +323,9 @@ def build_executor_router(
         default_executor=_executor_for(default_id, available, route_name="default"),
         evaluator_executor=_executor_for(evaluator_id, available, route_name="evaluator") if evaluator_id else None,
         verifier_executor=_executor_for(verifier_id, available, route_name="verifier") if verifier_id else None,
+        default_executor_id=default_id,
+        evaluator_executor_id=evaluator_id,
+        verifier_executor_id=verifier_id,
     )
 
 

@@ -1,0 +1,21 @@
+version = 1
+slug = "openrouter-live-smoke"
+title = "OpenRouter Live Smoke"
+topic = "Controlled live provider routing smoke fixture"
+artifact_type = "article"
+language = "ru"
+active_lanes = ["article"]
+work_canon = "work-canon.md"
+
+[standards]
+article_profile = "ru-law-article-v1"
+
+[article]
+root_dir = "articles"
+briefs_dir = "articles/briefs"
+evidence_dir = "articles/evidence"
+claim_maps_dir = "articles/claim-maps"
+drafts_dir = "articles/drafts"
+reviews_dir = "articles/reviews"
+final_dir = "articles/final"
+docx_subdir = "articles"

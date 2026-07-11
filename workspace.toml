@@ -11,4 +11,5 @@ runs_dir = "output/runs"
 docx_dir = "output/docx"
 
 [works]
+openrouter-live-smoke = "works/openrouter-live-smoke"
 starter-work = "works/starter-work"

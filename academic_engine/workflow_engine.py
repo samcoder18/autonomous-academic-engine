@@ -112,6 +112,8 @@ class RoleRun:
     action: str
     status: str
     started_at: str
+    executor_route: str | None = None
+    executor_id: str | None = None
     reported_status: str | None = None
     finished_at: str | None = None
     attempt_count: int = 0
@@ -133,6 +135,8 @@ class RoleRun:
             "work_id": self.work_id,
             "lane": self.lane,
             "action": self.action,
+            "executor_route": self.executor_route,
+            "executor_id": self.executor_id,
             "status": self.status,
             "reported_status": self.reported_status,
             "started_at": self.started_at,
@@ -586,6 +590,15 @@ class WorkflowEngine:
                     is_verifier=node.role_id in {"thesis-source-verifier", "academic-source-verifier"},
                     is_finalizer=node.finalizer,
                 )
+                if isinstance(self.executor_router, ExecutorRouter):
+                    selection = self.executor_router.describe_selection(context)
+                    role.executor_route = selection.route_name
+                    role.executor_id = selection.executor_id
+                else:
+                    role.executor_route = (
+                        "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
+                    )
+                    role.executor_id = "custom"
                 self.executor_router.execute(context, prompt)
                 if time.monotonic() - started > self.role_timeout_seconds:
                     raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
