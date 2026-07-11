@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 ALLOWED_OPENROUTER_ROUTES = {
     "academic-source-verifier": "verifier",
     "academic-submission-evaluator": "evaluator",

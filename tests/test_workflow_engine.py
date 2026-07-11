@@ -488,7 +488,7 @@ class WorkflowEngineTests(unittest.TestCase):
             default_executor=CallableRoleExecutor(executor),
             evaluator_executor=CallableRoleExecutor(executor),
             default_executor_id="codex-cli",
-            evaluator_executor_id="openrouter",
+            evaluator_executor_id="trace-evaluator",
         )
 
         result = WorkflowEngine(self.root, executor_router=router).run(
@@ -506,13 +506,13 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.role_runs[0].executor_route, "default")
         self.assertEqual(result.role_runs[0].executor_id, "codex-cli")
         self.assertEqual(result.role_runs[1].executor_route, "evaluator")
-        self.assertEqual(result.role_runs[1].executor_id, "openrouter")
+        self.assertEqual(result.role_runs[1].executor_id, "trace-evaluator")
 
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertEqual(workflow_payload["role_runs"][0]["executor_route"], "default")
         self.assertEqual(workflow_payload["role_runs"][0]["executor_id"], "codex-cli")
         self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
-        self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "openrouter")
+        self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "trace-evaluator")
 
     def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
         prompts: dict[str, str] = {}
