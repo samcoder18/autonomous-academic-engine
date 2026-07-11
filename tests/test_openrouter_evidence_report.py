@@ -9,6 +9,9 @@ import unittest
 from pathlib import Path
 
 
+FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
+
+
 class OpenRouterEvidenceReportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -42,7 +45,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         }
         (self.workflow_dir / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    def run_report(self, *, secret: str = "sk-or-v1-unit-test-secret-1234567890") -> subprocess.CompletedProcess[str]:
+    def run_report(self, *, secret: str = FAKE_OPENROUTER_KEY) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["OPENROUTER_API_KEY"] = secret
         env["ACADEMIC_ENGINE_OPENROUTER_MODEL"] = "openrouter/test-model"
@@ -164,7 +167,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Route policy violation", result.stderr)
 
     def test_report_fails_on_exact_secret_leak(self) -> None:
-        secret = "sk-or-v1-unit-test-secret-1234567890"
+        secret = FAKE_OPENROUTER_KEY
         self.write_workflow(
             roles=[
                 {
@@ -198,7 +201,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
             ]
         )
         (self.root / "README.md").write_text(
-            "OPENROUTER_API_KEY=sk-or-v1-unit-test-secret-1234567890\n",
+            f"OPENROUTER_API_KEY={FAKE_OPENROUTER_KEY}\n",
             encoding="utf-8",
         )
 

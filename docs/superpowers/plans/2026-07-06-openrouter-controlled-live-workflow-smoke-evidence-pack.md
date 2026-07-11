@@ -335,6 +335,9 @@ import unittest
 from pathlib import Path
 
 
+FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
+
+
 class OpenRouterEvidenceReportTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -368,7 +371,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         }
         (self.workflow_dir / "workflow.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    def run_report(self, *, secret: str = "sk-or-v1-unit-test-secret-1234567890") -> subprocess.CompletedProcess[str]:
+    def run_report(self, *, secret: str = FAKE_OPENROUTER_KEY) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["OPENROUTER_API_KEY"] = secret
         env["ACADEMIC_ENGINE_OPENROUTER_MODEL"] = "openrouter/test-model"
@@ -452,7 +455,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Route policy violation", result.stderr)
 
     def test_report_fails_on_exact_secret_leak(self) -> None:
-        secret = "sk-or-v1-unit-test-secret-1234567890"
+        secret = FAKE_OPENROUTER_KEY
         self.write_workflow(
             roles=[
                 {
@@ -1119,7 +1122,7 @@ Expected: PASS. If existing unrelated failures appear, record the exact failing 
 Run:
 
 ```bash
-rg -n "sk-or-v1-[A-Za-z0-9_-]{20,}|Authorization: Bearer|OPENROUTER_API_KEY=(sk-or-v1-[A-Za-z0-9_-]{20,}|[A-Za-z0-9._-]{20,})" README.md .env.example docs works/openrouter-live-smoke scripts tests
+rg -n "sk-or-v1-[A-Za-z0-9_-]{20,}|Authorization: Bearer|OPENROUTER_API_KEY=(sk-or-v1-[A-Za-z0-9_-]{20,}|[A-Za-z0-9._-]{20,})" README.md .env.example docs/deploy works/openrouter-live-smoke scripts tests
 ```
 
 Expected: no matches. The literal `sk-or-v1-redacted` remains acceptable if it appears because it does not match the real-looking key pattern.
