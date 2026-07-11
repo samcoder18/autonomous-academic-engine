@@ -113,6 +113,53 @@ Expected:
 - blockers are machine-readable if the provider fails;
 - no secret value appears in workflow JSON, events, role output, stdout, or stderr.
 
+## Controlled Live Workflow Smoke Evidence
+
+Use this only after `provider-smoke openrouter` passes. The controlled smoke uses the dedicated non-default work `openrouter-live-smoke`; it does not change `starter-work` and it does not authorize OpenRouter for writer, finalizer, or default routes.
+
+Required environment:
+
+```bash
+export OPENROUTER_API_KEY="<set-in-shell-or-secret-store>"
+export ACADEMIC_ENGINE_OPENROUTER_MODEL="provider/model-slug"
+export ACADEMIC_ENGINE_EVALUATOR_EXECUTOR=openrouter
+export ACADEMIC_ENGINE_VERIFIER_EXECUTOR=openrouter
+unset ACADEMIC_ENGINE_DEFAULT_EXECUTOR
+```
+
+Run the workflow with search disabled:
+
+```bash
+python3 -m academic_engine.work_cli launch-academic repair \
+  works/openrouter-live-smoke/articles/drafts/openrouter-live-smoke.md \
+  --work openrouter-live-smoke \
+  --no-search
+```
+
+Capture the returned `workflow_id`, dispatch the queued workflow through the normal job runner, then generate the commit-safe evidence report:
+
+```bash
+python3 -m academic_engine.work_cli jobs dispatch --limit 1 --json
+python3 -m academic_engine.work_cli runtime-index refresh --json
+python3 scripts/openrouter_evidence_report.py \
+  --root . \
+  --workflow-id "<workflow_id>" \
+  --stdout-log "/tmp/openrouter-live-smoke.stdout.log" \
+  --stderr-log "/tmp/openrouter-live-smoke.stderr.log" \
+  --report docs/deploy/evidence/2026-07-06-openrouter-controlled-live-workflow-smoke.md
+```
+
+Expected evidence:
+
+- `academic-source-verifier` uses `verifier/openrouter`;
+- `academic-submission-evaluator` uses `evaluator/openrouter`;
+- writer, repair, citation, and finalizer roles use `default/codex-cli` or do not run;
+- readiness may be `strong-draft-with-blockers`;
+- the evidence report says `Route policy: PASS`;
+- the evidence report says `Secret scan: PASS`.
+
+Do not commit raw `output/runs/<workflow_id>/` artifacts. Commit only the sanitized Markdown evidence report under `docs/deploy/evidence/`.
+
 ## Diagnostics Matrix
 
 | Code | Likely Cause | Operator Action | Rollback Needed |
