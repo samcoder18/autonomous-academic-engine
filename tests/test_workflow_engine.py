@@ -514,6 +514,274 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
         self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "openrouter")
 
+    def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
+        prompts: dict[str, str] = {}
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            prompts[role_id] = prompt
+            verdict = None
+            if role_id == "thesis-source-verifier":
+                verdict = _source_payload()
+            elif role_id == "thesis-submission-evaluator":
+                verdict = _evaluator_payload("submission-ready")
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=verdict,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="verify-claims",
+            contract=self.contract(action="verify-claims"),
+            base_prompt="verify claims in the target",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        verifier_prompt = prompts["thesis-source-verifier"]
+        target_path = self.target.relative_to(self.root).as_posix()
+        target_sha = hashlib.sha256(self.target.read_bytes()).hexdigest()
+        self.assertIn('"artifact_manifest"', verifier_prompt)
+        self.assertIn(f'"{target_path}"', verifier_prompt)
+        self.assertIn(target_sha, verifier_prompt)
+
+    def test_role_result_prompt_distinguishes_fence_label_from_version(self) -> None:
+        prompts: list[str] = []
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        prompt = prompts[0]
+        self.assertIn("opening fence must be exactly ```role-result", prompt)
+        self.assertIn('the JSON `version` field must be "role-result/v1"', prompt)
+        self.assertIn("Do not use ```role-result/v1 as the fence label", prompt)
+
+    def test_role_result_prompt_lists_allowed_blocker_categories(self) -> None:
+        prompts: list[str] = []
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        prompt = prompts[0]
+        self.assertIn("Every blocker `category` must be exactly one of:", prompt)
+        self.assertIn('"primary-support"', prompt)
+        self.assertIn('"standards-consistency"', prompt)
+        self.assertNotIn('"structure"', prompt)
+
+    def test_role_result_prompt_requires_checkpoint_evidence_keys(self) -> None:
+        prompts: list[str] = []
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        prompt = prompts[0]
+        self.assertIn("`checkpoint_evidence` must include every required checkpoint as an object key", prompt)
+        self.assertIn("Do not leave `checkpoint_evidence` empty", prompt)
+
+    def test_role_result_prompt_forbids_invented_artifact_hashes(self) -> None:
+        prompts: list[str] = []
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        prompt = prompts[0]
+        self.assertIn("Do not invent artifact paths or SHA-256 values", prompt)
+        self.assertIn("For read-only provider routes, use only paths and hashes from `artifact_manifest`", prompt)
+
+    def test_read_only_provider_prompt_forbids_tool_requests(self) -> None:
+        prompts: dict[str, str] = {}
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            prompts[role_id] = prompt
+            verdict = None
+            if role_id == "thesis-source-verifier":
+                verdict = _source_payload()
+            elif role_id == "thesis-submission-evaluator":
+                verdict = _evaluator_payload("submission-ready")
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=verdict,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="verify-claims",
+            contract=self.contract(action="verify-claims"),
+            base_prompt="verify claims in the target",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        verifier_prompt = prompts["thesis-source-verifier"]
+        self.assertIn("Provider/chat routes cannot call tools or read files", verifier_prompt)
+        self.assertIn("Do not emit tool calls, `read_file` requests, shell commands", verifier_prompt)
+        self.assertIn("treat the Workflow context as the complete provider-visible input", verifier_prompt)
+
+    def test_role_result_prompt_specifies_verdict_notes_and_metrics_types(self) -> None:
+        prompts: list[str] = []
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        prompt = prompts[0]
+        self.assertIn("`verdict.notes` must be an array of strings", prompt)
+        self.assertIn("`verdict.metrics` must be an object", prompt)
+
+    def test_evidence_role_prompt_lists_evidence_blocker_categories(self) -> None:
+        prompts: dict[str, str] = {}
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            prompts[role_id] = prompt
+            verdict = None
+            if role_id == "thesis-source-verifier":
+                verdict = _source_payload()
+            elif role_id == "thesis-submission-evaluator":
+                verdict = _evaluator_payload("submission-ready")
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=verdict,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="verify-claims",
+            contract=self.contract(action="verify-claims"),
+            base_prompt="verify claims in the target",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        verifier_prompt = prompts["thesis-source-verifier"]
+        self.assertIn("Evidence roles must use only these blocker categories", verifier_prompt)
+        self.assertIn('"verification"', verifier_prompt)
+        self.assertIn("Read-only provider access gaps are `verification` or `process` blockers", verifier_prompt)
+
     def test_executor_unavailable_fails_closed_with_stable_blocker(self) -> None:
         class UnavailableRouter:
             def execute(self, context: RoleExecutionContext, prompt: str) -> None:

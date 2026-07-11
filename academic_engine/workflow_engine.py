@@ -27,6 +27,8 @@ from .executors import (
     build_executor_router,
 )
 from .role_result_contract import (
+    ALLOWED_BLOCKER_CATEGORIES,
+    EVIDENCE_BLOCKER_CATEGORIES,
     ROLE_RESULT_VERSION,
     ArtifactRecord,
     RoleResultContext,
@@ -38,6 +40,7 @@ WORKFLOW_VERSION = "workflow-run/v1"
 ROLE_TIMEOUT_SECONDS = 45 * 60
 WORKFLOW_TIMEOUT_SECONDS = 240 * 60
 MAX_CONCURRENT_WORKFLOWS = 2
+VERIFIER_ROLE_IDS = {"thesis-source-verifier", "academic-source-verifier"}
 READINESS_ORDER = {
     "submission-ready": 0,
     "strong-draft": 1,
@@ -587,7 +590,7 @@ class WorkflowEngine:
                     model=model,
                     timeout_seconds=self.role_timeout_seconds,
                     is_evaluator=node.evaluator,
-                    is_verifier=node.role_id in {"thesis-source-verifier", "academic-source-verifier"},
+                    is_verifier=node.role_id in VERIFIER_ROLE_IDS,
                     is_finalizer=node.finalizer,
                 )
                 if isinstance(self.executor_router, ExecutorRouter):
@@ -1199,8 +1202,12 @@ def _role_prompt(
     sandbox_dir: Path,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
-    context = (
-        _evaluator_context(workflow, contract, sandbox_dir) if node.evaluator else _sanitize_role_context(base_prompt)
+    context = _role_context(
+        workflow=workflow,
+        node=node,
+        contract=contract,
+        base_prompt=base_prompt,
+        sandbox_dir=sandbox_dir,
     )
     return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
@@ -1233,15 +1240,35 @@ Rules:
 - Preserve unresolved blockers explicitly.
 - End with the role's required fenced `verdict` block when the role policy requires one.
 - End with exactly one fenced `role-result` JSON block after all prose.
-- The `role-result` must use version `{ROLE_RESULT_VERSION}` and repeat the exact workflow, role, and work identifiers.
-- Report every required checkpoint and map it to at least one artifact whose SHA-256 you computed.
+- Provider/chat routes cannot call tools or read files; when `read_only_provider_context` is true,
+  treat the Workflow context as the complete provider-visible input.
+- Do not emit tool calls, `read_file` requests, shell commands, or instructions to inspect files.
+- The opening fence must be exactly ```role-result; the JSON `version` field must be "{ROLE_RESULT_VERSION}".
+- Do not use ```role-result/v1 as the fence label and do not use ```json for the role-result block.
+- The `role-result` must repeat the exact workflow, role, and work identifiers.
+- Report every required checkpoint and map it to at least one hash-verified artifact.
+- `checkpoint_evidence` must include every required checkpoint as an object key,
+  each mapped to one or more paths that also appear in `artifacts[].path`.
+- Do not leave `checkpoint_evidence` empty when required checkpoints are listed.
+- If Workflow context includes `artifact_manifest`, use those SHA-256 records for unchanged read-only artifacts.
+- If you cannot verify checkpoint evidence, return structured `blocked` or `failed`;
+  do not return shell commands or prose only.
 - A `succeeded` result is invalid unless all required checkpoints have hash-verified artifact evidence.
 - If blockers remain, use status `blocked` or `failed`; never report `succeeded` with blockers.
 - Every blocker must use a stable lowercase machine code such as `primary-support-missing`, not free-form prose.
+- Every blocker `category` must be exactly one of:
+  {json.dumps(sorted(ALLOWED_BLOCKER_CATEGORIES), ensure_ascii=False)}
+- Evidence roles must use only these blocker categories in `blockers` and `verdict.blockers`:
+  {json.dumps(sorted(EVIDENCE_BLOCKER_CATEGORIES), ensure_ascii=False)}
+- Read-only provider access gaps are `verification` or `process` blockers for evidence roles, not `runtime`.
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
+- Do not invent artifact paths or SHA-256 values.
+- For read-only provider routes, use only paths and hashes from `artifact_manifest` in `artifacts`.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 - A structured `verdict` may only use these top-level fields: `verdict_version`, `lane`, `kind`,
   `status`, `target`, `summary`, `blockers`, `notes`, `metrics`.
+- `verdict.notes` must be an array of strings when present; use [] or omit it instead of a string.
+- `verdict.metrics` must be an object when present; use {{}} or omit it instead of null.
 - Put role-specific verdict metadata such as loop counts, reroute decisions, or review measurements under
   `metrics` or `notes`, never as extra top-level fields.
 
@@ -1417,10 +1444,25 @@ def _sanitize_role_context(base_prompt: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _evaluator_context(
+def _role_context(
+    *,
+    workflow: WorkflowRun,
+    node: RoleNode,
+    contract: ExecutionContract,
+    base_prompt: str,
+    sandbox_dir: Path,
+) -> str:
+    if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
+        return _read_only_role_context(workflow, contract, sandbox_dir, role_id=node.role_id)
+    return _sanitize_role_context(base_prompt)
+
+
+def _read_only_role_context(
     workflow: WorkflowRun,
     contract: ExecutionContract,
     sandbox_dir: Path,
+    *,
+    role_id: str,
 ) -> str:
     work_root = sandbox_dir / "works" / workflow.work_id
     artifacts = _file_manifest(work_root) if work_root.exists() else {}
@@ -1431,8 +1473,23 @@ def _evaluator_context(
             "lane": workflow.lane,
             "action": workflow.action,
         },
+        "role": {
+            "role_id": role_id,
+            "read_only_provider_context": True,
+        },
         "formal_contract": contract.to_dict(),
         "artifact_manifest": {f"works/{workflow.work_id}/{path}": record for path, record in artifacts.items()},
+        "role_result_contract": {
+            "fence_label": "role-result",
+            "version": ROLE_RESULT_VERSION,
+            "blocked_or_failed_when_evidence_is_insufficient": True,
+        },
+        "provider_limits": {
+            "tool_access": "none",
+            "filesystem_access": "none",
+            "provider_visible_input_complete": True,
+            "on_missing_evidence": "return structured blocked or failed role-result",
+        },
         "machine_blockers": list(workflow.blockers),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2).replace(
