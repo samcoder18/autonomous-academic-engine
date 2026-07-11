@@ -570,7 +570,6 @@ def main(argv: list[str] | None = None) -> int:
         print("Secret scan failed: " + "; ".join(f"{item.path}: {item.reason}" for item in scan_findings), file=sys.stderr)
     if route_errors or scan_findings:
         return 1
-    print(f"Evidence report written: {report_path}")
     return 0
 
 
@@ -865,6 +864,7 @@ Capture the returned `workflow_id`, dispatch the queued workflow through the nor
 python3 -m academic_engine.work_cli jobs dispatch --limit 1 --json
 python3 -m academic_engine.work_cli runtime-index refresh --json
 python3 scripts/openrouter_evidence_report.py \
+  --root . \
   --workflow-id "<workflow_id>" \
   --stdout-log "/tmp/openrouter-live-smoke.stdout.log" \
   --stderr-log "/tmp/openrouter-live-smoke.stderr.log" \
@@ -1055,6 +1055,7 @@ Run:
 
 ```bash
 python3 scripts/openrouter_evidence_report.py \
+  --root . \
   --workflow-id "${WORKFLOW_ID}" \
   --stdout-log /tmp/openrouter-provider-smoke.stdout.log \
   --stderr-log /tmp/openrouter-provider-smoke.stderr.log \
@@ -1063,7 +1064,7 @@ python3 scripts/openrouter_evidence_report.py \
   --report docs/deploy/evidence/2026-07-06-openrouter-controlled-live-workflow-smoke.md
 ```
 
-Expected: command exits 0 and prints `Evidence report written: ...`.
+Expected: command exits 0 and writes the report file.
 
 - [ ] **Step 7: Inspect route and secret evidence**
 
