@@ -1240,6 +1240,10 @@ Rules:
 - Every blocker must use a stable lowercase machine code such as `primary-support-missing`, not free-form prose.
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
+- A structured `verdict` may only use these top-level fields: `verdict_version`, `lane`, `kind`,
+  `status`, `target`, `summary`, `blockers`, `notes`, `metrics`.
+- Put role-specific verdict metadata such as loop counts, reroute decisions, or review measurements under
+  `metrics` or `notes`, never as extra top-level fields.
 
 Required role result shape:
 ```role-result
