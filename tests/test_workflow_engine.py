@@ -894,8 +894,10 @@ class WorkflowEngineTests(unittest.TestCase):
             "message": "Citation support remains incomplete.",
             "repairable": True,
         }
+        prompts: list[str] = []
 
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
             role_id = _prompt_field(prompt, "Role ID")
             if role_id == "thesis-submission-evaluator":
                 verdict = _evaluator_payload("strong-draft-with-blockers", blockers=[blocker])
@@ -930,6 +932,23 @@ class WorkflowEngineTests(unittest.TestCase):
         }
         self.assertEqual(iterations, {"repair-1", "repair-2"})
         self.assertEqual(result.readiness_status, "strong-draft-with-blockers")
+        repair_two_prompt = next(
+            prompt
+            for prompt in prompts
+            if 'Required checkpoints:\n["repair-2:' in prompt
+        )
+        checkpoint_match = re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", repair_two_prompt)
+        self.assertIsNotNone(checkpoint_match)
+        assert checkpoint_match is not None
+        dynamic_checkpoint = json.loads(checkpoint_match.group("body"))[0]
+        self.assertIn(
+            f'"checkpoint_evidence": {{"{dynamic_checkpoint}": [',
+            repair_two_prompt,
+        )
+        self.assertIn(
+            "A blocked or failed result must still map every required checkpoint to a non-empty artifact list.",
+            repair_two_prompt,
+        )
 
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:

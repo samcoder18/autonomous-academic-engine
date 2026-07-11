@@ -1202,6 +1202,13 @@ def _role_prompt(
     sandbox_dir: Path,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
+    checkpoint_evidence_example = json.dumps(
+        {
+            checkpoint: [f"works/{workflow.work_id}/path/to/artifact.md"]
+            for checkpoint in node.checkpoints
+        },
+        ensure_ascii=False,
+    )
     context = _role_context(
         workflow=workflow,
         node=node,
@@ -1250,6 +1257,11 @@ Rules:
 - `checkpoint_evidence` must include every required checkpoint as an object key,
   each mapped to one or more paths that also appear in `artifacts[].path`.
 - Do not leave `checkpoint_evidence` empty when required checkpoints are listed.
+- Required checkpoint strings are literal. Copy every string from Required checkpoints exactly into both
+  `checkpoints` and `checkpoint_evidence`; never replace a dynamic repair checkpoint with a generic placeholder.
+- A blocked or failed result must still map every required checkpoint to a non-empty artifact list.
+- For a repair checkpoint, record a managed review or repair artifact in `artifacts` with its SHA-256 and map the
+  exact `repair-N:<role-id>` key to that artifact.
 - If Workflow context includes `artifact_manifest`, use those SHA-256 records for unchanged read-only artifacts.
 - If you cannot verify checkpoint evidence, return structured `blocked` or `failed`;
   do not return shell commands or prose only.
@@ -1284,7 +1296,7 @@ Required role result shape:
   "action": "{workflow.action}",
   "status": "succeeded",
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
-  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "checkpoint_evidence": {checkpoint_evidence_example},
   "blockers": [],
   "artifacts": [
     {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
@@ -1305,7 +1317,7 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
   "action": "{workflow.action}",
   "status": "blocked",
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
-  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "checkpoint_evidence": {checkpoint_evidence_example},
   "blockers": [
     {{
       "category": "primary-support",
