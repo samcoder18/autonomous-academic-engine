@@ -119,6 +119,38 @@ class ParseVerdictTests(unittest.TestCase):
         assert isinstance(err, VerdictParseError)
         self.assertEqual(err.code, "unknown-field")
 
+    def test_repair_orchestrator_loop_metadata_uses_metrics(self) -> None:
+        verdict = parse_verdict(
+            self._valid_payload(
+                lane="article",
+                kind="repair-orchestrator",
+                status="reroute-required",
+                metrics={"loop_limit": 2, "loops_used": 0},
+                notes=["decision: reroute-required"],
+            ),
+            source="output",
+        )
+
+        self.assertIsInstance(verdict, StructuredVerdict)
+        assert isinstance(verdict, StructuredVerdict)
+        self.assertEqual(verdict.metrics["loop_limit"], 2)
+        self.assertEqual(verdict.metrics["loops_used"], 0)
+        self.assertEqual(verdict.notes, ("decision: reroute-required",))
+
+    def test_repair_orchestrator_loop_metadata_rejects_top_level_field(self) -> None:
+        err = parse_verdict(
+            self._valid_payload(
+                lane="article",
+                kind="repair-orchestrator",
+                status="reroute-required",
+                loop_limit=2,
+            ),
+            source="output",
+        )
+
+        assert isinstance(err, VerdictParseError)
+        self.assertEqual(err.code, "unknown-field")
+
     def test_blocker_validation(self) -> None:
         payload = self._valid_payload(
             status="blocked-primary-support",

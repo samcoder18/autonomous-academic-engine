@@ -226,6 +226,59 @@ class RoleResultContractRoleSpecificTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("role-result-evaluator-verdict-missing", _codes(blockers))
 
+    def test_repair_orchestrator_accepts_loop_metadata_in_verdict_metrics(self) -> None:
+        artifact_path = "works/demo/articles/reviews/repair-plan.md"
+        context = _context(
+            role_id="academic-repair-orchestrator",
+            lane="article",
+            action="repair",
+            checkpoints=("repair-plan-formed",),
+            artifact_path=artifact_path,
+        )
+        payload = _valid_payload(
+            role_id="academic-repair-orchestrator",
+            lane="article",
+            action="repair",
+            status="blocked",
+            artifact_path=artifact_path,
+            checkpoints=("repair-plan-formed",),
+            blockers=[
+                {
+                    "category": "primary-support",
+                    "code": "primary-support-missing",
+                    "message": "Evidence pack is absent.",
+                    "repairable": True,
+                }
+            ],
+            verdict={
+                "verdict_version": "1",
+                "lane": "article",
+                "kind": "repair-orchestrator",
+                "status": "reroute-required",
+                "summary": "Repair plan formed; reroute is required.",
+                "notes": ["decision: reroute-required"],
+                "metrics": {"loop_limit": 2, "loops_used": 0},
+                "blockers": [
+                    {
+                        "category": "primary-support",
+                        "code": "primary-support-missing",
+                        "message": "Evidence pack is absent.",
+                    }
+                ],
+            },
+        )
+
+        result, blockers = validate_role_result_payload(payload, context)
+
+        self.assertEqual(blockers, [])
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status, "blocked")
+        assert result.verdict is not None
+        self.assertEqual(result.verdict["metrics"]["loop_limit"], 2)
+        self.assertEqual(result.verdict["metrics"]["loops_used"], 0)
+        self.assertIn("primary-support-missing", _codes(list(result.blockers)))
+
     def test_evidence_role_blockers_use_evidence_taxonomy(self) -> None:
         context = _context(role_id="academic-source-verifier", lane="article", action="article")
         payload = _valid_payload(

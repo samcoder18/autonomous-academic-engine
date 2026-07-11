@@ -58,6 +58,13 @@
   "kind": "repair-orchestrator",
   "status": "repair-stopped-with-blockers",
   "summary": "После двух loop citation blocker остался открытым; требуется новый verifier/citation pass.",
+  "notes": [
+    "decision: reroute-required"
+  ],
+  "metrics": {
+    "loop_limit": 2,
+    "loops_used": 2
+  },
   "blockers": [
     {
       "category": "review",
@@ -70,3 +77,4 @@
 
 - `status` обычно `repair-complete`, `repair-stopped-with-blockers`, `reroute-required`.
 - verdict обязан фиксировать loop discipline и не скрывать остаточные blockers.
+- Данные о loop discipline фиксируй только в разрешённых полях `metrics` и `notes`, не добавляй top-level поля вроде `loop_limit`, `loops_used` или `decision`.
