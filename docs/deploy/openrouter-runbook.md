@@ -2,14 +2,15 @@
 
 ## Purpose
 
-This runbook explains how to enable the existing OpenRouter executor route for evaluator and verifier roles, verify it with a live smoke check, diagnose provider failures, and roll back to the Codex CLI default route.
+This runbook explains how to enable the existing OpenRouter executor route only for `academic-source-verifier` and `academic-submission-evaluator`, verify it with a live smoke check, diagnose provider failures, and roll back to the Codex CLI default route.
 
-It does not authorize OpenRouter as the default executor. Writer and finalizer roles still require Codex CLI because they need sandbox-aware file-writing behavior.
+It does not authorize OpenRouter as the default executor. Writer, finalizer, repair, citation, and thesis roles stay on Codex CLI because they need sandbox-aware file-writing behavior or are outside this RC scope.
 
 ## Hard Boundaries
 
 - Default executor remains `codex-cli`.
-- OpenRouter may be routed only to evaluator and verifier roles.
+- OpenRouter may be routed only to `academic-source-verifier` on the verifier route and `academic-submission-evaluator` on the evaluator route.
+- An OpenRouter selection for every other role, including thesis evaluator/verifier roles, fails closed with `provider-route-forbidden`; it never falls back automatically to Codex CLI.
 - `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is forbidden in this slice.
 - Live provider calls are never part of ordinary CI or unit tests.
 - Provider secrets must not be committed, printed, copied into docs, or serialized into `output/runs/`.
@@ -21,8 +22,8 @@ It does not authorize OpenRouter as the default executor. Writer and finalizer r
 | --- | --- | --- | --- |
 | `OPENROUTER_API_KEY` | Yes for live smoke and live route | Yes | OpenRouter bearer token. |
 | `ACADEMIC_ENGINE_OPENROUTER_MODEL` | Yes for live smoke and live route | No | OpenRouter model slug, for example `provider/model-slug`. |
-| `ACADEMIC_ENGINE_EVALUATOR_EXECUTOR` | Yes to route evaluator through OpenRouter | No | Set to `openrouter` only after smoke passes. |
-| `ACADEMIC_ENGINE_VERIFIER_EXECUTOR` | Yes to route verifier through OpenRouter | No | Set to `openrouter` only after smoke passes. |
+| `ACADEMIC_ENGINE_EVALUATOR_EXECUTOR` | Yes to route academic submission evaluator through OpenRouter | No | Set to `openrouter` only after smoke passes. |
+| `ACADEMIC_ENGINE_VERIFIER_EXECUTOR` | Yes to route academic source verifier through OpenRouter | No | Set to `openrouter` only after smoke passes. |
 | `ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST` | Yes only for smoke | No | Set to `1` for `provider-smoke openrouter`; unset after smoke. |
 | `ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER` | Optional | No | Optional OpenRouter app attribution header. |
 | `ACADEMIC_ENGINE_OPENROUTER_APP_TITLE` | Optional | No | Optional OpenRouter app title attribution header. |
@@ -50,7 +51,7 @@ Expected:
 - git status shows no unrelated uncommitted tracked changes;
 - unit tests pass without network access.
 
-Choose a model before live verification. Prefer a model that reliably follows fenced `role-result/v1` instructions for evaluator and verifier roles.
+Choose a model before live verification. Prefer a model that reliably follows fenced `role-result/v1` instructions for `academic-source-verifier` and `academic-submission-evaluator`.
 
 ## Live Smoke
 
@@ -75,7 +76,7 @@ Expected success output shape:
 
 The smoke command must not print `OPENROUTER_API_KEY` or the bearer value.
 
-## Enable Evaluator And Verifier Routes
+## Enable Academic Verifier And Evaluator Routes
 
 Enable OpenRouter only after the live smoke succeeds:
 
@@ -89,7 +90,7 @@ Do not set `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter`.
 
 ## First Workflow Check
 
-Use a non-critical work bundle first. Prefer an article or thesis workflow where evaluator or verifier roles are expected to run, and keep the target explicit with `--work`.
+Use the dedicated non-critical article bundle first, and keep the target explicit with `--work`.
 
 After the workflow starts, capture the `workflow_id` from CLI output and inspect runtime artifacts:
 
@@ -109,13 +110,14 @@ output/runs/<workflow_id>/roles/
 
 Expected:
 
-- provider route is used only for evaluator and verifier roles;
+- provider route is used only for `academic-source-verifier` and `academic-submission-evaluator`;
+- every other executed role uses `default/codex-cli`;
 - blockers are machine-readable if the provider fails;
 - no secret value appears in workflow JSON, events, role output, stdout, or stderr.
 
 ## Controlled Live Workflow Smoke Evidence
 
-Use this only after `provider-smoke openrouter` passes. The controlled smoke uses the dedicated non-default work `openrouter-live-smoke`; it does not change `starter-work` and it does not authorize OpenRouter for writer, finalizer, or default routes.
+Use this only after `provider-smoke openrouter` passes. The controlled smoke uses the dedicated non-default article work `openrouter-live-smoke`; it does not change `starter-work` and it does not authorize OpenRouter for writer, finalizer, default, or thesis routes.
 
 Required environment:
 
@@ -146,7 +148,7 @@ python3 scripts/openrouter_evidence_report.py \
   --workflow-id "<workflow_id>" \
   --stdout-log "/tmp/openrouter-live-smoke.stdout.log" \
   --stderr-log "/tmp/openrouter-live-smoke.stderr.log" \
-  --report docs/deploy/evidence/2026-07-06-openrouter-controlled-live-workflow-smoke.md
+  --report docs/deploy/evidence/2026-07-11-openrouter-controlled-live-workflow-smoke.md
 ```
 
 Expected evidence:
@@ -154,7 +156,9 @@ Expected evidence:
 - `academic-source-verifier` uses `verifier/openrouter`;
 - `academic-submission-evaluator` uses `evaluator/openrouter`;
 - writer, repair, citation, and finalizer roles use `default/codex-cli` or do not run;
+- the workflow is the `openrouter-live-smoke` article repair for the fixed draft target with `--no-search` and `execution_status: succeeded`;
 - readiness may be `strong-draft-with-blockers`;
+- the evidence report says `Controlled smoke: PASS`;
 - the evidence report says `Route policy: PASS`;
 - the evidence report says `Secret scan: PASS`.
 
@@ -168,7 +172,7 @@ Do not commit raw `output/runs/<workflow_id>/` artifacts. Commit only the saniti
 | `provider-auth-failed` | OpenRouter rejected the key or account access. | Rotate or replace the key, check account/billing/model access, rerun smoke. | Yes for active workflow rollout: unset evaluator/verifier route env. |
 | `provider-http-failed` | Timeout, network error, OpenRouter 5xx, or non-auth HTTP failure. | Check local network/proxy, OpenRouter status, model availability, and rerun smoke. | Yes if a production workflow is waiting on provider recovery. |
 | `provider-response-invalid` | OpenRouter response JSON is malformed, empty, or lacks `choices[0].message.content`. | Retry smoke once, then switch model if repeated. If workflow output exists but role-result validation fails, treat it as model contract failure. | Yes if repeated for the selected model. |
-| `provider-route-forbidden` | OpenRouter was selected for the default executor route. | Unset `ACADEMIC_ENGINE_DEFAULT_EXECUTOR`; keep only evaluator/verifier route env. | No after env is corrected. |
+| `provider-route-forbidden` | OpenRouter was selected for default, thesis, or another non-academic route. | Unset `ACADEMIC_ENGINE_DEFAULT_EXECUTOR`; keep OpenRouter route env only for the dedicated academic controlled smoke. | No after env is corrected. |
 | `role-result-schema-invalid` | Provider returned text but not a valid `role-result/v1` payload. | Switch to a model that follows the role-result contract or roll back evaluator/verifier routes to Codex CLI. | Yes if repeated for the selected model. |
 
 ## Observability Surfaces
@@ -202,8 +206,8 @@ Use this order:
 
 1. Local deterministic tests pass without network.
 2. `provider-smoke openrouter` passes with explicit live flag.
-3. One non-critical evaluator/verifier workflow is run with OpenRouter routes enabled.
+3. One non-critical `openrouter-live-smoke` article repair is run with the two academic OpenRouter routes enabled.
 4. Runtime artifacts are inspected for blocker clarity and secret absence.
-5. Only then use OpenRouter routes on normal evaluator/verifier workflows.
+5. Only then use OpenRouter routes on normal `academic-source-verifier` and `academic-submission-evaluator` workflows.
 
-Do not expand OpenRouter to writer, finalizer, or default executor routes until a separate safe file-write bridge design is approved and implemented.
+Do not expand OpenRouter to thesis, writer, finalizer, or default executor routes until a separate design is approved and implemented.
