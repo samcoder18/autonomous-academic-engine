@@ -557,6 +557,12 @@ class WorkflowEngineTests(unittest.TestCase):
             "in `artifact_manifest`.",
             verifier_prompt,
         )
+        normalized_verifier_prompt = " ".join(verifier_prompt.split())
+        self.assertIn(
+            "For read-only provider routes, include in `artifacts` only manifest pairs referenced by "
+            "`checkpoint_evidence`; do not copy unrelated `artifact_manifest` entries.",
+            normalized_verifier_prompt,
+        )
         role_result_shape = verifier_prompt.split("Required role result shape:\n", 1)[1].split(
             "If the role cannot honestly satisfy the checkpoints", 1
         )[0]

@@ -1318,6 +1318,8 @@ Rules:
 - For read-only provider routes, use only paths and hashes from `artifact_manifest` in `artifacts`.
 - For read-only provider routes, `artifact_manifest` is exhaustive.
 - Do not cite paths from role policy, formal contract, or expected outputs unless they appear in `artifact_manifest`.
+- For read-only provider routes, include in `artifacts` only manifest pairs referenced by `checkpoint_evidence`;
+  do not copy unrelated `artifact_manifest` entries.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 - Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when the role status is
   `blocked` or `failed`.
