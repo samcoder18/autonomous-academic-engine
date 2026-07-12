@@ -1204,12 +1204,18 @@ def _role_prompt(
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
     artifact_example_hash = "<64 lowercase hex>"
+    evidence_envelope = None
     if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
         artifacts = _file_manifest(sandbox_dir / "works" / workflow.work_id)
-        if artifacts:
-            relative_path, record = next(iter(artifacts.items()))
-            artifact_example_path = f"works/{workflow.work_id}/{relative_path}"
-            artifact_example_hash = str(record["sha256"])
+        evidence_envelope = _provider_result_evidence_envelope(
+            work_id=workflow.work_id,
+            artifacts=artifacts,
+            checkpoints=node.checkpoints,
+        )
+        if evidence_envelope is not None:
+            artifact = evidence_envelope["artifacts"][0]
+            artifact_example_path = str(artifact["path"])
+            artifact_example_hash = str(artifact["sha256"])
     success_verdict_example = "null"
     blocked_verdict_example = "null"
     if node.evaluator:
@@ -1243,10 +1249,9 @@ def _role_prompt(
             ensure_ascii=False,
         )
     checkpoint_evidence_example = json.dumps(
-        {
-            checkpoint: [artifact_example_path]
-            for checkpoint in node.checkpoints
-        },
+        evidence_envelope["checkpoint_evidence"]
+        if evidence_envelope is not None
+        else {checkpoint: [artifact_example_path] for checkpoint in node.checkpoints},
         ensure_ascii=False,
     )
     context = _role_context(
@@ -1320,6 +1325,8 @@ Rules:
 - Do not cite paths from role policy, formal contract, or expected outputs unless they appear in `artifact_manifest`.
 - For read-only provider routes, include in `artifacts` only manifest pairs referenced by `checkpoint_evidence`;
   do not copy unrelated `artifact_manifest` entries.
+- For read-only provider routes, copy `provider_result_evidence_envelope` verbatim into `artifacts` and
+  `checkpoint_evidence`. Do not add, omit, or alter its entries.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 - Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when the role status is
   `blocked` or `failed`.
@@ -1512,7 +1519,13 @@ def _role_context(
     sandbox_dir: Path,
 ) -> str:
     if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
-        return _read_only_role_context(workflow, contract, sandbox_dir, role_id=node.role_id)
+        return _read_only_role_context(
+            workflow,
+            contract,
+            sandbox_dir,
+            role_id=node.role_id,
+            checkpoints=node.checkpoints,
+        )
     return _sanitize_role_context(base_prompt)
 
 
@@ -1522,6 +1535,7 @@ def _read_only_role_context(
     sandbox_dir: Path,
     *,
     role_id: str,
+    checkpoints: tuple[str, ...],
 ) -> str:
     work_root = sandbox_dir / "works" / workflow.work_id
     artifacts = _file_manifest(work_root) if work_root.exists() else {}
@@ -1538,6 +1552,11 @@ def _read_only_role_context(
         },
         "formal_contract": contract.to_dict(),
         "artifact_manifest": {f"works/{workflow.work_id}/{path}": record for path, record in artifacts.items()},
+        "provider_result_evidence_envelope": _provider_result_evidence_envelope(
+            work_id=workflow.work_id,
+            artifacts=artifacts,
+            checkpoints=checkpoints,
+        ),
         "role_result_contract": {
             "fence_label": "role-result",
             "version": ROLE_RESULT_VERSION,
@@ -1555,6 +1574,22 @@ def _read_only_role_context(
         str(Path(workflow.workflow_dir).parents[2]),
         str(sandbox_dir),
     )
+
+
+def _provider_result_evidence_envelope(
+    *,
+    work_id: str,
+    artifacts: dict[str, dict[str, Any]],
+    checkpoints: tuple[str, ...],
+) -> dict[str, Any] | None:
+    if not artifacts:
+        return None
+    relative_path, record = next(iter(artifacts.items()))
+    path = f"works/{work_id}/{relative_path}"
+    return {
+        "artifacts": [{"path": path, "sha256": str(record["sha256"])}],
+        "checkpoint_evidence": {checkpoint: [path] for checkpoint in checkpoints},
+    }
 
 
 def _source_provenance_summary(sandbox_dir: Path, work_id: str) -> dict[str, int]:

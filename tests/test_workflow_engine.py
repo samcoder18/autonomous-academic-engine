@@ -551,6 +551,16 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn('"artifact_manifest"', verifier_prompt)
         self.assertIn(f'"{target_path}"', verifier_prompt)
         self.assertIn(target_sha, verifier_prompt)
+        context_text = verifier_prompt.split("Workflow context:\n", 1)[1].split("\n\nAllowed write scopes:", 1)[0]
+        context = json.loads(context_text)
+        self.assertIn("provider_result_evidence_envelope", context)
+        self.assertEqual(
+            context["provider_result_evidence_envelope"],
+            {
+                "artifacts": [{"path": target_path, "sha256": target_sha}],
+                "checkpoint_evidence": {"context-loaded": [target_path]},
+            },
+        )
         self.assertIn("For read-only provider routes, `artifact_manifest` is exhaustive.", verifier_prompt)
         self.assertIn(
             "Do not cite paths from role policy, formal contract, or expected outputs unless they appear "
@@ -561,6 +571,11 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn(
             "For read-only provider routes, include in `artifacts` only manifest pairs referenced by "
             "`checkpoint_evidence`; do not copy unrelated `artifact_manifest` entries.",
+            normalized_verifier_prompt,
+        )
+        self.assertIn(
+            "For read-only provider routes, copy `provider_result_evidence_envelope` verbatim into "
+            "`artifacts` and `checkpoint_evidence`.",
             normalized_verifier_prompt,
         )
         role_result_shape = verifier_prompt.split("Required role result shape:\n", 1)[1].split(
