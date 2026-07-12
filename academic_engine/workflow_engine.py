@@ -1202,6 +1202,74 @@ def _role_prompt(
     sandbox_dir: Path,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
+    artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
+    artifact_example_hash = "<64 lowercase hex>"
+    evidence_envelope = None
+    read_only_provider_role = node.evaluator or node.role_id in VERIFIER_ROLE_IDS
+    if read_only_provider_role:
+        artifacts = _file_manifest(sandbox_dir / "works" / workflow.work_id)
+        evidence_envelope = _provider_result_evidence_envelope(
+            work_id=workflow.work_id,
+            artifacts=artifacts,
+            checkpoints=node.checkpoints,
+        )
+        if evidence_envelope is not None:
+            artifact = evidence_envelope["artifacts"][0]
+            artifact_example_path = str(artifact["path"])
+            artifact_example_hash = str(artifact["sha256"])
+    success_verdict_example = "null"
+    blocked_verdict_example = "null"
+    if node.evaluator:
+        success_verdict_example = json.dumps(
+            {
+                "verdict_version": "1",
+                "lane": workflow.lane,
+                "kind": "submission-evaluator",
+                "status": "submission-ready",
+                "summary": "Independent evaluation complete.",
+                "blockers": [],
+            },
+            ensure_ascii=False,
+        )
+        blocked_verdict_example = json.dumps(
+            {
+                "verdict_version": "1",
+                "lane": workflow.lane,
+                "kind": "submission-evaluator",
+                "status": "strong-draft-with-blockers",
+                "summary": "Independent evaluation found unresolved evidence.",
+                "blockers": [
+                    {
+                        "category": "primary-support",
+                        "code": "primary-support-missing",
+                        "message": "Primary support is still missing.",
+                        "repairable": True,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+    checkpoint_evidence_example = json.dumps(
+        evidence_envelope["checkpoint_evidence"]
+        if evidence_envelope is not None
+        else {checkpoint: [artifact_example_path] for checkpoint in node.checkpoints},
+        ensure_ascii=False,
+    )
+    writable_evidence_preflight = ""
+    if not read_only_provider_role:
+        writable_evidence_preflight = "\n".join(
+            (
+                "- Writable-role preflight: calculate each reported `artifacts[].sha256` in the sandbox",
+                "  immediately before the final `role-result`, for example with "
+                "`shasum -a 256 <sandbox-relative-path>`.",
+                "- Every listed digest must be the real 64-character lowercase SHA-256 value; never omit it",
+                "  for a blocked or failed result and never copy the `<64 lowercase hex>` example placeholder.",
+                "- Writable-role preflight checkpoint keys: "
+                f"{json.dumps(list(node.checkpoints), ensure_ascii=False)}.",
+                "  Copy these literal keys into `checkpoint_evidence` and map each to an artifact whose actual",
+                "  SHA-256 appears in `artifacts`.",
+            )
+        )
     context = _role_context(
         workflow=workflow,
         node=node,
@@ -1250,6 +1318,12 @@ Rules:
 - `checkpoint_evidence` must include every required checkpoint as an object key,
   each mapped to one or more paths that also appear in `artifacts[].path`.
 - Do not leave `checkpoint_evidence` empty when required checkpoints are listed.
+- Required checkpoint strings are literal. Copy every string from Required checkpoints exactly into both
+  `checkpoints` and `checkpoint_evidence`; never replace a dynamic repair checkpoint with a generic placeholder.
+- A blocked or failed result must still map every required checkpoint to a non-empty artifact list.
+- For a repair checkpoint, record a managed review or repair artifact in `artifacts` with its SHA-256 and map the
+  exact `repair-N:<role-id>` key to that artifact.
+{writable_evidence_preflight}
 - If Workflow context includes `artifact_manifest`, use those SHA-256 records for unchanged read-only artifacts.
 - If you cannot verify checkpoint evidence, return structured `blocked` or `failed`;
   do not return shell commands or prose only.
@@ -1264,7 +1338,16 @@ Rules:
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
 - Do not invent artifact paths or SHA-256 values.
 - For read-only provider routes, use only paths and hashes from `artifact_manifest` in `artifacts`.
+- For read-only provider routes, `artifact_manifest` is exhaustive.
+- Do not cite paths from role policy, formal contract, or expected outputs unless they appear in `artifact_manifest`.
+- For read-only provider routes, include in `artifacts` only manifest pairs referenced by `checkpoint_evidence`;
+  do not copy unrelated `artifact_manifest` entries.
+- For read-only provider routes, copy `provider_result_evidence_envelope` verbatim into `artifacts` and
+  `checkpoint_evidence`. Do not add, omit, or alter its entries.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
+- Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when the role status is
+  `blocked` or `failed`.
+- Evaluator roles must include a non-null `verdict` even when the role status is `blocked` or `failed`.
 - A structured `verdict` may only use these top-level fields: `verdict_version`, `lane`, `kind`,
   `status`, `target`, `summary`, `blockers`, `notes`, `metrics`.
 - `verdict.notes` must be an array of strings when present; use [] or omit it instead of a string.
@@ -1284,12 +1367,12 @@ Required role result shape:
   "action": "{workflow.action}",
   "status": "succeeded",
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
-  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "checkpoint_evidence": {checkpoint_evidence_example},
   "blockers": [],
   "artifacts": [
-    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+    {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
-  "verdict": null
+  "verdict": {success_verdict_example}
 }}
 ```
 
@@ -1305,7 +1388,7 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
   "action": "{workflow.action}",
   "status": "blocked",
   "checkpoints": {json.dumps(list(node.checkpoints), ensure_ascii=False)},
-  "checkpoint_evidence": {{"<checkpoint>": ["works/{workflow.work_id}/path/to/artifact.md"]}},
+  "checkpoint_evidence": {checkpoint_evidence_example},
   "blockers": [
     {{
       "category": "primary-support",
@@ -1315,9 +1398,9 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
     }}
   ],
   "artifacts": [
-    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+    {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
-  "verdict": null
+  "verdict": {blocked_verdict_example}
 }}
 ```
 """
@@ -1453,7 +1536,13 @@ def _role_context(
     sandbox_dir: Path,
 ) -> str:
     if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
-        return _read_only_role_context(workflow, contract, sandbox_dir, role_id=node.role_id)
+        return _read_only_role_context(
+            workflow,
+            contract,
+            sandbox_dir,
+            role_id=node.role_id,
+            checkpoints=node.checkpoints,
+        )
     return _sanitize_role_context(base_prompt)
 
 
@@ -1463,6 +1552,7 @@ def _read_only_role_context(
     sandbox_dir: Path,
     *,
     role_id: str,
+    checkpoints: tuple[str, ...],
 ) -> str:
     work_root = sandbox_dir / "works" / workflow.work_id
     artifacts = _file_manifest(work_root) if work_root.exists() else {}
@@ -1479,6 +1569,11 @@ def _read_only_role_context(
         },
         "formal_contract": contract.to_dict(),
         "artifact_manifest": {f"works/{workflow.work_id}/{path}": record for path, record in artifacts.items()},
+        "provider_result_evidence_envelope": _provider_result_evidence_envelope(
+            work_id=workflow.work_id,
+            artifacts=artifacts,
+            checkpoints=checkpoints,
+        ),
         "role_result_contract": {
             "fence_label": "role-result",
             "version": ROLE_RESULT_VERSION,
@@ -1496,6 +1591,22 @@ def _read_only_role_context(
         str(Path(workflow.workflow_dir).parents[2]),
         str(sandbox_dir),
     )
+
+
+def _provider_result_evidence_envelope(
+    *,
+    work_id: str,
+    artifacts: dict[str, dict[str, Any]],
+    checkpoints: tuple[str, ...],
+) -> dict[str, Any] | None:
+    if not artifacts:
+        return None
+    relative_path, record = next(iter(artifacts.items()))
+    path = f"works/{work_id}/{relative_path}"
+    return {
+        "artifacts": [{"path": path, "sha256": str(record["sha256"])}],
+        "checkpoint_evidence": {checkpoint: [path] for checkpoint in checkpoints},
+    }
 
 
 def _source_provenance_summary(sandbox_dir: Path, work_id: str) -> dict[str, int]:

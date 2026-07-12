@@ -488,7 +488,7 @@ class WorkflowEngineTests(unittest.TestCase):
             default_executor=CallableRoleExecutor(executor),
             evaluator_executor=CallableRoleExecutor(executor),
             default_executor_id="codex-cli",
-            evaluator_executor_id="openrouter",
+            evaluator_executor_id="trace-evaluator",
         )
 
         result = WorkflowEngine(self.root, executor_router=router).run(
@@ -506,13 +506,13 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.role_runs[0].executor_route, "default")
         self.assertEqual(result.role_runs[0].executor_id, "codex-cli")
         self.assertEqual(result.role_runs[1].executor_route, "evaluator")
-        self.assertEqual(result.role_runs[1].executor_id, "openrouter")
+        self.assertEqual(result.role_runs[1].executor_id, "trace-evaluator")
 
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertEqual(workflow_payload["role_runs"][0]["executor_route"], "default")
         self.assertEqual(workflow_payload["role_runs"][0]["executor_id"], "codex-cli")
         self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
-        self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "openrouter")
+        self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "trace-evaluator")
 
     def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
         prompts: dict[str, str] = {}
@@ -551,6 +551,39 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn('"artifact_manifest"', verifier_prompt)
         self.assertIn(f'"{target_path}"', verifier_prompt)
         self.assertIn(target_sha, verifier_prompt)
+        context_text = verifier_prompt.split("Workflow context:\n", 1)[1].split("\n\nAllowed write scopes:", 1)[0]
+        context = json.loads(context_text)
+        self.assertIn("provider_result_evidence_envelope", context)
+        self.assertEqual(
+            context["provider_result_evidence_envelope"],
+            {
+                "artifacts": [{"path": target_path, "sha256": target_sha}],
+                "checkpoint_evidence": {"context-loaded": [target_path]},
+            },
+        )
+        self.assertIn("For read-only provider routes, `artifact_manifest` is exhaustive.", verifier_prompt)
+        self.assertIn(
+            "Do not cite paths from role policy, formal contract, or expected outputs unless they appear "
+            "in `artifact_manifest`.",
+            verifier_prompt,
+        )
+        normalized_verifier_prompt = " ".join(verifier_prompt.split())
+        self.assertIn(
+            "For read-only provider routes, include in `artifacts` only manifest pairs referenced by "
+            "`checkpoint_evidence`; do not copy unrelated `artifact_manifest` entries.",
+            normalized_verifier_prompt,
+        )
+        self.assertIn(
+            "For read-only provider routes, copy `provider_result_evidence_envelope` verbatim into "
+            "`artifacts` and `checkpoint_evidence`.",
+            normalized_verifier_prompt,
+        )
+        role_result_shape = verifier_prompt.split("Required role result shape:\n", 1)[1].split(
+            "If the role cannot honestly satisfy the checkpoints", 1
+        )[0]
+        self.assertIn(f'"path": "{target_path}"', role_result_shape)
+        self.assertIn(target_sha, role_result_shape)
+        self.assertNotIn("works/demo/path/to/artifact.md", role_result_shape)
 
     def test_role_result_prompt_distinguishes_fence_label_from_version(self) -> None:
         prompts: list[str] = []
@@ -714,6 +747,19 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("Provider/chat routes cannot call tools or read files", verifier_prompt)
         self.assertIn("Do not emit tool calls, `read_file` requests, shell commands", verifier_prompt)
         self.assertIn("treat the Workflow context as the complete provider-visible input", verifier_prompt)
+        evaluator_prompt = prompts["thesis-submission-evaluator"]
+        normalized_evaluator_prompt = " ".join(evaluator_prompt.split())
+        self.assertIn(
+            "Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when "
+            "the role status is `blocked` or `failed`.",
+            normalized_evaluator_prompt,
+        )
+        self.assertIn(
+            "Evaluator roles must include a non-null `verdict` even when the role status is `blocked` or `failed`.",
+            normalized_evaluator_prompt,
+        )
+        role_result_examples = evaluator_prompt.split("Required role result shape:\n", 1)[1]
+        self.assertNotIn('"verdict": null', role_result_examples)
 
     def test_role_result_prompt_specifies_verdict_notes_and_metrics_types(self) -> None:
         prompts: list[str] = []
@@ -894,8 +940,10 @@ class WorkflowEngineTests(unittest.TestCase):
             "message": "Citation support remains incomplete.",
             "repairable": True,
         }
+        prompts: list[str] = []
 
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            prompts.append(prompt)
             role_id = _prompt_field(prompt, "Role ID")
             if role_id == "thesis-submission-evaluator":
                 verdict = _evaluator_payload("strong-draft-with-blockers", blockers=[blocker])
@@ -930,6 +978,32 @@ class WorkflowEngineTests(unittest.TestCase):
         }
         self.assertEqual(iterations, {"repair-1", "repair-2"})
         self.assertEqual(result.readiness_status, "strong-draft-with-blockers")
+        repair_two_prompt = next(
+            prompt
+            for prompt in prompts
+            if 'Required checkpoints:\n["repair-2:' in prompt
+        )
+        checkpoint_match = re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", repair_two_prompt)
+        self.assertIsNotNone(checkpoint_match)
+        assert checkpoint_match is not None
+        dynamic_checkpoint = json.loads(checkpoint_match.group("body"))[0]
+        self.assertIn(
+            f'"checkpoint_evidence": {{"{dynamic_checkpoint}": [',
+            repair_two_prompt,
+        )
+        self.assertIn(
+            "A blocked or failed result must still map every required checkpoint to a non-empty artifact list.",
+            repair_two_prompt,
+        )
+        self.assertIn(
+            "Writable-role preflight: calculate each reported `artifacts[].sha256`",
+            repair_two_prompt,
+        )
+        self.assertIn("`shasum -a 256 <sandbox-relative-path>`", repair_two_prompt)
+        self.assertIn(
+            f"Writable-role preflight checkpoint keys: {json.dumps([dynamic_checkpoint])}.",
+            repair_two_prompt,
+        )
 
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:

@@ -169,7 +169,7 @@ Known limits и unknowns: [meta/autonomous-engine-unknowns-2026-04-19.md](meta/a
 
 ### OpenRouter provider route
 
-Codex CLI remains the default executor. OpenRouter can be enabled only for evaluator and verifier roles in this slice:
+Codex CLI remains the default executor. OpenRouter can be enabled only for `academic-source-verifier` and `academic-submission-evaluator` in this slice. Thesis evaluator/verifier and every other role stay on Codex CLI; a non-academic OpenRouter selection fails closed without automatic fallback.
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-redacted"
@@ -193,7 +193,7 @@ python3 -m academic_engine.work_cli provider-smoke openrouter
 unset ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST
 ```
 
-Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is intentionally rejected until a safe file-write bridge exists for writer/finalizer roles.
+Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is intentionally rejected until a safe file-write bridge exists for writer/finalizer roles; OpenRouter is not enabled for thesis routes in this RC.
 
 Deploy runbook and diagnostics matrix: [docs/deploy/openrouter-runbook.md](docs/deploy/openrouter-runbook.md). Redacted local env template: [.env.example](.env.example).
 
