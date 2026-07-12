@@ -995,6 +995,15 @@ class WorkflowEngineTests(unittest.TestCase):
             "A blocked or failed result must still map every required checkpoint to a non-empty artifact list.",
             repair_two_prompt,
         )
+        self.assertIn(
+            "Writable-role preflight: calculate each reported `artifacts[].sha256`",
+            repair_two_prompt,
+        )
+        self.assertIn("`shasum -a 256 <sandbox-relative-path>`", repair_two_prompt)
+        self.assertIn(
+            f"Writable-role preflight checkpoint keys: {json.dumps([dynamic_checkpoint])}.",
+            repair_two_prompt,
+        )
 
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:

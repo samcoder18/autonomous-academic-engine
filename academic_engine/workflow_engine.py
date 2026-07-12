@@ -1205,7 +1205,8 @@ def _role_prompt(
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
     artifact_example_hash = "<64 lowercase hex>"
     evidence_envelope = None
-    if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
+    read_only_provider_role = node.evaluator or node.role_id in VERIFIER_ROLE_IDS
+    if read_only_provider_role:
         artifacts = _file_manifest(sandbox_dir / "works" / workflow.work_id)
         evidence_envelope = _provider_result_evidence_envelope(
             work_id=workflow.work_id,
@@ -1254,6 +1255,21 @@ def _role_prompt(
         else {checkpoint: [artifact_example_path] for checkpoint in node.checkpoints},
         ensure_ascii=False,
     )
+    writable_evidence_preflight = ""
+    if not read_only_provider_role:
+        writable_evidence_preflight = "\n".join(
+            (
+                "- Writable-role preflight: calculate each reported `artifacts[].sha256` in the sandbox",
+                "  immediately before the final `role-result`, for example with "
+                "`shasum -a 256 <sandbox-relative-path>`.",
+                "- Every listed digest must be the real 64-character lowercase SHA-256 value; never omit it",
+                "  for a blocked or failed result and never copy the `<64 lowercase hex>` example placeholder.",
+                "- Writable-role preflight checkpoint keys: "
+                f"{json.dumps(list(node.checkpoints), ensure_ascii=False)}.",
+                "  Copy these literal keys into `checkpoint_evidence` and map each to an artifact whose actual",
+                "  SHA-256 appears in `artifacts`.",
+            )
+        )
     context = _role_context(
         workflow=workflow,
         node=node,
@@ -1307,6 +1323,7 @@ Rules:
 - A blocked or failed result must still map every required checkpoint to a non-empty artifact list.
 - For a repair checkpoint, record a managed review or repair artifact in `artifacts` with its SHA-256 and map the
   exact `repair-N:<role-id>` key to that artifact.
+{writable_evidence_preflight}
 - If Workflow context includes `artifact_manifest`, use those SHA-256 records for unchanged read-only artifacts.
 - If you cannot verify checkpoint evidence, return structured `blocked` or `failed`;
   do not return shell commands or prose only.
