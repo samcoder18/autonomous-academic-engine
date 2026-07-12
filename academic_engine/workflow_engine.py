@@ -1202,9 +1202,17 @@ def _role_prompt(
     sandbox_dir: Path,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
+    artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
+    artifact_example_hash = "<64 lowercase hex>"
+    if node.evaluator or node.role_id in VERIFIER_ROLE_IDS:
+        artifacts = _file_manifest(sandbox_dir / "works" / workflow.work_id)
+        if artifacts:
+            relative_path, record = next(iter(artifacts.items()))
+            artifact_example_path = f"works/{workflow.work_id}/{relative_path}"
+            artifact_example_hash = str(record["sha256"])
     checkpoint_evidence_example = json.dumps(
         {
-            checkpoint: [f"works/{workflow.work_id}/path/to/artifact.md"]
+            checkpoint: [artifact_example_path]
             for checkpoint in node.checkpoints
         },
         ensure_ascii=False,
@@ -1276,6 +1284,8 @@ Rules:
 - List every created or modified artifact with its sandbox-relative path and SHA-256.
 - Do not invent artifact paths or SHA-256 values.
 - For read-only provider routes, use only paths and hashes from `artifact_manifest` in `artifacts`.
+- For read-only provider routes, `artifact_manifest` is exhaustive.
+- Do not cite paths from role policy, formal contract, or expected outputs unless they appear in `artifact_manifest`.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
 - A structured `verdict` may only use these top-level fields: `verdict_version`, `lane`, `kind`,
   `status`, `target`, `summary`, `blockers`, `notes`, `metrics`.
@@ -1299,7 +1309,7 @@ Required role result shape:
   "checkpoint_evidence": {checkpoint_evidence_example},
   "blockers": [],
   "artifacts": [
-    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+    {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
   "verdict": null
 }}
@@ -1327,7 +1337,7 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
     }}
   ],
   "artifacts": [
-    {{"path": "works/{workflow.work_id}/path/to/artifact.md", "sha256": "<64 lowercase hex>"}}
+    {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
   "verdict": null
 }}

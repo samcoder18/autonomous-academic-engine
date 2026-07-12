@@ -551,6 +551,18 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn('"artifact_manifest"', verifier_prompt)
         self.assertIn(f'"{target_path}"', verifier_prompt)
         self.assertIn(target_sha, verifier_prompt)
+        self.assertIn("For read-only provider routes, `artifact_manifest` is exhaustive.", verifier_prompt)
+        self.assertIn(
+            "Do not cite paths from role policy, formal contract, or expected outputs unless they appear "
+            "in `artifact_manifest`.",
+            verifier_prompt,
+        )
+        role_result_shape = verifier_prompt.split("Required role result shape:\n", 1)[1].split(
+            "If the role cannot honestly satisfy the checkpoints", 1
+        )[0]
+        self.assertIn(f'"path": "{target_path}"', role_result_shape)
+        self.assertIn(target_sha, role_result_shape)
+        self.assertNotIn("works/demo/path/to/artifact.md", role_result_shape)
 
     def test_role_result_prompt_distinguishes_fence_label_from_version(self) -> None:
         prompts: list[str] = []
