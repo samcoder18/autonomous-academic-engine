@@ -726,6 +726,19 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("Provider/chat routes cannot call tools or read files", verifier_prompt)
         self.assertIn("Do not emit tool calls, `read_file` requests, shell commands", verifier_prompt)
         self.assertIn("treat the Workflow context as the complete provider-visible input", verifier_prompt)
+        evaluator_prompt = prompts["thesis-submission-evaluator"]
+        normalized_evaluator_prompt = " ".join(evaluator_prompt.split())
+        self.assertIn(
+            "Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when "
+            "the role status is `blocked` or `failed`.",
+            normalized_evaluator_prompt,
+        )
+        self.assertIn(
+            "Evaluator roles must include a non-null `verdict` even when the role status is `blocked` or `failed`.",
+            normalized_evaluator_prompt,
+        )
+        role_result_examples = evaluator_prompt.split("Required role result shape:\n", 1)[1]
+        self.assertNotIn('"verdict": null', role_result_examples)
 
     def test_role_result_prompt_specifies_verdict_notes_and_metrics_types(self) -> None:
         prompts: list[str] = []

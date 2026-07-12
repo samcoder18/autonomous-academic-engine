@@ -1210,6 +1210,38 @@ def _role_prompt(
             relative_path, record = next(iter(artifacts.items()))
             artifact_example_path = f"works/{workflow.work_id}/{relative_path}"
             artifact_example_hash = str(record["sha256"])
+    success_verdict_example = "null"
+    blocked_verdict_example = "null"
+    if node.evaluator:
+        success_verdict_example = json.dumps(
+            {
+                "verdict_version": "1",
+                "lane": workflow.lane,
+                "kind": "submission-evaluator",
+                "status": "submission-ready",
+                "summary": "Independent evaluation complete.",
+                "blockers": [],
+            },
+            ensure_ascii=False,
+        )
+        blocked_verdict_example = json.dumps(
+            {
+                "verdict_version": "1",
+                "lane": workflow.lane,
+                "kind": "submission-evaluator",
+                "status": "strong-draft-with-blockers",
+                "summary": "Independent evaluation found unresolved evidence.",
+                "blockers": [
+                    {
+                        "category": "primary-support",
+                        "code": "primary-support-missing",
+                        "message": "Primary support is still missing.",
+                        "repairable": True,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
     checkpoint_evidence_example = json.dumps(
         {
             checkpoint: [artifact_example_path]
@@ -1287,6 +1319,9 @@ Rules:
 - For read-only provider routes, `artifact_manifest` is exhaustive.
 - Do not cite paths from role policy, formal contract, or expected outputs unless they appear in `artifact_manifest`.
 - Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
+- Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when the role status is
+  `blocked` or `failed`.
+- Evaluator roles must include a non-null `verdict` even when the role status is `blocked` or `failed`.
 - A structured `verdict` may only use these top-level fields: `verdict_version`, `lane`, `kind`,
   `status`, `target`, `summary`, `blockers`, `notes`, `metrics`.
 - `verdict.notes` must be an array of strings when present; use [] or omit it instead of a string.
@@ -1311,7 +1346,7 @@ Required role result shape:
   "artifacts": [
     {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
-  "verdict": null
+  "verdict": {success_verdict_example}
 }}
 ```
 
@@ -1339,7 +1374,7 @@ If the role cannot honestly satisfy the checkpoints, return status `blocked` or 
   "artifacts": [
     {{"path": "{artifact_example_path}", "sha256": "{artifact_example_hash}"}}
   ],
-  "verdict": null
+  "verdict": {blocked_verdict_example}
 }}
 ```
 """
