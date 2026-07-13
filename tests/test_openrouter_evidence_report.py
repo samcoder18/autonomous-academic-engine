@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from academic_engine.executors import OPENROUTER_ALLOWED_ROLE_ROUTES
+from academic_engine.executors import OPENROUTER_ROLE_POLICY
 
 FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
 
@@ -90,6 +90,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
                 "status": "succeeded",
                 "executor_route": "verifier",
                 "executor_id": "openrouter",
+                "execution_mode": "read-only",
                 "blockers": [],
             },
             {
@@ -106,6 +107,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
                 "status": "succeeded",
                 "executor_route": "evaluator",
                 "executor_id": "openrouter",
+                "execution_mode": "read-only",
                 "blockers": [{"code": "primary-support-gap"}],
             },
             {
@@ -153,17 +155,29 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Controlled smoke: PASS", text)
         self.assertIn("Route policy: PASS", text)
         self.assertIn("Secret scan: PASS", text)
-        self.assertIn("| academic-source-verifier | verifier | openrouter | succeeded |", text)
-        self.assertIn("| academic-submission-evaluator | evaluator | openrouter | succeeded |", text)
+        self.assertIn("| academic-source-verifier | verifier | openrouter | read-only | succeeded |", text)
+        self.assertIn("| academic-submission-evaluator | evaluator | openrouter | read-only | succeeded |", text)
 
-    def test_evidence_policy_matches_router_allowlist(self) -> None:
+    def test_evidence_policy_matches_router_role_policy(self) -> None:
         spec = importlib.util.spec_from_file_location("openrouter_evidence_report", self.script)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        self.assertEqual(module.ALLOWED_OPENROUTER_ROUTES, OPENROUTER_ALLOWED_ROLE_ROUTES)
+        self.assertEqual(module.EXPECTED_OPENROUTER_ROLE_POLICY, OPENROUTER_ROLE_POLICY)
+
+    def test_report_fails_when_openrouter_execution_mode_does_not_match_policy(self) -> None:
+        roles = self.passing_roles()
+        for role in roles:
+            if role["role_id"] == "academic-submission-evaluator":
+                role["execution_mode"] = "write-plan"
+        self.write_workflow(roles=roles)
+
+        result = self.run_report()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Route policy violation", result.stderr)
 
     def test_report_fails_when_required_openrouter_role_is_missing(self) -> None:
         roles = [

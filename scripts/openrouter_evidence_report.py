@@ -9,10 +9,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ALLOWED_OPENROUTER_ROUTES = {
-    "academic-source-verifier": "verifier",
-    "academic-submission-evaluator": "evaluator",
-}
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from academic_engine.executors import OPENROUTER_ALLOWED_ROLE_ROUTES, OPENROUTER_ROLE_POLICY  # noqa: E402
+
+EXPECTED_OPENROUTER_ROLE_POLICY = OPENROUTER_ROLE_POLICY
 CONTROLLED_SMOKE_WORK_ID = "openrouter-live-smoke"
 CONTROLLED_SMOKE_LANE = "article"
 CONTROLLED_SMOKE_ACTION = "repair"
@@ -116,14 +119,27 @@ def route_policy_violations(roles: list[dict[str, Any]]) -> list[str]:
         role_id = str(role.get("role_id", ""))
         route = str(role.get("executor_route", ""))
         executor_id = str(role.get("executor_id", ""))
+        execution_mode = str(role.get("execution_mode") or "")
         status = str(role.get("status", ""))
-        expected_route = ALLOWED_OPENROUTER_ROUTES.get(role_id)
-        if expected_route is not None:
+        expected_policy = EXPECTED_OPENROUTER_ROLE_POLICY.get(role_id)
+        if expected_policy is not None:
             observed_allowed_roles.add(role_id)
-            if route != expected_route or executor_id != "openrouter" or status != "succeeded":
+            expected_executor_id = expected_policy["executor_id"]
+            expected_mode = expected_policy["execution_mode"]
+            expected_route = OPENROUTER_ALLOWED_ROLE_ROUTES.get(
+                role_id,
+                "role" if expected_mode == "write-plan" else "",
+            )
+            if (
+                route != expected_route
+                or executor_id != expected_executor_id
+                or execution_mode != expected_mode
+                or status != "succeeded"
+            ):
                 violations.append(
-                    f"{role_id} used {route or '<missing-route>'}/{executor_id or '<missing-executor>'} "
-                    f"with status {status or '<missing-status>'}; expected {expected_route}/openrouter succeeded"
+                    f"{role_id} used {route or '<missing-route>'}/{executor_id or '<missing-executor>'}/"
+                    f"{execution_mode or '<missing-mode>'} with status {status or '<missing-status>'}; expected "
+                    f"{expected_route}/{expected_executor_id}/{expected_mode} succeeded"
                 )
             continue
         if route != DEFAULT_ROUTE or executor_id != DEFAULT_EXECUTOR:
@@ -131,9 +147,12 @@ def route_policy_violations(roles: list[dict[str, Any]]) -> list[str]:
                 f"{role_id or '<missing-role>'} used {route or '<missing-route>'}/"
                 f"{executor_id or '<missing-executor>'}; expected {DEFAULT_ROUTE}/{DEFAULT_EXECUTOR}"
             )
-    for role_id, expected_route in ALLOWED_OPENROUTER_ROUTES.items():
+    for role_id, expected_policy in EXPECTED_OPENROUTER_ROLE_POLICY.items():
         if role_id not in observed_allowed_roles:
-            violations.append(f"required role {role_id} did not run on {expected_route}/openrouter")
+            violations.append(
+                f"required role {role_id} did not run on "
+                f"{expected_policy['executor_id']}/{expected_policy['execution_mode']}"
+            )
     return violations
 
 
@@ -193,15 +212,16 @@ def status_text(passed: bool) -> str:
 
 def route_table(roles: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| Role | Route | Executor | Status |",
-        "| --- | --- | --- | --- |",
+        "| Role | Route | Executor | Mode | Status |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for role in roles:
         lines.append(
-            "| {role} | {route} | {executor} | {status} |".format(
+            "| {role} | {route} | {executor} | {mode} | {status} |".format(
                 role=str(role.get("role_id", "")),
                 route=str(role.get("executor_route", "")),
                 executor=str(role.get("executor_id", "")),
+                mode=str(role.get("execution_mode") or ""),
                 status=str(role.get("status", "")),
             )
         )

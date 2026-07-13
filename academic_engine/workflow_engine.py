@@ -13,7 +13,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -125,6 +125,7 @@ class RoleRun:
     started_at: str
     executor_route: str | None = None
     executor_id: str | None = None
+    execution_mode: str | None = None
     reported_status: str | None = None
     finished_at: str | None = None
     attempt_count: int = 0
@@ -148,6 +149,7 @@ class RoleRun:
             "action": self.action,
             "executor_route": self.executor_route,
             "executor_id": self.executor_id,
+            "execution_mode": self.execution_mode,
             "status": self.status,
             "reported_status": self.reported_status,
             "started_at": self.started_at,
@@ -629,6 +631,8 @@ class WorkflowEngine:
                     selection = self.executor_router.describe_selection(context)
                     role.executor_route = selection.route_name
                     role.executor_id = selection.executor_id
+                    role.execution_mode = selection.execution_mode
+                    context = replace(context, execution_mode=selection.execution_mode)
                 else:
                     role.executor_route = (
                         "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
@@ -643,6 +647,15 @@ class WorkflowEngine:
                     if any(item["code"] != "provider-write-plan-block-missing" for item in write_plan_blockers):
                         raise ProviderWritePlanError(write_plan_blockers)
                 else:
+                    if context.execution_mode == "read-only":
+                        raise ProviderWritePlanError(
+                            [
+                                _provider_write_blocker(
+                                    "provider-write-plan-route-forbidden",
+                                    "Provider write plans are forbidden for a read-only role.",
+                                )
+                            ]
+                        )
                     first_after = _file_manifest(sandbox_dir)
                     first_changes = _changed_paths(before, first_after)
                     if first_changes:

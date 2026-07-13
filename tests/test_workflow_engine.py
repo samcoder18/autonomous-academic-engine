@@ -515,6 +515,92 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
         self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "trace-evaluator")
 
+    def test_workflow_persists_openrouter_execution_mode(self) -> None:
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            evaluator_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+            role_policies={
+                "thesis-submission-evaluator": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "read-only",
+                }
+            },
+        )
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertIsNone(result.role_runs[0].execution_mode)
+        self.assertEqual(result.role_runs[1].execution_mode, "read-only")
+        workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
+        self.assertEqual(workflow_payload["role_runs"][1]["execution_mode"], "read-only")
+
+    def test_openrouter_write_plan_role_uses_mode_aware_two_call_path(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Routed write-plan change\n")
+                return
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=_evaluator_payload("submission-ready") if role_id == "thesis-submission-evaluator" else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            role_executors={"thesis-style-editor": CallableRoleExecutor(executor)},
+            role_executor_ids={"thesis-style-editor": "openrouter"},
+            role_policies={
+                "thesis-style-editor": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.role_runs[0].executor_id, "openrouter")
+        self.assertEqual(result.role_runs[0].execution_mode, "write-plan")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
+
     def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
         prompts: dict[str, str] = {}
 
@@ -1206,6 +1292,42 @@ class WorkflowEngineTests(unittest.TestCase):
             lane="thesis",
             action="style-pass",
             contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-write-plan-route-forbidden" for item in result.blockers))
+
+    def test_read_only_openrouter_verifier_rejects_plan_even_with_a_writable_contract(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if _prompt_field(prompt, "Role ID") == "thesis-source-verifier":
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Forbidden verifier plan\n")
+                return
+            _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            verifier_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            verifier_executor_id="openrouter",
+            role_policies={
+                "thesis-source-verifier": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "read-only",
+                }
+            },
+        )
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="write-section",
+            contract=self.contract(action="write-section"),
             base_prompt="test",
             use_search=False,
             model=None,

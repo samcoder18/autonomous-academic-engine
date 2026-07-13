@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from academic_engine.executors import (
+    OPENROUTER_ROLE_POLICY,
     CallableRoleExecutor,
     CodexCliExecutor,
     ExecutorRouter,
@@ -129,11 +130,19 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(
             router.describe_selection(self.context("academic-submission-evaluator", is_evaluator=True)).to_dict(),
-            {"route_name": "evaluator", "executor_id": "openrouter"},
+            {
+                "route_name": "evaluator",
+                "executor_id": "openrouter",
+                "execution_mode": "read-only",
+            },
         )
         self.assertEqual(
             router.describe_selection(self.context("academic-source-verifier", is_verifier=True)).to_dict(),
-            {"route_name": "verifier", "executor_id": "openrouter"},
+            {
+                "route_name": "verifier",
+                "executor_id": "openrouter",
+                "execution_mode": "read-only",
+            },
         )
 
     def test_openrouter_evaluator_route_runs_academic_evaluator(self) -> None:
@@ -153,6 +162,74 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertEqual(len(default.calls), 0)
         self.assertEqual(len(evaluator.calls), 1)
+
+    def test_router_runs_approved_write_plan_role_through_explicit_role_policy(self) -> None:
+        default = RecordingExecutor("default")
+        writer = RecordingExecutor("writer")
+        router = ExecutorRouter(
+            default_executor=default,
+            role_executors={"academic-intake": writer},
+            role_executor_ids={"academic-intake": "openrouter"},
+            role_policies={
+                "academic-intake": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
+        context = self.context("academic-intake")
+
+        self.assertEqual(
+            router.describe_selection(context).to_dict(),
+            {
+                "route_name": "role",
+                "executor_id": "openrouter",
+                "execution_mode": "write-plan",
+            },
+        )
+        router.execute(context, "intake")
+
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(writer.calls), 1)
+
+    def test_router_rejects_unqualified_openrouter_role_without_fallback(self) -> None:
+        default = RecordingExecutor("default")
+        writer = RecordingExecutor("writer")
+        router = ExecutorRouter(
+            default_executor=default,
+            role_executors={"academic-intake": writer},
+            role_executor_ids={"academic-intake": "openrouter"},
+            role_policies=OPENROUTER_ROLE_POLICY,
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(self.context("academic-intake"), "intake")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(writer.calls), 0)
+
+    def test_router_rejects_invalid_openrouter_execution_mode_without_fallback(self) -> None:
+        default = RecordingExecutor("default")
+        writer = RecordingExecutor("writer")
+        router = ExecutorRouter(
+            default_executor=default,
+            role_executors={"academic-intake": writer},
+            role_executor_ids={"academic-intake": "openrouter"},
+            role_policies={
+                "academic-intake": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "unsafe-mode",
+                }
+            },
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(self.context("academic-intake"), "intake")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(writer.calls), 0)
 
     def test_openrouter_evaluator_route_rejects_thesis_role_without_fallback(self) -> None:
         default = RecordingExecutor("default")
@@ -294,6 +371,25 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsInstance(router.evaluator_executor, OpenAICompatibleExecutor)
         self.assertIsInstance(router.verifier_executor, OpenAICompatibleExecutor)
         self.assertIsInstance(router.default_executor, CodexCliExecutor)
+
+    def test_build_router_rejects_unqualified_role_override_without_default_fallback(self) -> None:
+        default = RecordingExecutor("default")
+        openrouter = RecordingExecutor("openrouter")
+        environ = {
+            "ACADEMIC_ENGINE_DEFAULT_EXECUTOR": "codex-cli",
+            "ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE": "openrouter",
+        }
+        router = build_executor_router(
+            environ=environ,
+            registry={"codex-cli": default, "openrouter": openrouter},
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(self.context("academic-intake"), "intake")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(openrouter.calls), 0)
 
     def test_openrouter_default_route_fails_closed_with_provider_code(self) -> None:
         environ = {

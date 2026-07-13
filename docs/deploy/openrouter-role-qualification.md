@@ -29,6 +29,31 @@ For each `not qualified` row, `not approved` means no model has been approved
 for that role. It does not imply that the model used by a different row is
 approved for it.
 
+## Runtime Policy Enforcement
+
+`academic_engine.executors.OPENROUTER_ROLE_POLICY` is the code-owned
+allowlist used at selection time. Every entry has exactly an `executor_id` and
+an `execution_mode`; the router persists that mode in the workflow role trace
+and rejects an OpenRouter selection whose policy is absent or malformed with
+`provider-route-forbidden` before invoking the provider.
+
+For a later qualified role, an operator may select its explicit route with:
+
+```bash
+export ACADEMIC_ENGINE_ROLE_EXECUTOR_<ROLE_ID_UPPER_WITH_UNDERSCORES>=openrouter
+```
+
+For example, `academic-intake` would use
+`ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE`. That environment variable is
+only a request to the router; it grants no capability. Until the exact role
+has a `qualified` matrix row and a matching code policy entry, the request
+fails closed with `provider-route-forbidden` and never falls back to
+`codex-cli`.
+
+As of this matrix revision, the runtime map still contains only the two
+read-only RC baselines below. No write-plan row has been added, because their
+dedicated live qualification and rollback evidence has not yet been recorded.
+
 ## Current Read-Only PASS Baselines
 
 The [2026-07-13 controlled live workflow smoke](evidence/2026-07-13-openrouter-controlled-live-workflow-smoke.md)
