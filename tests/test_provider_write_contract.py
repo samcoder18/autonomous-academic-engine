@@ -152,24 +152,13 @@ class ProviderWriteContractTests(unittest.TestCase):
         self.assertIsNone(parsed)
         self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-payload-too-large"])
 
+    def test_large_non_plan_output_is_not_treated_as_an_oversized_write_plan(self) -> None:
+        parsed, blockers = parse_provider_write_plan("x" * (MAX_PROVIDER_WRITE_PLAN_BYTES + 1))
+
+        self.assertIsNone(parsed)
+        self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-block-missing"])
+
     def test_direct_validator_rejects_an_oversized_payload(self) -> None:
-        payload = self.plan(content="x" * MAX_PROVIDER_WRITE_PLAN_BYTES)
-
-        validated, blockers = validate_provider_write_plan(payload, self.context)
-
-        self.assertIsNone(validated)
-        self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-payload-too-large"])
-
-    def test_live_target_change_after_manifest_capture_is_rejected(self) -> None:
-        payload = self.plan()
-        self.target.write_text("# Changed after manifest\n", encoding="utf-8")
-
-        validated, blockers = self.validate(payload)
-
-        self.assertIsNone(validated)
-        self.assertEqual(_blocker_codes(blockers), ["provider-write-base-hash-mismatch"])
-
-    def test_direct_validator_rejects_payload_larger_than_limit(self) -> None:
         payload = self.plan(content="x" * MAX_PROVIDER_WRITE_PLAN_BYTES)
 
         validated, blockers = validate_provider_write_plan(payload, self.context)

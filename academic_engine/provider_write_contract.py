@@ -59,14 +59,6 @@ def parse_provider_write_plan(text: object) -> tuple[dict[str, Any] | None, list
     """Parse one strict fenced provider-write-plan payload without applying it."""
     if not isinstance(text, str):
         return None, [_blocker("provider-write-plan-schema-invalid", "Provider write plan must be text.")]
-    if _encoded_size(text) > MAX_PROVIDER_WRITE_PLAN_BYTES:
-        return None, [
-            _blocker(
-                "provider-write-plan-payload-too-large",
-                "Provider write plan exceeds the maximum payload size.",
-            )
-        ]
-
     matches = list(_FENCED_PLAN_PATTERN.finditer(text))
     if not matches:
         return None, [_blocker("provider-write-plan-block-missing", "Provider returned no provider-write-plan block.")]
