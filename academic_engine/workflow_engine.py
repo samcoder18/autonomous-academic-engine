@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,6 +26,12 @@ from .executors import (
     RoleExecutionContext,
     RoleExecutorProtocol,
     build_executor_router,
+)
+from .provider_write_contract import (
+    ProviderWritePlan,
+    ProviderWritePlanContext,
+    parse_provider_write_plan,
+    validate_provider_write_plan,
 )
 from .role_result_contract import (
     ALLOWED_BLOCKER_CATEGORIES,
@@ -208,6 +215,24 @@ class WorkflowRun:
 
 class WorkflowBusyError(RuntimeError):
     pass
+
+
+class ProviderWritePlanError(ExecutorUnavailableError):
+    """Carry a fail-closed provider write-plan blocker into role state."""
+
+    def __init__(self, blockers: list[dict[str, Any]]):
+        message = (
+            str(blockers[0].get("message", "Provider write plan failed."))
+            if blockers
+            else "Provider write plan failed."
+        )
+        super().__init__(message)
+        self.blockers = blockers
+        self.blocker_code = (
+            str(blockers[0].get("code", "provider-write-plan-invalid"))
+            if blockers
+            else "provider-write-plan-invalid"
+        )
 
 
 class WorkflowLease:
@@ -572,7 +597,13 @@ class WorkflowEngine:
             },
         )
         self._event(Path(workflow.workflow_dir), "role-started", {"role_run_id": role_run_id})
+        allowed = _allowed_relative_scopes(
+            self.root_dir,
+            _role_allowed_write_scopes(node, contract),
+        )
         error: Exception | None = None
+        provider_result_evidence_envelope: dict[str, Any] | None = None
+        write_plan_applied = False
         for attempt in range(1, 3):
             role.attempt_count = attempt
             try:
@@ -605,6 +636,74 @@ class WorkflowEngine:
                 self.executor_router.execute(context, prompt)
                 if time.monotonic() - started > self.role_timeout_seconds:
                     raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
+                raw_output = output_file.read_text(encoding="utf-8", errors="replace") if output_file.exists() else ""
+                write_plan_payload, write_plan_blockers = parse_provider_write_plan(raw_output)
+                if write_plan_payload is None:
+                    if any(item["code"] != "provider-write-plan-block-missing" for item in write_plan_blockers):
+                        raise ProviderWritePlanError(write_plan_blockers)
+                else:
+                    first_after = _file_manifest(sandbox_dir)
+                    first_changes = _changed_paths(before, first_after)
+                    if first_changes:
+                        raise ProviderWritePlanError(
+                            [
+                                _provider_write_blocker(
+                                    "provider-write-plan-direct-write-forbidden",
+                                    "Provider returned a write plan after changing the sandbox directly.",
+                                    details={"paths": first_changes},
+                                )
+                            ]
+                        )
+                    if not allowed:
+                        raise ProviderWritePlanError(
+                            [
+                                _provider_write_blocker(
+                                    "provider-write-plan-route-forbidden",
+                                    "Provider write plans are forbidden for a read-only role.",
+                                )
+                            ]
+                        )
+                    write_context = ProviderWritePlanContext(
+                        workflow_id=workflow.workflow_id,
+                        role_run_id=role_run_id,
+                        role_id=node.role_id,
+                        work_id=workflow.work_id,
+                        sandbox_dir=sandbox_dir,
+                        allowed_write_scopes=allowed,
+                        pre_write_manifest=before,
+                    )
+                    write_plan, write_plan_blockers = validate_provider_write_plan(write_plan_payload, write_context)
+                    if write_plan is None:
+                        raise ProviderWritePlanError(write_plan_blockers)
+                    post_write_manifest, apply_blockers = _apply_provider_write_plan(
+                        sandbox_dir=sandbox_dir,
+                        payload=write_plan_payload,
+                        context=write_context,
+                    )
+                    if post_write_manifest is None:
+                        raise ProviderWritePlanError(apply_blockers)
+                    provider_result_evidence_envelope = _provider_write_result_evidence_envelope(
+                        write_plan,
+                        post_write_manifest,
+                        node.checkpoints,
+                    )
+                    follow_up_prompt = _provider_write_result_prompt(prompt, provider_result_evidence_envelope)
+                    write_plan_applied = True
+                    self.executor_router.execute(context, follow_up_prompt)
+                    if time.monotonic() - started > self.role_timeout_seconds:
+                        raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
+                    follow_up_after = _file_manifest(sandbox_dir)
+                    follow_up_changes = _changed_paths(post_write_manifest, follow_up_after)
+                    if follow_up_changes:
+                        raise ProviderWritePlanError(
+                            [
+                                _provider_write_blocker(
+                                    "provider-write-plan-direct-write-forbidden",
+                                    "Provider changed the sandbox during the role-result follow-up.",
+                                    details={"paths": follow_up_changes},
+                                )
+                            ]
+                        )
                 error = None
                 break
             except ExecutorUnavailableError as exc:
@@ -612,7 +711,7 @@ class WorkflowEngine:
                 break
             except (OSError, TimeoutError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 error = exc
-                if attempt >= 2:
+                if write_plan_applied or attempt >= 2:
                     break
             except Exception as exc:
                 error = exc
@@ -620,17 +719,15 @@ class WorkflowEngine:
 
         after = _file_manifest(sandbox_dir)
         changed = _changed_paths(before, after)
-        allowed = _allowed_relative_scopes(
-            self.root_dir,
-            _role_allowed_write_scopes(node, contract),
-        )
         forbidden = [path for path in changed if not _path_is_allowed(path, allowed)]
         role.changed_paths = changed
         role.forbidden_paths = forbidden
         if error is not None:
             role.status = "failed"
             role.error = str(error)
-            if isinstance(error, ExecutorUnavailableError):
+            if isinstance(error, ProviderWritePlanError):
+                role.blockers.extend(error.blockers)
+            elif isinstance(error, ExecutorUnavailableError):
                 blocker_code = getattr(error, "blocker_code", "executor-unavailable")
                 role.blockers.append(_runtime_blocker(str(blocker_code), f"{node.role_id}: {error}"))
             else:
@@ -645,6 +742,7 @@ class WorkflowEngine:
                 sandbox_dir=sandbox_dir,
                 after=after,
                 changed_paths=changed,
+                provider_result_evidence_envelope=provider_result_evidence_envelope,
             )
             role.blockers.extend(result_blockers)
             if role_result is None:
@@ -1463,6 +1561,7 @@ def _parse_role_result(
     sandbox_dir: Path,
     after: dict[str, dict[str, Any]],
     changed_paths: list[str],
+    provider_result_evidence_envelope: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     if not path.exists():
         return None, [_runtime_blocker("role-result-block-missing", "Role produced no output.")]
@@ -1498,6 +1597,7 @@ def _parse_role_result(
             required_output_paths=_required_output_paths(root_dir, contract),
             evaluator=node.evaluator,
             finalizer=node.finalizer,
+            provider_result_evidence_envelope=provider_result_evidence_envelope,
         ),
     )
     if validated is None:
@@ -1510,6 +1610,116 @@ def _parse_role_result(
         "artifacts": list(validated.artifacts),
         "verdict": validated.verdict,
     }, []
+
+
+def _apply_provider_write_plan(
+    *,
+    sandbox_dir: Path,
+    payload: object,
+    context: ProviderWritePlanContext,
+) -> tuple[dict[str, dict[str, Any]] | None, list[dict[str, Any]]]:
+    """Apply a validated plan only to sandbox files with atomic replacements."""
+    plan, blockers = validate_provider_write_plan(payload, context)
+    if plan is None:
+        return None, blockers
+
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for operation in plan.operations:
+            target = sandbox_dir / operation.path
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=str(target.parent),
+            ) as handle:
+                handle.write(operation.content)
+                handle.flush()
+                os.fsync(handle.fileno())
+                staged.append((Path(handle.name), target))
+
+        revalidated, revalidation_blockers = validate_provider_write_plan(payload, context)
+        if revalidated is None:
+            return None, revalidation_blockers
+        for temporary, target in staged:
+            os.replace(temporary, target)
+            _fsync_directory(target.parent)
+        return _file_manifest(sandbox_dir), []
+    except OSError as exc:
+        return None, [
+            _provider_write_blocker(
+                "provider-write-apply-failed",
+                f"WorkflowEngine could not apply the provider write plan: {exc}",
+            )
+        ]
+    finally:
+        for temporary, _ in staged:
+            if temporary.exists():
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+
+
+def _provider_write_result_evidence_envelope(
+    plan: ProviderWritePlan,
+    post_manifest: dict[str, dict[str, Any]],
+    checkpoints: tuple[str, ...],
+) -> dict[str, Any]:
+    artifacts = [
+        {"path": operation.path, "sha256": str(post_manifest[operation.path]["sha256"])}
+        for operation in plan.operations
+    ]
+    paths = [str(item["path"]) for item in artifacts]
+    return {
+        "artifacts": artifacts,
+        "checkpoint_evidence": {checkpoint: paths for checkpoint in checkpoints},
+    }
+
+
+def _provider_write_result_prompt(base_prompt: str, evidence_envelope: dict[str, Any]) -> str:
+    return f"""{base_prompt}
+
+--- PROVIDER WRITE PLAN RESULT PHASE ---
+WorkflowEngine has validated and applied the prior provider-write-plan/v1 only
+inside the sandbox. You still have no filesystem, shell, Git, promotion, or
+gate access. Do not emit another write plan and do not request tools.
+
+Provider result evidence envelope:
+{json.dumps({"provider_result_evidence_envelope": evidence_envelope}, ensure_ascii=False, indent=2)}
+
+Return exactly one strict fenced `role-result` JSON block. Copy the
+`artifacts` and `checkpoint_evidence` values from
+`provider_result_evidence_envelope` verbatim: do not add, omit, reorder, or
+alter their entries. All other role-result/v1 validation rules in the initial
+prompt remain in force.
+"""
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _provider_write_blocker(
+    code: str,
+    message: str,
+    *,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    blocker: dict[str, Any] = {
+        "category": "artifact",
+        "code": code,
+        "message": message,
+        "repairable": False,
+        "blocks_statuses": ["submission-ready"],
+    }
+    if details:
+        blocker["details"] = details
+    return blocker
 
 
 def _sanitize_role_context(base_prompt: str) -> str:

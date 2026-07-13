@@ -100,6 +100,7 @@ class RoleResultContext:
     required_output_paths: tuple[str, ...] = ()
     evaluator: bool = False
     finalizer: bool = False
+    provider_result_evidence_envelope: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,9 @@ def validate_role_result_payload(
     )
     if checkpoint_errors:
         return None, checkpoint_errors
+    provider_evidence_errors = _validate_provider_result_evidence(payload, context=context)
+    if provider_evidence_errors:
+        return None, provider_evidence_errors
     if str(status) == "succeeded" and (
         not checkpoints or not _has_any_checkpoint_evidence(payload.get("checkpoint_evidence"))
     ):
@@ -366,6 +370,30 @@ def _validate_checkpoint_evidence(
             "Mandatory checkpoints lack hash-verified artifact evidence.",
             category="process",
             details={"missing": missing, "unverified_paths": invalid},
+        )
+    ]
+
+
+def _validate_provider_result_evidence(
+    payload: dict[str, Any],
+    *,
+    context: RoleResultContext,
+) -> list[dict[str, Any]]:
+    expected = context.provider_result_evidence_envelope
+    if expected is None:
+        return []
+    actual = {
+        "artifacts": payload.get("artifacts"),
+        "checkpoint_evidence": payload.get("checkpoint_evidence"),
+    }
+    if actual == expected:
+        return []
+    return [
+        _blocker(
+            "role-result-provider-evidence-mismatch",
+            "Provider role result must copy the engine evidence envelope verbatim.",
+            category="artifact",
+            repairable=False,
         )
     ]
 
