@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 import tempfile
 import threading
 import unittest
@@ -936,6 +937,7 @@ class WorkflowEngineTests(unittest.TestCase):
     def test_provider_write_plan_applies_only_in_sandbox_then_uses_manifest_evidence(self) -> None:
         target_path = self.target.relative_to(self.root)
         follow_up_prompts: list[str] = []
+        self.target.chmod(0o640)
 
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
             role_id = _prompt_field(prompt, "Role ID")
@@ -968,6 +970,7 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.execution_status, "succeeded")
         self.assertEqual(result.promotion.status, "promoted")
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Planned sandbox change\n")
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o640)
         self.assertEqual(len(follow_up_prompts), 1)
         self.assertIn('"provider_result_evidence_envelope"', follow_up_prompts[0])
         self.assertIn(target_path.as_posix(), follow_up_prompts[0])

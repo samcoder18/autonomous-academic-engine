@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -1627,6 +1628,7 @@ def _apply_provider_write_plan(
     try:
         for operation in plan.operations:
             target = sandbox_dir / operation.path
+            original_mode = stat.S_IMODE(target.stat().st_mode)
             with tempfile.NamedTemporaryFile(
                 "w",
                 encoding="utf-8",
@@ -1634,6 +1636,7 @@ def _apply_provider_write_plan(
                 dir=str(target.parent),
             ) as handle:
                 handle.write(operation.content)
+                os.fchmod(handle.fileno(), original_mode)
                 handle.flush()
                 os.fsync(handle.fileno())
                 staged.append((Path(handle.name), target))
