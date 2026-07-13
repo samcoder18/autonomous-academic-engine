@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -43,6 +44,8 @@ class ProviderWritePlan:
 
 @dataclass(frozen=True)
 class ProviderWritePlanContext:
+    """Trusted engine context; allowed scopes are sandbox-relative paths only."""
+
     workflow_id: str
     role_run_id: str
     role_id: str
@@ -104,6 +107,13 @@ def validate_provider_write_plan(
     if schema_error is not None:
         return None, [schema_error]
     assert isinstance(payload, dict)
+    if _serialized_size(payload) > MAX_PROVIDER_WRITE_PLAN_BYTES:
+        return None, [
+            _blocker(
+                "provider-write-plan-payload-too-large",
+                "Provider write plan exceeds the maximum payload size.",
+            )
+        ]
 
     identity = {
         "workflow_id": context.workflow_id,
@@ -148,7 +158,8 @@ def validate_provider_write_plan(
 
         actual = context.pre_write_manifest.get(path)
         expected_sha256 = str(actual.get("sha256", "")) if actual is not None else ""
-        if raw_operation["base_sha256"] != expected_sha256:
+        live_sha256 = _file_sha256(context.sandbox_dir / path)
+        if raw_operation["base_sha256"] != expected_sha256 or raw_operation["base_sha256"] != live_sha256:
             return None, [
                 _blocker(
                     "provider-write-base-hash-mismatch",
@@ -278,6 +289,21 @@ def _path_is_allowed(path: str, allowed_scopes: tuple[str, ...]) -> bool:
 
 def _encoded_size(value: str) -> int:
     return len(value.encode("utf-8"))
+
+
+def _serialized_size(payload: Mapping[str, Any]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _file_sha256(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _blocker(code: str, message: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:

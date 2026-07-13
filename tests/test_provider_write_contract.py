@@ -104,6 +104,15 @@ class ProviderWriteContractTests(unittest.TestCase):
         self.assertIsNone(validated)
         self.assertEqual(_blocker_codes(blockers), ["provider-write-base-hash-mismatch"])
 
+    def test_manifest_hash_is_rejected_after_target_is_mutated(self) -> None:
+        payload = self.plan()
+        self.target.write_text("# Changed after manifest capture\n", encoding="utf-8")
+
+        validated, blockers = self.validate(payload)
+
+        self.assertIsNone(validated)
+        self.assertEqual(_blocker_codes(blockers), ["provider-write-base-hash-mismatch"])
+
     def test_deletion_or_rename_operation_fields_are_rejected(self) -> None:
         for forbidden_field in ("delete", "rename_to"):
             with self.subTest(forbidden_field=forbidden_field):
@@ -141,6 +150,31 @@ class ProviderWriteContractTests(unittest.TestCase):
         parsed, blockers = parse_provider_write_plan(_fence(payload))
 
         self.assertIsNone(parsed)
+        self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-payload-too-large"])
+
+    def test_direct_validator_rejects_an_oversized_payload(self) -> None:
+        payload = self.plan(content="x" * MAX_PROVIDER_WRITE_PLAN_BYTES)
+
+        validated, blockers = validate_provider_write_plan(payload, self.context)
+
+        self.assertIsNone(validated)
+        self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-payload-too-large"])
+
+    def test_live_target_change_after_manifest_capture_is_rejected(self) -> None:
+        payload = self.plan()
+        self.target.write_text("# Changed after manifest\n", encoding="utf-8")
+
+        validated, blockers = self.validate(payload)
+
+        self.assertIsNone(validated)
+        self.assertEqual(_blocker_codes(blockers), ["provider-write-base-hash-mismatch"])
+
+    def test_direct_validator_rejects_payload_larger_than_limit(self) -> None:
+        payload = self.plan(content="x" * MAX_PROVIDER_WRITE_PLAN_BYTES)
+
+        validated, blockers = validate_provider_write_plan(payload, self.context)
+
+        self.assertIsNone(validated)
         self.assertEqual(_blocker_codes(blockers), ["provider-write-plan-payload-too-large"])
 
     def plan(
