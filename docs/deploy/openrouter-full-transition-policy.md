@@ -69,6 +69,27 @@ The write-plan qualification order is intentionally sorted by promotion risk,
 from bounded handoff artifacts through review artifacts and canonical drafts
 to finalization. The exact order is the matrix's `Write risk order` column.
 
+### Serial Enablement Gate
+
+This gate applies to every newly enabled role after the current two-role RC
+baseline. Qualification is serial: only one previously forbidden matrix entry
+may be enabled for OpenRouter qualification at a time, and only for one
+bounded, non-submission live-evidence workflow.
+
+Before any next matrix entry is enabled, the candidate entry must have all of
+the following recorded as passed:
+
+1. Its mode-specific offline checks.
+2. Its bounded non-submission live-evidence workflow.
+3. Its sanitized qualification record, including the immutable evidence link.
+4. Its production-like policy-removal rollback exercise, showing
+   `provider-route-forbidden` with no automatic Codex reroute.
+
+If any item fails or is incomplete, remove or keep the candidate out of the
+allowlist and leave every later matrix entry forbidden. A successful provider
+smoke or another role's qualification cannot satisfy this gate. This policy
+does not expand or alter the current two-role read-only RC baseline.
+
 ## Production Rollback
 
 For a qualified production role, rollback is a policy operation:

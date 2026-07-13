@@ -48,7 +48,11 @@ qualify thesis read-only roles, write-plan roles, or the default executor.
 
 `Write risk order` is a global qualification sequence for `write-plan` roles:
 `1` is the lowest promotion risk and `14` is the highest. A dash denotes a
-read-only role.
+read-only role. For every newly enabled role after the current two-role RC
+baseline, this is a binding serial sequence: only one previously forbidden row
+may be enabled for a bounded non-submission live-evidence workflow at a time.
+Its offline checks, sanitized qualification record, and rollback exercise must
+all pass before the next matrix entry is enabled.
 
 | Write risk order | Role ID | Lane | Execution mode | Approved model | Live-evidence link | Rollback action | Migration status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -73,7 +77,12 @@ read-only role.
 
 ## Qualification Update Rules
 
-Update a row only after all required evidence has passed:
+For a newly enabled role after the current two-role RC baseline, update one
+row at a time. Do not enable the next matrix entry until the current row has
+passed all required evidence and its sanitized qualification record has been
+updated.
+
+Update that row only after all required evidence has passed:
 
 1. Add the explicit model identifier and immutable live-evidence link.
 2. Confirm the route selected the intended `role_id` and execution mode.
