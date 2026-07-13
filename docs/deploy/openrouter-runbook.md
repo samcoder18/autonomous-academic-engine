@@ -2,9 +2,14 @@
 
 ## Purpose
 
-This runbook explains how to enable the existing OpenRouter executor route only for `academic-source-verifier` and `academic-submission-evaluator`, verify it with a live smoke check, diagnose provider failures, and roll back to the Codex CLI default route.
+This runbook explains how to enable the existing OpenRouter executor route only for `academic-source-verifier` and `academic-submission-evaluator`, verify it with a live smoke check, diagnose provider failures, and administer the current RC route.
 
 It does not authorize OpenRouter as the default executor. Writer, finalizer, repair, citation, and thesis roles stay on Codex CLI because they need sandbox-aware file-writing behavior or are outside this RC scope.
+
+The versioned [full-transition policy](openrouter-full-transition-policy.md)
+and [role qualification matrix](openrouter-role-qualification.md) describe the
+approved broader migration. They do not expand the current route, change the
+default executor, or make an unqualified role runnable through OpenRouter.
 
 ## Hard Boundaries
 
@@ -15,6 +20,23 @@ It does not authorize OpenRouter as the default executor. Writer, finalizer, rep
 - Live provider calls are never part of ordinary CI or unit tests.
 - Provider secrets must not be committed, printed, copied into docs, or serialized into `output/runs/`.
 - `WorkflowEngine` remains the authority for prompts, role-result validation, gates, blockers, readiness, repairs, and promotion.
+
+## Full-Transition Control Records
+
+For the broader approved transition, use the two versioned records before
+changing a route:
+
+- [OpenRouter Full-Transition Policy](openrouter-full-transition-policy.md)
+  defines the authority boundary, execution modes, production rollback, and
+  guarded default-switch gate.
+- [OpenRouter Role Qualification Matrix](openrouter-role-qualification.md)
+  records every article and thesis role, its execution mode, approved model,
+  evidence link, rollback action, and qualification status.
+
+The current read-only RC baselines for `academic-source-verifier` and
+`academic-submission-evaluator` are the sanitized [2026-07-13 controlled live
+workflow smoke](evidence/2026-07-13-openrouter-controlled-live-workflow-smoke.md).
+They do not qualify any thesis or write-plan role.
 
 ## Environment Contract
 
@@ -190,6 +212,8 @@ Provider diagnostics must stay safe to paste into issue reports. Include blocker
 
 ## Rollback
 
+### Current RC Administrative Rollback
+
 Roll back provider routing by unsetting route-specific env:
 
 ```bash
@@ -198,7 +222,21 @@ unset ACADEMIC_ENGINE_VERIFIER_EXECUTOR
 unset ACADEMIC_ENGINE_DEFAULT_EXECUTOR
 ```
 
-Then rerun the relevant command. With no explicit executor env, the router returns to Codex CLI default behavior.
+In the current RC implementation, unsetting these two explicit routes returns
+their execution to the existing `codex-cli` default behavior. This is an RC
+administrative action only; it is not the production rollback contract for the
+full transition.
+
+### Full-Transition Production Rollback (Target Policy)
+
+After a role has been qualified under the full-transition policy, remove that
+affected `role_id` from the OpenRouter policy allowlist and record the removal.
+The next OpenRouter selection for the role must fail closed with
+`provider-route-forbidden` before invoking an executor. It must never
+automatically reroute to `codex-cli`, and a partial result must never be
+promoted. See [OpenRouter Full-Transition
+Policy](openrouter-full-transition-policy.md#production-rollback) for the
+required drill and evidence.
 
 ## Rollout Policy
 
@@ -210,4 +248,8 @@ Use this order:
 4. Runtime artifacts are inspected for blocker clarity and secret absence.
 5. Only then use OpenRouter routes on normal `academic-source-verifier` and `academic-submission-evaluator` workflows.
 
-Do not expand OpenRouter to thesis, writer, finalizer, or default executor routes until a separate design is approved and implemented.
+Do not expand OpenRouter to thesis, writer, finalizer, or default executor
+routes until the relevant row is qualified and the policy/runtime change is
+approved and implemented. The guarded default remains forbidden until the
+[full-transition default-switch gate](openrouter-full-transition-policy.md#guarded-default-switch-gate)
+passes.
