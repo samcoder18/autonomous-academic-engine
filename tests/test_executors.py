@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from academic_engine.executors import (
     OPENROUTER_ROLE_POLICY,
+    SUPPORTED_ROLE_IDS,
     CallableRoleExecutor,
     CodexCliExecutor,
     ExecutorRouter,
@@ -404,6 +405,50 @@ class ExecutorTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
 
+    def test_guarded_openrouter_default_requires_complete_policy_and_configured_model(self) -> None:
+        codex = RecordingExecutor("codex")
+        openrouter = RecordingExecutor("openrouter")
+        complete_policy = _complete_openrouter_policy()
+        environ = {
+            "ACADEMIC_ENGINE_DEFAULT_EXECUTOR": "openrouter",
+            "ACADEMIC_ENGINE_OPENROUTER_MODEL": "openrouter/test-model",
+        }
+        router = build_executor_router(
+            environ=environ,
+            registry={"codex-cli": codex, "openrouter": openrouter},
+            role_policies=complete_policy,
+        )
+        context = self.context("academic-intake")
+
+        self.assertEqual(
+            router.describe_selection(context).to_dict(),
+            {
+                "route_name": "default",
+                "executor_id": "openrouter",
+                "execution_mode": "write-plan",
+            },
+        )
+        router.execute(context, "default")
+
+        self.assertEqual(len(codex.calls), 0)
+        self.assertEqual(len(openrouter.calls), 1)
+
+    def test_guarded_openrouter_default_rejects_missing_model_before_executor_invocation(self) -> None:
+        codex = RecordingExecutor("codex")
+        openrouter = RecordingExecutor("openrouter")
+        router = build_executor_router(
+            environ={"ACADEMIC_ENGINE_DEFAULT_EXECUTOR": "openrouter"},
+            registry={"codex-cli": codex, "openrouter": openrouter},
+            role_policies=_complete_openrouter_policy(),
+        )
+
+        with self.assertRaises(ProviderExecutionError) as caught:
+            router.execute(self.context("academic-intake"), "default")
+
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(len(codex.calls), 0)
+        self.assertEqual(len(openrouter.calls), 0)
+
 
 class FakeOpenRouterTransport:
     def __init__(self, *, status: int = 200, body: bytes | None = None, exc: Exception | None = None):
@@ -589,6 +634,18 @@ class OpenRouterProviderTests(unittest.TestCase):
             executor.execute(self.context(), "prompt")
 
         self.assertEqual(caught.exception.blocker_code, "provider-response-invalid")
+
+
+def _complete_openrouter_policy() -> dict[str, dict[str, str]]:
+    return {
+        role_id: {
+            "executor_id": "openrouter",
+            "execution_mode": "read-only"
+            if role_id.endswith(("source-verifier", "submission-evaluator"))
+            else "write-plan",
+        }
+        for role_id in SUPPORTED_ROLE_IDS
+    }
 
 
 if __name__ == "__main__":

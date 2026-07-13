@@ -371,7 +371,11 @@ class ExecutorRouter:
                 executor_id,
                 _openrouter_execution_mode(context.role_id, executor_id, self.role_policies),
             )
-        return ExecutorSelection("default", self.default_executor_id)
+        return ExecutorSelection(
+            "default",
+            self.default_executor_id,
+            _openrouter_execution_mode(context.role_id, self.default_executor_id, self.role_policies),
+        )
 
     def _select(self, context: RoleExecutionContext) -> RoleExecutorProtocol:
         selection = self.describe_selection(context)
@@ -389,9 +393,11 @@ class ExecutorRouter:
 def build_executor_router(
     environ: Mapping[str, str] | None = None,
     registry: Mapping[str, RoleExecutorProtocol] | None = None,
+    role_policies: Mapping[str, Mapping[str, str]] | None = None,
 ) -> ExecutorRouter:
     env = environ if environ is not None else os.environ
     available = dict(registry) if registry is not None else _default_registry(env)
+    policies = role_policies if role_policies is not None else OPENROUTER_ROLE_POLICY
 
     default_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_DEFAULT_EXECUTOR")) or "codex-cli"
     evaluator_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_EVALUATOR_EXECUTOR"))
@@ -403,7 +409,12 @@ def build_executor_router(
     }
 
     return ExecutorRouter(
-        default_executor=_executor_for(default_id, available, route_name="default"),
+        default_executor=_executor_for(
+            default_id,
+            available,
+            route_name="default",
+            allow_openrouter_default=_openrouter_default_is_allowed(env, policies),
+        ),
         evaluator_executor=_executor_for(evaluator_id, available, route_name="evaluator") if evaluator_id else None,
         verifier_executor=_executor_for(verifier_id, available, route_name="verifier") if verifier_id else None,
         default_executor_id=default_id,
@@ -414,7 +425,7 @@ def build_executor_router(
             for role_id, executor_id in role_executor_ids.items()
         },
         role_executor_ids=role_executor_ids,
-        role_policies=OPENROUTER_ROLE_POLICY,
+        role_policies=policies,
     )
 
 
@@ -496,8 +507,9 @@ def _executor_for(
     registry: Mapping[str, RoleExecutorProtocol],
     *,
     route_name: str,
+    allow_openrouter_default: bool = False,
 ) -> RoleExecutorProtocol:
-    if route_name == "default" and executor_id == "openrouter":
+    if route_name == "default" and executor_id == "openrouter" and not allow_openrouter_default:
         return ForbiddenProviderRouteExecutor(executor_id, route_name)
     return registry.get(executor_id) or UnavailableExecutor(executor_id)
 
@@ -526,6 +538,20 @@ def _openrouter_execution_mode(
         return None
     mode = policy.get("execution_mode")
     return mode if mode in OPENROUTER_EXECUTION_MODES else None
+
+
+def _openrouter_default_is_allowed(
+    environ: Mapping[str, str],
+    policies: Mapping[str, Mapping[str, str]],
+) -> bool:
+    if _clean_env_value(environ.get("ACADEMIC_ENGINE_OPENROUTER_MODEL")) is None:
+        return False
+    if set(policies) != set(SUPPORTED_ROLE_IDS):
+        return False
+    return all(
+        _openrouter_execution_mode(role_id, "openrouter", policies) is not None
+        for role_id in SUPPORTED_ROLE_IDS
+    )
 
 
 def _clean_env_value(value: str | None) -> str | None:
