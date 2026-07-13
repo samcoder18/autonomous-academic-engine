@@ -247,6 +247,7 @@ class OpenAICompatibleExecutor:
         self.app_title_env = app_title_env
 
     def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+        """Transport raw provider output; WorkflowEngine remains the only write authority."""
         api_key = _clean_env_value(self.environ.get(self.api_key_env))
         model = _clean_env_value(self.environ.get(self.model_env))
         if api_key is None or model is None:
