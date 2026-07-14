@@ -205,6 +205,59 @@ Expected evidence:
 
 Do not commit raw `output/runs/<workflow_id>/` artifacts. Commit only the sanitized Markdown evidence report under `docs/deploy/evidence/`.
 
+## Bounded Academic-Intake Qualification Harness (Not Production)
+
+The first write-plan candidate, `academic-intake`, has a separate bounded
+qualification harness. It is not `launch-academic`, does not enqueue or
+dispatch jobs, and does not run the normal article lane. The only supported
+direct command is:
+
+```bash
+python3 -m academic_engine.work_cli qualify-openrouter-role academic-intake \
+  --work openrouter-live-smoke \
+  --seed works/openrouter-live-smoke/articles/briefs/academic-intake-qualification.md \
+  --no-search
+```
+
+Run it only after the harness's offline tests and code review pass. It has one
+OpenRouter `write-plan` role, writes only inside its sandbox, and is successful
+only when the workflow reports `status: completed` and
+`execution_status: succeeded`. Its promotion manifest must be
+`status: skipped` with `reason: qualification-no-promotion`, and the canonical
+seed fixture's before/after SHA-256 values must match with
+`canonical_unchanged: true`.
+
+The direct harness has no runtime request/job record. Generate its sanitized
+evidence with the qualification mode, then require all four lines to pass:
+
+```bash
+python3 scripts/openrouter_evidence_report.py \
+  --root . \
+  --workflow-id "<workflow_id>" \
+  --stdout-log "/tmp/openrouter-intake-qualification.stdout.log" \
+  --stderr-log "/tmp/openrouter-intake-qualification.stderr.log" \
+  --qualification-role academic-intake \
+  --report /tmp/openrouter-intake-qualification-evidence.md
+```
+
+```text
+Controlled smoke: PASS
+Route policy: PASS
+Qualification controls: PASS
+Secret scan: PASS
+```
+
+Do not commit raw `output/runs/<workflow_id>/` artifacts, raw provider output,
+write plans, or terminal logs. The generic evaluator gate may leave the
+workflow at `strong-draft-with-blockers`; that does not invalidate this bounded
+qualification evidence and must never be described as submission-ready.
+
+As an offline rollback-selection control, remove the qualification candidate
+policy and verify that selecting `academic-intake` returns
+`provider-route-forbidden` before any executor invocation. This is not the
+later production rollback drill. A harness pass does not authorize a
+production allowlist change, model approval, default switch, or the next role.
+
 ## Diagnostics Matrix
 
 | Code | Likely Cause | Operator Action | Rollback Needed |

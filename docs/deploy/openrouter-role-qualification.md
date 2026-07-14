@@ -85,7 +85,7 @@ all pass before the next matrix entry is enabled.
 | — | `academic-submission-evaluator` | article | `read-only` | `deepseek/deepseek-v4-flash` | [2026-07-13 controlled smoke](evidence/2026-07-13-openrouter-controlled-live-workflow-smoke.md) | Remove policy; fail closed; no automatic Codex reroute. | RC baseline PASS; current narrow route only. |
 | — | `thesis-source-verifier` | thesis | `read-only` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; current RC forbids thesis routing. |
 | — | `thesis-submission-evaluator` | thesis | `read-only` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; current RC forbids thesis routing. |
-| 1 | `academic-intake` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; brief/publication-contract handoff. |
+| 1 | `academic-intake` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Qualification harness ready; Not qualified pending live PASS and rollback record; brief/publication-contract handoff. |
 | 2 | `academic-source-acquirer` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; evidence-pack handoff. |
 | 3 | `academic-evidence-cartographer` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; claim/coverage-map handoff. |
 | 4 | `thesis-structure-architect` | thesis | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; chapter-contract handoff. |

@@ -23,6 +23,22 @@ CONTROLLED_SMOKE_ACTION = "repair"
 CONTROLLED_SMOKE_TARGET = "works/openrouter-live-smoke/articles/drafts/openrouter-live-smoke.md"
 DEFAULT_ROUTE = "default"
 DEFAULT_EXECUTOR = "codex-cli"
+QUALIFICATION_ROLE_ID = "academic-intake"
+QUALIFICATION_WORK_ID = "openrouter-live-smoke"
+QUALIFICATION_LANE = "article"
+QUALIFICATION_ACTION = "qualify-intake"
+QUALIFICATION_SEED_PATH = "works/openrouter-live-smoke/articles/briefs/academic-intake-qualification.md"
+QUALIFICATION_METADATA_KEYS = frozenset(
+    {
+        "candidate_id",
+        "allowed_path",
+        "before_sha256",
+        "after_sha256",
+        "canonical_unchanged",
+    }
+)
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+SAFE_REPORT_VALUE_RE = re.compile(r"[A-Za-z0-9._:/=-]{1,160}")
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]{20,}"),
     re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE),
@@ -49,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-action", default=CONTROLLED_SMOKE_ACTION)
     parser.add_argument("--expected-target", default=CONTROLLED_SMOKE_TARGET)
     parser.add_argument("--expected-role", action="append", default=[])
+    parser.add_argument("--qualification-role", choices=(QUALIFICATION_ROLE_ID,))
     parser.add_argument("--report", required=True, type=Path)
     return parser.parse_args()
 
@@ -131,6 +148,25 @@ def controlled_smoke_violations(
     return violations
 
 
+def qualification_controlled_smoke_violations(
+    workflow: dict[str, Any],
+    workflow_id: str,
+) -> list[str]:
+    violations: list[str] = []
+    expected_workflow = {
+        "workflow_id": workflow_id,
+        "work_id": QUALIFICATION_WORK_ID,
+        "lane": QUALIFICATION_LANE,
+        "action": QUALIFICATION_ACTION,
+        "status": "completed",
+        "execution_status": "succeeded",
+    }
+    for field, expected in expected_workflow.items():
+        if workflow.get(field) != expected:
+            violations.append(f"qualification workflow {field} does not match the required qualification value")
+    return violations
+
+
 def route_policy_violations(
     roles: list[dict[str, Any]],
     *,
@@ -189,6 +225,77 @@ def route_policy_violations(
     return violations
 
 
+def qualification_route_policy_violations(workflow: dict[str, Any]) -> list[str]:
+    raw_roles = workflow.get("role_runs")
+    if not isinstance(raw_roles, list):
+        return ["qualification role_runs must be a list"]
+    if len(raw_roles) != 1:
+        return [f"qualification requires exactly one role; observed {len(raw_roles)}"]
+    role = raw_roles[0]
+    if not isinstance(role, dict):
+        return ["qualification role must be an object"]
+
+    violations: list[str] = []
+    expected_fields = {
+        "role_id": QUALIFICATION_ROLE_ID,
+        "executor_route": "role",
+        "executor_id": "openrouter",
+        "execution_mode": "write-plan",
+        "status": "succeeded",
+    }
+    for field, expected in expected_fields.items():
+        if role.get(field) != expected:
+            violations.append(f"qualification role {field} must be {expected!r}")
+    return violations
+
+
+def qualification_control_violations(workflow: dict[str, Any]) -> list[str]:
+    raw_roles = workflow.get("role_runs")
+    if not isinstance(raw_roles, list) or len(raw_roles) != 1 or not isinstance(raw_roles[0], dict):
+        return ["qualification controls require exactly one role object"]
+    role = raw_roles[0]
+    violations: list[str] = []
+    if role.get("write_plan_applied") is not True:
+        violations.append("qualification write_plan_applied must be true")
+    if role.get("changed_paths") != [QUALIFICATION_SEED_PATH]:
+        violations.append(f"qualification changed paths must equal {QUALIFICATION_SEED_PATH}")
+    if role.get("forbidden_paths") != []:
+        violations.append("qualification forbidden paths must be empty")
+
+    promotion = workflow.get("promotion")
+    if not isinstance(promotion, dict):
+        violations.append("qualification promotion must be an object")
+    else:
+        if promotion.get("status") != "skipped":
+            violations.append("qualification promotion status must be skipped")
+        if promotion.get("reason") != "qualification-no-promotion":
+            violations.append("qualification promotion reason must be qualification-no-promotion")
+
+    metadata = workflow.get("metadata")
+    if not isinstance(metadata, dict):
+        violations.append("qualification canonical metadata must be an object")
+        return violations
+    if set(metadata) != QUALIFICATION_METADATA_KEYS:
+        violations.append("qualification canonical metadata keys are invalid")
+    if metadata.get("candidate_id") != QUALIFICATION_ROLE_ID:
+        violations.append("qualification canonical metadata candidate_id is invalid")
+    if metadata.get("allowed_path") != QUALIFICATION_SEED_PATH:
+        violations.append("qualification canonical metadata allowed_path is invalid")
+    before_sha256 = metadata.get("before_sha256")
+    after_sha256 = metadata.get("after_sha256")
+    if (
+        not isinstance(before_sha256, str)
+        or not isinstance(after_sha256, str)
+        or SHA256_RE.fullmatch(before_sha256) is None
+        or SHA256_RE.fullmatch(after_sha256) is None
+        or before_sha256 != after_sha256
+    ):
+        violations.append("qualification canonical metadata hashes must be equal lowercase SHA-256 values")
+    if metadata.get("canonical_unchanged") is not True:
+        violations.append("qualification canonical metadata canonical_unchanged must be true")
+    return violations
+
+
 def _scan_paths(
     root: Path,
     workflow_id: str,
@@ -237,6 +344,11 @@ def secret_scan_failures(paths: list[Path], exact_secret: str | None) -> list[st
     return failures
 
 
+def qualification_secret_scan_failures(paths: list[Path], exact_secret: str | None) -> list[str]:
+    raw_failures = secret_scan_failures(paths, exact_secret)
+    return [f"qualification scan finding {index}: secret-like content" for index, _ in enumerate(raw_failures, start=1)]
+
+
 def artifact_counts(root: Path, workflow_id: str) -> tuple[int, int]:
     workflow_dir = root / "output" / "runs" / workflow_id
     if not workflow_dir.exists():
@@ -268,6 +380,30 @@ def route_table(roles: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _safe_report_value(value: object) -> str:
+    if isinstance(value, str) and SAFE_REPORT_VALUE_RE.fullmatch(value):
+        return value
+    return "<invalid>"
+
+
+def qualification_route_table(roles: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "| Role | Route | Executor | Mode | Status |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for role in roles:
+        lines.append(
+            "| {role} | {route} | {executor} | {mode} | {status} |".format(
+                role=_safe_report_value(role.get("role_id")),
+                route=_safe_report_value(role.get("executor_route")),
+                executor=_safe_report_value(role.get("executor_id")),
+                mode=_safe_report_value(role.get("execution_mode")),
+                status=_safe_report_value(role.get("status")),
+            )
+        )
+    return lines
+
+
 def write_report(
     report_path: Path,
     workflow: dict[str, Any],
@@ -280,38 +416,70 @@ def write_report(
     secret_failures: list[str],
     counts: tuple[int, int],
     model: str,
+    *,
+    qualification_mode: bool = False,
+    qualification_ok: bool = True,
+    qualification_violations: list[str] | None = None,
 ) -> None:
     total_artifacts, role_artifacts = counts
-    lines = [
-        "# OpenRouter Evidence Report",
-        "",
-        f"Workflow ID: {workflow.get('workflow_id', '')}",
-        f"Work ID: {workflow.get('work_id', '')}",
-        f"OpenRouter model: {model or '<unset>'}",
-        "",
-        f"Controlled smoke: {status_text(controlled_ok)}",
-        f"Route policy: {status_text(route_ok)}",
-        f"Secret scan: {status_text(secret_ok)}",
-        "",
-        "## Artifact Counts",
-        "",
-        f"- Workflow artifacts: {total_artifacts}",
-        f"- Role artifacts: {role_artifacts}",
-        "",
-        "## Route Table",
-        "",
-        *route_table(roles),
-        "",
-        "## Findings",
-        "",
-    ]
+    qualification_violations = qualification_violations or []
+    if qualification_mode:
+        lines = [
+            "# OpenRouter Evidence Report",
+            "",
+            f"Workflow ID: {_safe_report_value(workflow.get('workflow_id'))}",
+            f"Work ID: {_safe_report_value(workflow.get('work_id'))}",
+            "",
+            f"Controlled smoke: {status_text(controlled_ok)}",
+            f"Route policy: {status_text(route_ok)}",
+            f"Qualification controls: {status_text(qualification_ok)}",
+            f"Secret scan: {status_text(secret_ok)}",
+            "",
+            "## Artifact Counts",
+            "",
+            f"- Workflow artifacts: {total_artifacts}",
+            f"- Role artifacts: {role_artifacts}",
+            "",
+            "## Route Table",
+            "",
+            *qualification_route_table(roles),
+            "",
+            "## Findings",
+            "",
+        ]
+    else:
+        lines = [
+            "# OpenRouter Evidence Report",
+            "",
+            f"Workflow ID: {workflow.get('workflow_id', '')}",
+            f"Work ID: {workflow.get('work_id', '')}",
+            f"OpenRouter model: {model or '<unset>'}",
+            "",
+            f"Controlled smoke: {status_text(controlled_ok)}",
+            f"Route policy: {status_text(route_ok)}",
+            f"Secret scan: {status_text(secret_ok)}",
+            "",
+            "## Artifact Counts",
+            "",
+            f"- Workflow artifacts: {total_artifacts}",
+            f"- Role artifacts: {role_artifacts}",
+            "",
+            "## Route Table",
+            "",
+            *route_table(roles),
+            "",
+            "## Findings",
+            "",
+        ]
     if controlled_violations:
         lines.extend(f"- Controlled smoke violation: {violation}" for violation in controlled_violations)
     if route_violations:
         lines.extend(f"- Route policy violation: {violation}" for violation in route_violations)
+    if qualification_violations:
+        lines.extend(f"- Qualification controls violation: {violation}" for violation in qualification_violations)
     if secret_failures:
         lines.extend(f"- Secret scan failed: {failure}" for failure in secret_failures)
-    if not controlled_violations and not route_violations and not secret_failures:
+    if not controlled_violations and not route_violations and not qualification_violations and not secret_failures:
         lines.append("- No controlled-smoke, route-policy, or secret-scan failures detected.")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -321,32 +489,45 @@ def main() -> int:
     args = parse_args()
     root = args.root
     workflow = load_workflow(root, args.workflow_id)
-    runtime_request, request_error = load_runtime_request(root, args.workflow_id)
     roles = role_runs(workflow)
-    controlled_violations = controlled_smoke_violations(
-        workflow,
-        runtime_request,
-        request_error,
-        args.workflow_id,
-        expected_work_id=args.expected_work_id,
-        expected_lane=args.expected_lane,
-        expected_action=args.expected_action,
-        expected_target=args.expected_target,
-    )
-    route_violations = route_policy_violations(
-        roles,
-        expected_role_ids=set(args.expected_role) or None,
-    )
+    qualification_mode = args.qualification_role is not None
+    if qualification_mode:
+        controlled_violations = qualification_controlled_smoke_violations(workflow, args.workflow_id)
+        route_violations = qualification_route_policy_violations(workflow)
+        qualification_violations = qualification_control_violations(workflow)
+        work_id_for_scan = QUALIFICATION_WORK_ID
+    else:
+        runtime_request, request_error = load_runtime_request(root, args.workflow_id)
+        controlled_violations = controlled_smoke_violations(
+            workflow,
+            runtime_request,
+            request_error,
+            args.workflow_id,
+            expected_work_id=args.expected_work_id,
+            expected_lane=args.expected_lane,
+            expected_action=args.expected_action,
+            expected_target=args.expected_target,
+        )
+        route_violations = route_policy_violations(
+            roles,
+            expected_role_ids=set(args.expected_role) or None,
+        )
+        qualification_violations = []
+        work_id_for_scan = args.expected_work_id
     scan_files = _scan_paths(
         root,
         args.workflow_id,
         args.stdout_log,
         args.stderr_log,
-        work_id=args.expected_work_id,
+        work_id=work_id_for_scan,
     )
-    secret_failures = secret_scan_failures(scan_files, os.environ.get("OPENROUTER_API_KEY"))
+    if qualification_mode:
+        secret_failures = qualification_secret_scan_failures(scan_files, os.environ.get("OPENROUTER_API_KEY"))
+    else:
+        secret_failures = secret_scan_failures(scan_files, os.environ.get("OPENROUTER_API_KEY"))
     controlled_ok = not controlled_violations
     route_ok = not route_violations
+    qualification_ok = not qualification_violations
     secret_ok = not secret_failures
     write_report(
         args.report,
@@ -359,15 +540,20 @@ def main() -> int:
         route_violations,
         secret_failures,
         artifact_counts(root, args.workflow_id),
-        os.environ.get("ACADEMIC_ENGINE_OPENROUTER_MODEL", ""),
+        "" if qualification_mode else os.environ.get("ACADEMIC_ENGINE_OPENROUTER_MODEL", ""),
+        qualification_mode=qualification_mode,
+        qualification_ok=qualification_ok,
+        qualification_violations=qualification_violations,
     )
     if not controlled_ok:
         print("Controlled smoke violation", file=sys.stderr)
     if not route_ok:
         print("Route policy violation", file=sys.stderr)
+    if qualification_mode and not qualification_ok:
+        print("Qualification controls violation", file=sys.stderr)
     if not secret_ok:
         print("Secret scan failed", file=sys.stderr)
-    return 0 if controlled_ok and route_ok and secret_ok else 1
+    return 0 if controlled_ok and route_ok and qualification_ok and secret_ok else 1
 
 
 if __name__ == "__main__":
