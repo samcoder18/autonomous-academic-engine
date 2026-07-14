@@ -200,6 +200,7 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
     qualification_parser.add_argument("role_id")
     qualification_parser.add_argument("--work", dest="work_id", required=True)
     qualification_parser.add_argument("--seed", required=True)
+    qualification_parser.add_argument("--target")
     qualification_parser.add_argument("--no-search", dest="search_override", action="store_const", const=False)
     qualification_parser.add_argument("--model")
 
@@ -1085,6 +1086,9 @@ def provider_smoke_cli(provider: str) -> int:
 
 def qualify_openrouter_role_cli(root_dir: Path, args: Any) -> int:
     try:
+        runner_kwargs: dict[str, Any] = {}
+        if args.target is not None:
+            runner_kwargs["target_path"] = args.target
         workflow = run_openrouter_role_qualification(
             root_dir,
             args.role_id,
@@ -1092,6 +1096,7 @@ def qualify_openrouter_role_cli(root_dir: Path, args: Any) -> int:
             args.seed,
             use_search=_resolve_search(args.search_override, True),
             model=args.model,
+            **runner_kwargs,
         )
     except ProviderExecutionError as exc:
         print(f"[qualification] {exc.blocker_code}: {exc}", file=sys.stderr)

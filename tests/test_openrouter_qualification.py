@@ -23,6 +23,8 @@ from academic_engine.openrouter_qualification import (
 )
 
 _SEED_PATH = Path("works/openrouter-live-smoke/articles/briefs/academic-intake-qualification.md")
+_SOURCE_SEED_PATH = Path("works/openrouter-live-smoke/articles/briefs/academic-source-acquirer-qualification.md")
+_SOURCE_TARGET_PATH = Path("works/openrouter-live-smoke/articles/evidence/academic-source-acquirer-qualification.md")
 
 
 class OpenRouterQualificationTests(unittest.TestCase):
@@ -43,24 +45,234 @@ class OpenRouterQualificationTests(unittest.TestCase):
                 }
             },
         )
+        self.source_seed_path, self.source_target_path = self._build_source_fixtures(self.root)
+        self.source_executor = _RecordingWritePlanExecutor(
+            self.source_target_path,
+            relative_write_path=_SOURCE_TARGET_PATH,
+        )
+        self.source_router = ExecutorRouter(
+            default_executor=UnavailableExecutor("qualification-default"),
+            default_executor_id="qualification-default",
+            role_executors={"academic-source-acquirer": self.source_executor},
+            role_executor_ids={"academic-source-acquirer": "openrouter"},
+            role_policies={
+                "academic-source-acquirer": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
 
     def tearDown(self) -> None:
         self._tempdir.cleanup()
 
-    def test_registry_contains_only_the_bounded_intake_candidate(self) -> None:
+    def test_registry_preserves_the_bounded_intake_candidate(self) -> None:
         self.assertEqual(
-            QUALIFICATION_CANDIDATES,
-            (
-                QualificationCandidate(
-                    role_id="academic-intake",
-                    work_id="openrouter-live-smoke",
-                    lane="article",
-                    action="qualify-intake",
-                    seed_path=_SEED_PATH.as_posix(),
-                    execution_mode="write-plan",
-                ),
+            QUALIFICATION_CANDIDATES[0],
+            QualificationCandidate(
+                role_id="academic-intake",
+                work_id="openrouter-live-smoke",
+                lane="article",
+                action="qualify-intake",
+                seed_path=_SEED_PATH.as_posix(),
+                execution_mode="write-plan",
+                context_paths=(_SEED_PATH.as_posix(),),
+                write_path=_SEED_PATH.as_posix(),
+                policy_path="agents/academic-intake.md",
+                checkpoint="qualification:academic-intake",
             ),
         )
+
+    def test_registry_contains_the_fixed_source_acquirer_candidate(self) -> None:
+        candidates = {candidate.role_id: candidate for candidate in QUALIFICATION_CANDIDATES}
+
+        source = candidates["academic-source-acquirer"]
+
+        self.assertEqual(source.work_id, "openrouter-live-smoke")
+        self.assertEqual(source.lane, "article")
+        self.assertEqual(source.action, "qualify-source-acquirer")
+        self.assertEqual(source.seed_path, _SOURCE_SEED_PATH.as_posix())
+        self.assertEqual(source.context_paths, (_SOURCE_SEED_PATH.as_posix(),))
+        self.assertEqual(source.write_path, _SOURCE_TARGET_PATH.as_posix())
+        self.assertEqual(source.policy_path, "agents/academic-source-acquirer.md")
+        self.assertEqual(source.checkpoint, "qualification:academic-source-acquirer")
+        self.assertTrue(source.requires_no_search)
+
+    def test_runs_only_source_acquirer_in_non_promoting_write_plan_sandbox(self) -> None:
+        context_before = self.source_seed_path.read_bytes()
+        target_before = self.source_target_path.read_bytes()
+
+        result = run_openrouter_role_qualification(
+            self.root,
+            "academic-source-acquirer",
+            "openrouter-live-smoke",
+            _SOURCE_SEED_PATH.as_posix(),
+            use_search=False,
+            model=None,
+            router=self.source_router,
+            target_path=_SOURCE_TARGET_PATH.as_posix(),
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual([role.role_id for role in result.role_runs], ["academic-source-acquirer"])
+        role = result.role_runs[0]
+        self.assertEqual(role.executor_route, "role")
+        self.assertEqual(role.executor_id, "openrouter")
+        self.assertEqual(role.execution_mode, "write-plan")
+        self.assertTrue(role.write_plan_applied)
+        self.assertEqual(role.changed_paths, [_SOURCE_TARGET_PATH.as_posix()])
+        self.assertEqual(role.forbidden_paths, [])
+        self.assertEqual(role.checkpoints, ["qualification:academic-source-acquirer"])
+        self.assertEqual([item.path for item in role.artifacts], [_SOURCE_TARGET_PATH.as_posix()])
+        self.assertEqual(result.promotion.status, "skipped")
+        self.assertEqual(result.promotion.reason, "qualification-no-promotion")
+        self.assertEqual(self.source_seed_path.read_bytes(), context_before)
+        self.assertEqual(self.source_target_path.read_bytes(), target_before)
+        self.assertEqual(len(self.source_executor.calls), 2)
+        self.assertTrue(all(call.role_id == "academic-source-acquirer" for call, _prompt in self.source_executor.calls))
+
+        expected_metadata_keys = {
+            "candidate_id",
+            "context_path",
+            "write_path",
+            "context_before_sha256",
+            "context_after_sha256",
+            "write_before_sha256",
+            "write_after_sha256",
+            "canonical_unchanged",
+        }
+        self.assertEqual(set(result.metadata), expected_metadata_keys)
+        self.assertEqual(result.metadata["candidate_id"], "academic-source-acquirer")
+        self.assertEqual(result.metadata["context_path"], _SOURCE_SEED_PATH.as_posix())
+        self.assertEqual(result.metadata["write_path"], _SOURCE_TARGET_PATH.as_posix())
+        self.assertEqual(result.metadata["context_before_sha256"], hashlib.sha256(context_before).hexdigest())
+        self.assertEqual(result.metadata["context_before_sha256"], result.metadata["context_after_sha256"])
+        self.assertEqual(result.metadata["write_before_sha256"], hashlib.sha256(target_before).hexdigest())
+        self.assertEqual(result.metadata["write_before_sha256"], result.metadata["write_after_sha256"])
+        self.assertTrue(result.metadata["canonical_unchanged"])
+
+        first_prompt = self.source_executor.calls[0][1]
+        self.assertIn(_SOURCE_SEED_PATH.as_posix(), first_prompt)
+        self.assertIn(_SOURCE_TARGET_PATH.as_posix(), first_prompt)
+        self.assertNotIn(str(self.root), first_prompt)
+        self.assertNotIn(str(self.source_seed_path), first_prompt)
+        self.assertNotIn(str(self.source_target_path), first_prompt)
+        self.assertFalse((self.root / "works/openrouter-live-smoke/articles/runs").exists())
+        self.assertFalse((self.root / "output/jobs").exists())
+
+    def test_source_acquirer_requires_exact_no_search_input_and_target_before_executor_invocation(self) -> None:
+        attempts = (
+            (_SOURCE_SEED_PATH.as_posix(), None, False),
+            (_SOURCE_SEED_PATH.as_posix(), "works/openrouter-live-smoke/articles/evidence/not-approved.md", False),
+            ("works/openrouter-live-smoke/articles/briefs/not-approved.md", _SOURCE_TARGET_PATH.as_posix(), False),
+            (_SOURCE_SEED_PATH.as_posix(), _SOURCE_TARGET_PATH.as_posix(), True),
+        )
+        for seed_path, target_path, use_search in attempts:
+            with self.subTest(seed_path=seed_path, target_path=target_path, use_search=use_search):
+                with self.assertRaises(QualificationError):
+                    run_openrouter_role_qualification(
+                        self.root,
+                        "academic-source-acquirer",
+                        "openrouter-live-smoke",
+                        seed_path,
+                        use_search=use_search,
+                        model=None,
+                        router=self.source_router,
+                        target_path=target_path,
+                    )
+                self.assertEqual(self.source_executor.calls, [])
+
+        self.source_target_path.unlink()
+        with self.assertRaises(QualificationError):
+            run_openrouter_role_qualification(
+                self.root,
+                "academic-source-acquirer",
+                "openrouter-live-smoke",
+                _SOURCE_SEED_PATH.as_posix(),
+                use_search=False,
+                model=None,
+                router=self.source_router,
+                target_path=_SOURCE_TARGET_PATH.as_posix(),
+            )
+        self.assertEqual(self.source_executor.calls, [])
+
+    def test_source_acquirer_rejects_symlinked_context_or_target_before_executor_invocation(self) -> None:
+        for fixture_path in (self.source_seed_path, self.source_target_path):
+            with self.subTest(fixture_path=fixture_path):
+                outside = self.root.parent / f"outside-{fixture_path.name}"
+                outside.write_text("# Outside\n", encoding="utf-8")
+                original = fixture_path.read_text(encoding="utf-8")
+                fixture_path.unlink()
+                fixture_path.symlink_to(outside)
+                with self.assertRaises(QualificationError):
+                    run_openrouter_role_qualification(
+                        self.root,
+                        "academic-source-acquirer",
+                        "openrouter-live-smoke",
+                        _SOURCE_SEED_PATH.as_posix(),
+                        use_search=False,
+                        model=None,
+                        router=self.source_router,
+                        target_path=_SOURCE_TARGET_PATH.as_posix(),
+                    )
+                self.assertEqual(self.source_executor.calls, [])
+                fixture_path.unlink()
+                fixture_path.write_text(original, encoding="utf-8")
+
+    def test_source_acquirer_rejects_malformed_candidate_or_router_before_executor_invocation(self) -> None:
+        source = next(item for item in QUALIFICATION_CANDIDATES if item.role_id == "academic-source-acquirer")
+        malformed_candidates = (
+            replace(source, action="qualification-action-removed"),
+            replace(source, write_path="works/openrouter-live-smoke/articles/evidence/not-approved.md"),
+            replace(source, policy_path="agents/academic-intake.md"),
+        )
+        invalid_routers = (
+            replace(self.source_router, role_policies={}),
+            replace(
+                self.source_router,
+                role_policies={
+                    "academic-source-acquirer": {
+                        "executor_id": "openrouter",
+                        "execution_mode": "read-only",
+                    }
+                },
+            ),
+        )
+
+        for malformed_candidate in malformed_candidates:
+            with self.subTest(malformed_candidate=malformed_candidate):
+                with patch(
+                    "academic_engine.openrouter_qualification.QUALIFICATION_CANDIDATES",
+                    (QUALIFICATION_CANDIDATES[0], malformed_candidate),
+                ):
+                    self._assert_source_router_forbidden(self.source_router)
+        with patch(
+            "academic_engine.openrouter_qualification.QUALIFICATION_CANDIDATES",
+            (QUALIFICATION_CANDIDATES[0],),
+        ):
+            self._assert_source_router_forbidden(self.source_router)
+        for invalid_router in invalid_routers:
+            with self.subTest(invalid_router=invalid_router):
+                self._assert_source_router_forbidden(invalid_router)
+
+    def test_source_acquirer_marks_workflow_failed_when_any_canonical_fixture_drifts(self) -> None:
+        for canonical_fixture in (self.source_seed_path, self.source_target_path):
+            with self.subTest(canonical_fixture=canonical_fixture):
+                self.source_executor.mutate_canonical_path = canonical_fixture
+                result = run_openrouter_role_qualification(
+                    self.root,
+                    "academic-source-acquirer",
+                    "openrouter-live-smoke",
+                    _SOURCE_SEED_PATH.as_posix(),
+                    use_search=False,
+                    model=None,
+                    router=self.source_router,
+                    target_path=_SOURCE_TARGET_PATH.as_posix(),
+                )
+                self.assertEqual(result.execution_status, "failed")
+                self.assertFalse(result.metadata["canonical_unchanged"])
+                self.assertTrue(any(item["code"] == "qualification-canonical-drift" for item in result.blockers))
+                self.source_executor.mutate_canonical_path = None
 
     def test_runs_only_intake_in_non_promoting_write_plan_sandbox(self) -> None:
         canonical_before = self.seed_path.read_bytes()
@@ -319,6 +531,22 @@ class OpenRouterQualificationTests(unittest.TestCase):
         self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
         self.assertEqual(self.recording_executor.calls, [])
 
+    def _assert_source_router_forbidden(self, router: ExecutorRouter) -> None:
+        self.source_executor.calls.clear()
+        with self.assertRaises(ProviderExecutionError) as caught:
+            run_openrouter_role_qualification(
+                self.root,
+                "academic-source-acquirer",
+                "openrouter-live-smoke",
+                _SOURCE_SEED_PATH.as_posix(),
+                use_search=False,
+                model=None,
+                router=router,
+                target_path=_SOURCE_TARGET_PATH.as_posix(),
+            )
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(self.source_executor.calls, [])
+
     @staticmethod
     def _build_workspace(root: Path) -> Path:
         seed_path = root / _SEED_PATH
@@ -332,19 +560,34 @@ class OpenRouterQualificationTests(unittest.TestCase):
         policy.write_text("# Intake policy\n", encoding="utf-8")
         return seed_path
 
+    @staticmethod
+    def _build_source_fixtures(root: Path) -> tuple[Path, Path]:
+        source_seed = root / _SOURCE_SEED_PATH
+        source_seed.parent.mkdir(parents=True, exist_ok=True)
+        source_seed.write_text("# Qualification source dossier\n", encoding="utf-8")
+        source_target = root / _SOURCE_TARGET_PATH
+        source_target.parent.mkdir(parents=True, exist_ok=True)
+        source_target.write_text("# Qualification evidence template\n", encoding="utf-8")
+        policy = root / "agents/academic-source-acquirer.md"
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text("# Source acquirer policy\n", encoding="utf-8")
+        return source_seed, source_target
+
 
 class _RecordingWritePlanExecutor:
-    def __init__(self, canonical_seed: Path) -> None:
+    def __init__(self, canonical_seed: Path, *, relative_write_path: Path = _SEED_PATH) -> None:
         self.canonical_seed = canonical_seed
+        self.relative_write_path = relative_write_path
         self.calls: list[tuple[RoleExecutionContext, str]] = []
         self.mutate_canonical = False
         self.remove_canonical = False
+        self.mutate_canonical_path: Path | None = None
 
     def execute(self, context: RoleExecutionContext, prompt: str) -> None:
         self.calls.append((context, prompt))
         output = context.output_file
         if "Provider result evidence envelope:" not in prompt:
-            target = context.sandbox_dir / _SEED_PATH
+            target = context.sandbox_dir / self.relative_write_path
             plan = {
                 "version": "provider-write-plan/v1",
                 "workflow_id": _prompt_field(prompt, "Workflow ID"),
@@ -353,9 +596,9 @@ class _RecordingWritePlanExecutor:
                 "work_id": _prompt_field(prompt, "Work ID"),
                 "operations": [
                     {
-                        "path": _SEED_PATH.as_posix(),
+                        "path": self.relative_write_path.as_posix(),
                         "base_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-                        "content": "# Qualified intake fixture\n",
+                        "content": "# Qualified qualification fixture\n",
                     }
                 ],
             }
@@ -390,6 +633,8 @@ class _RecordingWritePlanExecutor:
             self.canonical_seed.write_text("# Canonical drift\n", encoding="utf-8")
         if self.remove_canonical:
             self.canonical_seed.unlink()
+        if self.mutate_canonical_path is not None:
+            self.mutate_canonical_path.write_text("# Canonical drift\n", encoding="utf-8")
 
 
 def _prompt_field(prompt: str, label: str) -> str:

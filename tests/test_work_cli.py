@@ -95,6 +95,49 @@ class QualificationWorkCliTests(unittest.TestCase):
         self.assertIn("provider-route-forbidden", stderr.getvalue())
         self.assertNotIn("provider output", stderr.getvalue())
 
+    def test_source_acquirer_qualification_cli_forwards_fixed_target_without_printing_it(self) -> None:
+        workflow = SimpleNamespace(
+            workflow_id="qualification-source-1",
+            execution_status="succeeded",
+            promotion=SimpleNamespace(status="skipped"),
+            metadata={"canonical_unchanged": True},
+        )
+        stdout = StringIO()
+        stderr = StringIO()
+        seed = "works/openrouter-live-smoke/articles/briefs/academic-source-acquirer-qualification.md"
+        target = "works/openrouter-live-smoke/articles/evidence/academic-source-acquirer-qualification.md"
+
+        with patch.object(work_cli_module, "run_openrouter_role_qualification", return_value=workflow) as runner:
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = work_cli_module.main(
+                    [
+                        "qualify-openrouter-role",
+                        "academic-source-acquirer",
+                        "--work",
+                        "openrouter-live-smoke",
+                        "--seed",
+                        seed,
+                        "--target",
+                        target,
+                        "--no-search",
+                    ],
+                    root_dir=self.root,
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        runner.assert_called_once_with(
+            self.root.resolve(),
+            "academic-source-acquirer",
+            "openrouter-live-smoke",
+            seed,
+            use_search=False,
+            model=None,
+            target_path=target,
+        )
+        self.assertNotIn(seed, stdout.getvalue())
+        self.assertNotIn(target, stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
