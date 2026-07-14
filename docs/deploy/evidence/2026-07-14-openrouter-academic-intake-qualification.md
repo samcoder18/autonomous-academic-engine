@@ -9,7 +9,7 @@ submission-readiness verdict.
 
 ## Controlled Qualification Record
 
-- Workflow ID: `openrouter-live-smoke-article-qualify-intake-20260714-113214-4e3e3a95`
+- Workflow ID: `openrouter-live-smoke-article-qualify-intake-20260714-122637-c875f174`
 - Role: `academic-intake`
 - Lane: `article`
 - Execution mode: `write-plan`
@@ -23,6 +23,11 @@ Exactly one role executed. Its `execution_status` was `succeeded`,
 `write_plan_applied` was `true`, and promotion had `status: skipped` with
 `reason: qualification-no-promotion`. The canonical seed fixture was
 unchanged.
+
+This requalification ran after the reviewed hardening of both provider
+`write-plan` prompt phases: provider prompts do not receive absolute sandbox
+paths, while the engine-issued evidence envelope and strict role-result
+validation remain enforced.
 
 The generic readiness result is not `submission-ready`. This bounded record
 does not assert submission readiness or qualify another role.
