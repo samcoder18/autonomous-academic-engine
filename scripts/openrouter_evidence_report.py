@@ -69,7 +69,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-role", action="append", default=[])
     parser.add_argument("--qualification-role", choices=(QUALIFICATION_ROLE_ID,))
     parser.add_argument("--report", required=True, type=Path)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.qualification_role is None and QUALIFICATION_ROLE_ID in args.expected_role:
+        parser.error("--expected-role academic-intake requires --qualification-role academic-intake")
+    return args
 
 
 def load_workflow(root: Path, workflow_id: str) -> dict[str, Any]:

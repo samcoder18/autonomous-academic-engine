@@ -478,6 +478,23 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Controlled smoke: PASS", text)
         self.assertIn("Route policy: PASS", text)
 
+    def test_generic_expected_role_rejects_academic_intake_qualification_bypass(self) -> None:
+        self.write_workflow(
+            roles=[
+                self.qualification_role(
+                    write_plan_applied=False,
+                    changed_paths=["works/openrouter-live-smoke/articles/briefs/wrong.md"],
+                    forbidden_paths=["works/openrouter-live-smoke/articles/drafts/forbidden.md"],
+                )
+            ]
+        )
+
+        result = self.run_report(extra_args=["--expected-role", "academic-intake"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--qualification-role academic-intake", result.stderr)
+        self.assertFalse(self.report.exists())
+
     def test_report_rejects_traversal_work_id_before_secret_scan(self) -> None:
         self.write_workflow(roles=self.passing_roles())
 
