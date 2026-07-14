@@ -88,6 +88,19 @@ def _prompt_repair_no_change_evidence_envelope(prompt: str) -> dict[str, object]
     return envelope if isinstance(envelope, dict) else None
 
 
+def _prompt_provider_write_plan_wire_context(prompt: str) -> dict[str, object]:
+    match = re.search(
+        r"--- TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---\n(?P<body>.*?)\n"
+        r"--- END TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---",
+        prompt,
+        re.DOTALL,
+    )
+    assert match is not None
+    payload = json.loads(match.group("body"))
+    assert isinstance(payload, dict)
+    return payload
+
+
 class WorkflowEngineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -618,6 +631,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_openrouter_write_plan_role_uses_mode_aware_two_call_path(self) -> None:
         target_path = self.target.relative_to(self.root)
+        target_base_sha256 = hashlib.sha256(self.target.read_bytes()).hexdigest()
         initial_write_plan_prompts: list[str] = []
         follow_up_prompts: list[str] = []
 
@@ -667,19 +681,57 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.role_runs[0].execution_mode, "write-plan")
         self.assertTrue(result.role_runs[0].write_plan_applied)
         self.assertEqual(len(initial_write_plan_prompts), 1)
-        self.assertIn("--- FIRST PROVIDER WRITE-PLAN PHASE ---", initial_write_plan_prompts[0])
+        initial_prompt = initial_write_plan_prompts[0]
+        self.assertIn("--- FIRST PROVIDER WRITE-PLAN PHASE ---", initial_prompt)
         self.assertIn(
             "Return exactly one fenced `provider-write-plan` JSON block now.",
-            initial_write_plan_prompts[0],
+            initial_prompt,
         )
-        self.assertIn("Do not emit `role-result` or prose in this phase.", initial_write_plan_prompts[0])
-        self.assertIn("Do not change the sandbox directly.", initial_write_plan_prompts[0])
-        self.assertNotIn("Required role result shape:", initial_write_plan_prompts[0])
-        self.assertNotIn("```role-result", initial_write_plan_prompts[0])
+        self.assertIn("Do not emit `role-result` or prose in this phase.", initial_prompt)
+        self.assertIn("Do not change the sandbox directly.", initial_prompt)
+        self.assertIn(
+            "The response must begin with exactly ```provider-write-plan (never ```json).",
+            initial_prompt,
+        )
+        self.assertIn(
+            "The response must end with exactly the closing ``` fence and contain no prose before or after the block.",
+            initial_prompt,
+        )
+        self.assertIn(
+            "The JSON object must contain exactly these top-level fields and no others:",
+            initial_prompt,
+        )
+        self.assertIn("Do not include `lane`, `action`, prose, or any extra field in the plan JSON.", initial_prompt)
+        self.assertNotIn("Required role result shape:", initial_prompt)
+        self.assertNotIn("```role-result", initial_prompt)
+        self.assertNotIn(result.sandbox_dir, initial_prompt)
+        wire_context = _prompt_provider_write_plan_wire_context(initial_prompt)
+        self.assertNotIn("lane", wire_context)
+        self.assertNotIn("action", wire_context)
+        self.assertNotIn(str(self.root), json.dumps(wire_context))
+        self.assertEqual(
+            wire_context,
+            {
+                "fence_label": "provider-write-plan",
+                "version": "provider-write-plan/v1",
+                "workflow_id": result.workflow_id,
+                "role_run_id": "01-thesis-style-editor",
+                "role_id": "thesis-style-editor",
+                "work_id": "demo",
+                "eligible_files": [
+                    {
+                        "path": target_path.as_posix(),
+                        "base_sha256": target_base_sha256,
+                    }
+                ],
+            },
+        )
         self.assertEqual(len(follow_up_prompts), 1)
-        self.assertIn("Required role result shape:", follow_up_prompts[0])
-        self.assertIn("Provider result evidence envelope:", follow_up_prompts[0])
-        self.assertIn("Return exactly one strict fenced `role-result` JSON block.", follow_up_prompts[0])
+        follow_up_prompt = follow_up_prompts[0]
+        self.assertIn("Required role result shape:", follow_up_prompt)
+        self.assertIn("Provider result evidence envelope:", follow_up_prompt)
+        self.assertIn("Return exactly one strict fenced `role-result` JSON block.", follow_up_prompt)
+        self.assertNotIn("--- TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---", follow_up_prompt)
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertTrue(workflow_payload["role_runs"][0]["write_plan_applied"])

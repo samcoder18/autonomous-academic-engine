@@ -29,6 +29,7 @@ from .executors import (
     build_executor_router,
 )
 from .provider_write_contract import (
+    PROVIDER_WRITE_PLAN_VERSION,
     ProviderWritePlan,
     ProviderWritePlanContext,
     parse_provider_write_plan,
@@ -54,6 +55,8 @@ _PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION = """
 This is phase one of a provider write-plan route.
 Return exactly one fenced `provider-write-plan` JSON block now.
 Set its JSON `version` to `provider-write-plan/v1`.
+The response must begin with exactly ```provider-write-plan (never ```json).
+The response must end with exactly the closing ``` fence and contain no prose before or after the block.
 Do not emit `role-result` or prose in this phase.
 Do not change the sandbox directly.
 """
@@ -621,6 +624,10 @@ class WorkflowEngine:
                 "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
             )
             role.executor_id = "custom"
+        allowed = _allowed_relative_scopes(
+            self.root_dir,
+            _role_allowed_write_scopes(node, contract),
+        )
         policy_text = policy_file.read_text(encoding="utf-8")
         sandbox_base_prompt = base_prompt.replace(str(self.root_dir), str(sandbox_dir))
         role_result_prompt = _role_prompt(
@@ -634,6 +641,14 @@ class WorkflowEngine:
         )
         prompt = role_result_prompt
         if context.execution_mode == "write-plan":
+            provider_write_plan_wire_context = _provider_write_plan_wire_context(
+                workflow_id=workflow.workflow_id,
+                role_run_id=role_run_id,
+                role_id=node.role_id,
+                work_id=workflow.work_id,
+                allowed_write_scopes=allowed,
+                pre_write_manifest=before,
+            )
             prompt = _role_prompt(
                 workflow=workflow,
                 node=node,
@@ -643,6 +658,7 @@ class WorkflowEngine:
                 root_dir=self.root_dir,
                 sandbox_dir=sandbox_dir,
                 execution_mode=context.execution_mode,
+                provider_write_plan_wire_context=provider_write_plan_wire_context,
             )
         _write_json(
             request_file,
@@ -665,10 +681,6 @@ class WorkflowEngine:
             },
         )
         self._event(Path(workflow.workflow_dir), "role-started", {"role_run_id": role_run_id})
-        allowed = _allowed_relative_scopes(
-            self.root_dir,
-            _role_allowed_write_scopes(node, contract),
-        )
         error: Exception | None = None
         provider_result_evidence_envelope: dict[str, Any] | None = None
         provider_write_plan_applied = False
@@ -1357,6 +1369,7 @@ def _role_prompt(
     root_dir: Path,
     sandbox_dir: Path,
     execution_mode: str | None = None,
+    provider_write_plan_wire_context: dict[str, Any] | None = None,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
     context = _role_context(
@@ -1367,6 +1380,8 @@ def _role_prompt(
         sandbox_dir=sandbox_dir,
     )
     if execution_mode == "write-plan":
+        if provider_write_plan_wire_context is None:
+            raise ValueError("Provider write-plan prompts require trusted wire context.")
         return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1374,7 +1389,6 @@ Role ID: {node.role_id}
 Role Run ID: {role_run_id}
 Work ID: {workflow.work_id}
 Lane/action: {workflow.lane}/{workflow.action}
-Sandbox root: {workflow.sandbox_dir}
 
 The role policy below is authoritative. Execute only this role; do not orchestrate other roles.
 
@@ -1385,8 +1399,9 @@ The role policy below is authoritative. Execute only this role; do not orchestra
 Workflow context:
 {context}
 
-Allowed write scopes:
-{json.dumps(_sandbox_write_scopes(root_dir, sandbox_dir, node, contract), ensure_ascii=False, indent=2)}
+--- TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---
+{json.dumps(provider_write_plan_wire_context, ensure_ascii=False, indent=2)}
+--- END TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---
 
 Required checkpoints:
 {json.dumps(list(node.checkpoints), ensure_ascii=False)}
@@ -1396,10 +1411,15 @@ Rules:
 - Provider/chat routes cannot call tools or read files.
 - Do not emit tool calls, `read_file` requests, shell commands, or instructions to inspect files.
 {_PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION}
-- The JSON object must contain only `version`, `workflow_id`, `role_run_id`, `role_id`, `work_id`, and `operations`.
+- Use the Trusted provider write-plan wire context as the only source for the JSON `version`,
+  `workflow_id`, `role_run_id`, `role_id`, and `work_id` values; copy them verbatim.
+- The `fence_label` and `eligible_files` entries are prompt-only wire context, never plan fields.
+- The JSON object must contain exactly these top-level fields and no others:
+  `version`, `workflow_id`, `role_run_id`, `role_id`, `work_id`, and `operations`.
 - Each non-empty `operations` entry must contain only `path`, `base_sha256`, and full replacement `content`.
-- Each `path` must be sandbox-relative and within Allowed write scopes; never request a deletion or rename.
-- Each `base_sha256` must be the actual lowercase SHA-256 hash for the current source supplied in Workflow context.
+- Each operation `path` and `base_sha256` pair must match one `eligible_files` entry exactly; never request a
+  deletion or rename.
+- Do not include `lane`, `action`, prose, or any extra field in the plan JSON.
 """
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
     artifact_example_hash = "<64 lowercase hex>"
@@ -1637,6 +1657,34 @@ def _sandbox_write_scopes(
             }
         )
     return scopes
+
+
+def _provider_write_plan_wire_context(
+    *,
+    workflow_id: str,
+    role_run_id: str,
+    role_id: str,
+    work_id: str,
+    allowed_write_scopes: tuple[str, ...],
+    pre_write_manifest: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    eligible_files: list[dict[str, str]] = []
+    for path in sorted(pre_write_manifest):
+        if not _path_is_allowed(path, allowed_write_scopes):
+            continue
+        base_sha256 = str(pre_write_manifest[path].get("sha256", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", base_sha256):
+            continue
+        eligible_files.append({"path": path, "base_sha256": base_sha256})
+    return {
+        "fence_label": "provider-write-plan",
+        "version": PROVIDER_WRITE_PLAN_VERSION,
+        "workflow_id": workflow_id,
+        "role_run_id": role_run_id,
+        "role_id": role_id,
+        "work_id": work_id,
+        "eligible_files": eligible_files,
+    }
 
 
 def _role_allowed_write_scopes(
