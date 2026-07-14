@@ -1332,6 +1332,9 @@ def _role_prompt(
             artifact_example_hash = str(artifact["sha256"])
     elif node.checkpoints and all(re.fullmatch(r"repair-\d+:[^:]+", checkpoint) for checkpoint in node.checkpoints):
         repair_no_change_evidence_envelope = _repair_no_change_evidence_envelope(
+            root_dir=root_dir,
+            sandbox_dir=sandbox_dir,
+            contract=contract,
             work_id=workflow.work_id,
             artifacts=_file_manifest(sandbox_dir / "works" / workflow.work_id),
             checkpoints=node.checkpoints,
@@ -1857,19 +1860,25 @@ def _provider_result_evidence_envelope(
 
 def _repair_no_change_evidence_envelope(
     *,
+    root_dir: Path,
+    sandbox_dir: Path,
+    contract: ExecutionContract,
     work_id: str,
     artifacts: dict[str, dict[str, Any]],
     checkpoints: tuple[str, ...],
 ) -> dict[str, Any] | None:
-    candidates: list[tuple[int, str, dict[str, Any]]] = []
-    for relative_path, record in artifacts.items():
-        priority = _managed_repair_evidence_priority(relative_path)
-        if priority is not None:
-            candidates.append((priority, relative_path, record))
+    candidates = _managed_contract_evidence_candidates(
+        root_dir=root_dir,
+        sandbox_dir=sandbox_dir,
+        contract=contract,
+        work_id=work_id,
+        artifacts=artifacts,
+    )
     if not candidates:
         return None
 
-    _, relative_path, record = min(candidates, key=lambda item: (item[0], item[1]))
+    relative_path, _ = min(candidates.items(), key=lambda item: (item[1], item[0]))
+    record = artifacts[relative_path]
     sandbox_path = f"works/{work_id}/{relative_path}"
     return {
         "artifacts": [{"path": sandbox_path, "sha256": str(record["sha256"])}],
@@ -1877,21 +1886,94 @@ def _repair_no_change_evidence_envelope(
     }
 
 
-def _managed_repair_evidence_priority(relative_path: str) -> int | None:
-    path = Path(relative_path)
-    parts = tuple(part.casefold() for part in path.parts)
-    if len(parts) < 2 or parts[0] not in {"articles", "thesis"}:
-        return None
-    directories = set(parts[:-1])
-    if "reviews" in directories:
+def _managed_contract_evidence_candidates(
+    *,
+    root_dir: Path,
+    sandbox_dir: Path,
+    contract: ExecutionContract,
+    work_id: str,
+    artifacts: dict[str, dict[str, Any]],
+) -> dict[str, tuple[int, int]]:
+    candidates: dict[str, tuple[int, int]] = {}
+    for item in (*contract.required_context, *contract.required_outputs):
+        _add_contract_evidence_candidate(
+            candidates,
+            priority=_managed_contract_evidence_priority(item.name),
+            declaration_priority=0,
+            sandbox_relative_path=_sandbox_relative_contract_path(root_dir, sandbox_dir, item.path),
+            work_id=work_id,
+            artifacts=artifacts,
+        )
+    for item in contract.allowed_write_scopes:
+        priority = _managed_contract_evidence_priority(item.name)
+        sandbox_relative_path = _sandbox_relative_contract_path(root_dir, sandbox_dir, item.path)
+        if priority is None or sandbox_relative_path is None:
+            continue
+        scope = _work_relative_contract_path(sandbox_relative_path, work_id)
+        if scope is None:
+            continue
+        for path in artifacts:
+            if _path_is_allowed(path, (scope,)):
+                _add_contract_evidence_candidate(
+                    candidates,
+                    priority=priority,
+                    declaration_priority=1,
+                    sandbox_relative_path=f"works/{work_id}/{path}",
+                    work_id=work_id,
+                    artifacts=artifacts,
+                )
+    return candidates
+
+
+def _add_contract_evidence_candidate(
+    candidates: dict[str, tuple[int, int]],
+    *,
+    priority: int | None,
+    declaration_priority: int,
+    sandbox_relative_path: str | None,
+    work_id: str,
+    artifacts: dict[str, dict[str, Any]],
+) -> None:
+    if priority is None or sandbox_relative_path is None:
+        return
+    path = _work_relative_contract_path(sandbox_relative_path, work_id)
+    if path is None or path not in artifacts:
+        return
+    candidate_priority = (priority, declaration_priority)
+    previous = candidates.get(path)
+    if previous is None or candidate_priority < previous:
+        candidates[path] = candidate_priority
+
+
+def _managed_contract_evidence_priority(name: str) -> int | None:
+    tokens = set(name.casefold().replace("_", "-").split("-"))
+    if tokens.intersection({"review", "reviews"}):
         return 0
-    if directories.intersection({"repair", "repairs"}):
+    if tokens.intersection({"repair", "repairs"}):
         return 1
-    if directories.intersection({"checklist", "checklists"}):
-        return 2
-    if "final" in directories and "checklist" in path.name.casefold():
+    if tokens.intersection({"checklist", "checklists"}):
         return 2
     return None
+
+
+def _sandbox_relative_contract_path(root_dir: Path, sandbox_dir: Path, raw_path: str) -> str | None:
+    sandbox_root = sandbox_dir.resolve()
+    candidate = _sandbox_path(root_dir.resolve(), sandbox_root, raw_path).resolve()
+    try:
+        relative = candidate.relative_to(sandbox_root)
+    except ValueError:
+        return None
+    if relative.parts and relative.parts[0] == "__outside_workspace__":
+        return None
+    return relative.as_posix()
+
+
+def _work_relative_contract_path(sandbox_relative_path: str, work_id: str) -> str | None:
+    prefix = f"works/{work_id}/"
+    if not sandbox_relative_path.startswith(prefix):
+        return None
+    path = sandbox_relative_path[len(prefix) :]
+    return path or None
 
 
 def _source_provenance_summary(sandbox_dir: Path, work_id: str) -> dict[str, int]:

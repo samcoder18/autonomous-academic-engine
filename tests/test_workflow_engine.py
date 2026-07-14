@@ -38,13 +38,20 @@ from academic_engine.workflow_engine import (
 )
 
 
-def _dynamic_repair_prompt(root: Path, sandbox: Path, contract: ExecutionContract) -> str:
+def _dynamic_repair_prompt(
+    root: Path,
+    sandbox: Path,
+    contract: ExecutionContract,
+    *,
+    lane: str = "article",
+    role_id: str = "academic-repair-orchestrator",
+) -> str:
     workflow = WorkflowRun(
         workflow_id="repair-prompt-test",
         run_id="repair-prompt-test",
         work_id="demo",
-        lane="article",
-        action="review",
+        lane=lane,
+        action=contract.action,
         status="running",
         execution_status="running",
         readiness_status="not-evaluated",
@@ -55,9 +62,9 @@ def _dynamic_repair_prompt(root: Path, sandbox: Path, contract: ExecutionContrac
     return _role_prompt(
         workflow=workflow,
         node=RoleNode(
-            role_id="academic-repair-orchestrator",
+            role_id=role_id,
             policy_path="agents/academic-repair-orchestrator.md",
-            checkpoints=("repair-2:academic-repair-orchestrator",),
+            checkpoints=(f"repair-2:{role_id}",),
         ),
         contract=contract,
         policy_text="# Repair policy\n",
@@ -1549,7 +1556,9 @@ class WorkflowEngineTests(unittest.TestCase):
             target_validation="test",
             prompt_rules=(),
             deliverables=(),
-            required_context=(),
+            required_context=(
+                RequiredArtifact("review-sheet", str(review), "required", "Managed repair review artifact."),
+            ),
             allowed_write_scopes=(),
             required_outputs=(),
             required_checkpoints=("context-loaded", "reviewed", "verdict-issued"),
@@ -1617,15 +1626,30 @@ class WorkflowEngineTests(unittest.TestCase):
         sandbox = self.root / "repair-evidence-sandbox"
         draft = sandbox / "works" / "demo" / "articles" / "drafts" / "repair-notes.md"
         review = sandbox / "works" / "demo" / "articles" / "reviews" / "managed-review.md"
+        scoped_review = sandbox / "works" / "demo" / "articles" / "reviews" / "a-scope-review.md"
+        canonical_review = self.work_dir / "articles" / "reviews" / "managed-review.md"
         draft.parent.mkdir(parents=True)
         review.parent.mkdir(parents=True)
+        canonical_review.parent.mkdir(parents=True)
         draft.write_text("# Draft repair notes\n", encoding="utf-8")
         review.write_text("# Managed review\n", encoding="utf-8")
+        scoped_review.write_text("# Scope-only review\n", encoding="utf-8")
+        canonical_review.write_text("# Managed review\n", encoding="utf-8")
 
         prompt = _dynamic_repair_prompt(
             self.root,
             sandbox,
-            replace(self.contract(action="review"), lane="article"),
+            replace(
+                self.contract(action="review"),
+                lane="article",
+                required_context=(
+                    RequiredArtifact("review-sheet", str(canonical_review), "required", "Managed review artifact."),
+                ),
+                allowed_write_scopes=(
+                    AllowedWriteScope("review", str(canonical_review.parent), "Managed reviews."),
+                ),
+                required_outputs=(),
+            ),
         )
 
         envelope = _prompt_repair_no_change_evidence_envelope(prompt)
@@ -1657,6 +1681,65 @@ class WorkflowEngineTests(unittest.TestCase):
 
         self.assertNotIn("--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---", prompt)
         self.assertIsNone(_prompt_repair_no_change_evidence_envelope(prompt))
+
+    def test_dynamic_repair_prompt_rejects_nested_unmanaged_review_path(self) -> None:
+        sandbox = self.root / "repair-evidence-sandbox"
+        unmanaged = sandbox / "works" / "demo" / "articles" / "drafts" / "reviews" / "unmanaged.md"
+        unmanaged.parent.mkdir(parents=True)
+        unmanaged.write_text("# Unmanaged nested review\n", encoding="utf-8")
+
+        prompt = _dynamic_repair_prompt(
+            self.root,
+            sandbox,
+            replace(self.contract(action="review"), lane="article"),
+        )
+
+        self.assertNotIn("--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---", prompt)
+        self.assertIsNone(_prompt_repair_no_change_evidence_envelope(prompt))
+
+    def test_dynamic_repair_prompt_accepts_declared_dissertation_checklist(self) -> None:
+        sandbox = self.root / "repair-evidence-sandbox"
+        canonical_checklist = self.work_dir / "thesis" / "dissertation" / "artifacts" / "defense-checklist.md"
+        sandbox_checklist = sandbox / canonical_checklist.relative_to(self.root)
+        canonical_checklist.parent.mkdir(parents=True)
+        sandbox_checklist.parent.mkdir(parents=True)
+        canonical_checklist.write_text("# Defense checklist\n", encoding="utf-8")
+        sandbox_checklist.write_text("# Defense checklist\n", encoding="utf-8")
+
+        prompt = _dynamic_repair_prompt(
+            self.root,
+            sandbox,
+            replace(
+                self.contract(action="review-section"),
+                lane="thesis",
+                required_context=(
+                    RequiredArtifact(
+                        "defense-checklist",
+                        str(canonical_checklist),
+                        "required",
+                        "Declared dissertation defense checklist.",
+                    ),
+                ),
+                allowed_write_scopes=(),
+                required_outputs=(),
+            ),
+            lane="thesis",
+            role_id="thesis-draft-writer",
+        )
+
+        envelope = _prompt_repair_no_change_evidence_envelope(prompt)
+
+        self.assertIsNotNone(envelope)
+        assert envelope is not None
+        self.assertEqual(
+            envelope["artifacts"],
+            [
+                {
+                    "path": "works/demo/thesis/dissertation/artifacts/defense-checklist.md",
+                    "sha256": hashlib.sha256(sandbox_checklist.read_bytes()).hexdigest(),
+                }
+            ],
+        )
 
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
