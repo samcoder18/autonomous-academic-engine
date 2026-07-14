@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from academic_engine.executors import OPENROUTER_ALLOWED_ROLE_ROUTES, OPENROUTER_ROLE_POLICY  # noqa: E402
+from academic_engine.work_bootstrap import WorkBootstrapError, validate_slug  # noqa: E402
 
 EXPECTED_OPENROUTER_ROLE_POLICY = OPENROUTER_ROLE_POLICY
 CONTROLLED_SMOKE_WORK_ID = "openrouter-live-smoke"
@@ -29,13 +30,21 @@ SECRET_PATTERNS = (
 )
 
 
+def expected_work_id(value: str) -> str:
+    try:
+        validate_slug(value)
+    except WorkBootstrapError as exc:
+        raise argparse.ArgumentTypeError(f"expected work ID must be a canonical work slug: {exc}") from exc
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate sanitized OpenRouter live-smoke evidence report.")
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--workflow-id", required=True)
     parser.add_argument("--stdout-log", action="append", default=[], type=Path)
     parser.add_argument("--stderr-log", action="append", default=[], type=Path)
-    parser.add_argument("--expected-work-id", default=CONTROLLED_SMOKE_WORK_ID)
+    parser.add_argument("--expected-work-id", default=CONTROLLED_SMOKE_WORK_ID, type=expected_work_id)
     parser.add_argument("--expected-lane", default=CONTROLLED_SMOKE_LANE)
     parser.add_argument("--expected-action", default=CONTROLLED_SMOKE_ACTION)
     parser.add_argument("--expected-target", default=CONTROLLED_SMOKE_TARGET)

@@ -213,6 +213,22 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Controlled smoke: PASS", text)
         self.assertIn("Route policy: PASS", text)
 
+    def test_report_rejects_traversal_work_id_before_secret_scan(self) -> None:
+        self.write_workflow(roles=self.passing_roles())
+
+        result = self.run_report(extra_args=["--expected-work-id", "../outside"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected work ID", result.stderr)
+
+    def test_report_rejects_absolute_work_id_before_secret_scan(self) -> None:
+        self.write_workflow(roles=self.passing_roles())
+
+        result = self.run_report(extra_args=["--expected-work-id", "/tmp/outside"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected work ID", result.stderr)
+
     def test_evidence_policy_matches_router_role_policy(self) -> None:
         spec = importlib.util.spec_from_file_location("openrouter_evidence_report", self.script)
         self.assertIsNotNone(spec)
