@@ -35,6 +35,7 @@ from .engine_service import (
 )
 from .executors import ProviderExecutionError, build_executor_router, run_provider_smoke
 from .job_queue import JobQueueError
+from .openrouter_qualification import QualificationError, run_openrouter_role_qualification
 from .orchestrator_exports import require_machine_gates_passed, require_submission_ready_workflow
 from .orchestrator_support import WorkflowError
 from .skill_source_map import audit_skill_source_map, sync_external_skill_sources
@@ -194,6 +195,13 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
 
     provider_smoke_parser = subparsers.add_parser("provider-smoke")
     provider_smoke_parser.add_argument("provider", choices=("openrouter",))
+
+    qualification_parser = subparsers.add_parser("qualify-openrouter-role")
+    qualification_parser.add_argument("role_id")
+    qualification_parser.add_argument("--work", dest="work_id", required=True)
+    qualification_parser.add_argument("--seed", required=True)
+    qualification_parser.add_argument("--no-search", dest="search_override", action="store_const", const=False)
+    qualification_parser.add_argument("--model")
 
     runtime_index_parser = subparsers.add_parser("runtime-index")
     runtime_index_subparsers = runtime_index_parser.add_subparsers(dest="runtime_index_command", required=True)
@@ -412,6 +420,8 @@ def main(argv: list[str] | None = None, *, root_dir: str | Path | None = None) -
             return work_status(root_path, args.work_id, as_json=args.as_json)
         if args.command == "provider-smoke":
             return provider_smoke_cli(args.provider)
+        if args.command == "qualify-openrouter-role":
+            return qualify_openrouter_role_cli(root_path, args)
         if args.command == "runtime-index":
             return runtime_index_cli(root_path, args)
         if args.command == "jobs":
@@ -1071,6 +1081,32 @@ def provider_smoke_cli(provider: str) -> int:
     print(f"[provider-smoke] response_chars: {result.content_length}")
     print(f"[provider-smoke] preview: {result.preview}")
     return 0
+
+
+def qualify_openrouter_role_cli(root_dir: Path, args: Any) -> int:
+    try:
+        workflow = run_openrouter_role_qualification(
+            root_dir,
+            args.role_id,
+            args.work_id,
+            args.seed,
+            use_search=_resolve_search(args.search_override, True),
+            model=args.model,
+        )
+    except ProviderExecutionError as exc:
+        print(f"[qualification] {exc.blocker_code}: {exc}", file=sys.stderr)
+        return 1
+    except QualificationError as exc:
+        print(f"[qualification] {exc.code}: {exc}", file=sys.stderr)
+        return 1
+
+    canonical_unchanged = bool(workflow.metadata.get("canonical_unchanged"))
+    promotion_status = workflow.promotion.status if workflow.promotion else "not-run"
+    print(f"Workflow ID: {workflow.workflow_id}")
+    print(f"Execution status: {workflow.execution_status}")
+    print(f"Promotion status: {promotion_status}")
+    print(f"Canonical fixture unchanged: {'true' if canonical_unchanged else 'false'}")
+    return 0 if workflow.execution_status == "succeeded" else 1
 
 
 def runtime_index_cli(root_dir: Path, args: Any) -> int:
