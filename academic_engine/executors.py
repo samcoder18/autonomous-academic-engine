@@ -5,7 +5,7 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from urllib import error as urlerror
@@ -18,6 +18,47 @@ OutputStrategy = Callable[["RoleExecutionContext", str], None]
 HttpTransport = Callable[[urlrequest.Request, float], tuple[int, bytes]]
 
 
+OPENROUTER_EXECUTION_MODES = frozenset({"read-only", "write-plan"})
+SUPPORTED_ROLE_IDS = frozenset(
+    {
+        "thesis-structure-architect",
+        "thesis-research-synthesizer",
+        "thesis-source-verifier",
+        "thesis-draft-writer",
+        "thesis-citation-checker",
+        "thesis-argument-critic",
+        "thesis-style-editor",
+        "thesis-submission-evaluator",
+        "academic-intake",
+        "academic-source-acquirer",
+        "academic-source-verifier",
+        "academic-evidence-cartographer",
+        "academic-draft-writer",
+        "academic-citation-checker",
+        "academic-counterargument-critic",
+        "academic-submission-evaluator",
+        "academic-repair-orchestrator",
+        "academic-finalizer",
+    }
+)
+
+# This map is the runtime allowlist, not the qualification matrix. A role is
+# added only after its serial qualification record is complete. It intentionally
+# contains just the current read-only RC baselines.
+OPENROUTER_ROLE_POLICY: dict[str, dict[str, str]] = {
+    "academic-source-verifier": {
+        "executor_id": "openrouter",
+        "execution_mode": "read-only",
+    },
+    "academic-submission-evaluator": {
+        "executor_id": "openrouter",
+        "execution_mode": "read-only",
+    },
+}
+
+# Compatibility index for existing RC evidence. New code must use
+# OPENROUTER_ROLE_POLICY rather than treating evaluator/verifier routes as the
+# provider policy itself.
 OPENROUTER_ALLOWED_ROLE_ROUTES = {
     "academic-source-verifier": "verifier",
     "academic-submission-evaluator": "evaluator",
@@ -46,12 +87,16 @@ class ProviderSmokeResult:
 class ExecutorSelection:
     route_name: str
     executor_id: str
+    execution_mode: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        return {
+        payload = {
             "route_name": self.route_name,
             "executor_id": self.executor_id,
         }
+        if self.execution_mode is not None:
+            payload["execution_mode"] = self.execution_mode
+        return payload
 
 
 def _urllib_transport(request: urlrequest.Request, timeout: float) -> tuple[int, bytes]:
@@ -79,6 +124,7 @@ class RoleExecutionContext:
     is_evaluator: bool = False
     is_verifier: bool = False
     is_finalizer: bool = False
+    execution_mode: str | None = None
 
 
 class RoleExecutorProtocol(Protocol):
@@ -247,6 +293,7 @@ class OpenAICompatibleExecutor:
         self.app_title_env = app_title_env
 
     def execute(self, context: RoleExecutionContext, prompt: str) -> None:
+        """Transport raw provider output; WorkflowEngine remains the only write authority."""
         api_key = _clean_env_value(self.environ.get(self.api_key_env))
         model = _clean_env_value(self.environ.get(self.model_env))
         if api_key is None or model is None:
@@ -294,24 +341,48 @@ class ExecutorRouter:
     default_executor_id: str = "custom"
     evaluator_executor_id: str | None = None
     verifier_executor_id: str | None = None
+    role_executors: Mapping[str, RoleExecutorProtocol] = field(default_factory=dict)
+    role_executor_ids: Mapping[str, str] = field(default_factory=dict)
+    role_policies: Mapping[str, Mapping[str, str]] = field(default_factory=lambda: OPENROUTER_ROLE_POLICY)
 
     def execute(self, context: RoleExecutionContext, prompt: str) -> None:
         executor = self._select(context)
         executor.execute(context, prompt)
 
     def describe_selection(self, context: RoleExecutionContext) -> ExecutorSelection:
+        role_executor_id = self.role_executor_ids.get(context.role_id)
+        if role_executor_id is not None:
+            return ExecutorSelection(
+                "role",
+                role_executor_id,
+                _openrouter_execution_mode(context.role_id, role_executor_id, self.role_policies),
+            )
         if context.is_evaluator and self.evaluator_executor is not None:
-            return ExecutorSelection("evaluator", self.evaluator_executor_id or "custom")
+            executor_id = self.evaluator_executor_id or "custom"
+            return ExecutorSelection(
+                "evaluator",
+                executor_id,
+                _openrouter_execution_mode(context.role_id, executor_id, self.role_policies),
+            )
         if context.is_verifier and self.verifier_executor is not None:
-            return ExecutorSelection("verifier", self.verifier_executor_id or "custom")
-        return ExecutorSelection("default", self.default_executor_id)
+            executor_id = self.verifier_executor_id or "custom"
+            return ExecutorSelection(
+                "verifier",
+                executor_id,
+                _openrouter_execution_mode(context.role_id, executor_id, self.role_policies),
+            )
+        return ExecutorSelection(
+            "default",
+            self.default_executor_id,
+            _openrouter_execution_mode(context.role_id, self.default_executor_id, self.role_policies),
+        )
 
     def _select(self, context: RoleExecutionContext) -> RoleExecutorProtocol:
         selection = self.describe_selection(context)
-        if selection.executor_id == "openrouter":
-            expected_route = OPENROUTER_ALLOWED_ROLE_ROUTES.get(context.role_id)
-            if expected_route != selection.route_name:
-                return ForbiddenProviderRouteExecutor(selection.executor_id, selection.route_name)
+        if selection.executor_id == "openrouter" and selection.execution_mode is None:
+            return ForbiddenProviderRouteExecutor(selection.executor_id, selection.route_name)
+        if context.role_id in self.role_executors:
+            return self.role_executors[context.role_id]
         if context.is_evaluator and self.evaluator_executor is not None:
             return self.evaluator_executor
         if context.is_verifier and self.verifier_executor is not None:
@@ -322,21 +393,39 @@ class ExecutorRouter:
 def build_executor_router(
     environ: Mapping[str, str] | None = None,
     registry: Mapping[str, RoleExecutorProtocol] | None = None,
+    role_policies: Mapping[str, Mapping[str, str]] | None = None,
 ) -> ExecutorRouter:
     env = environ if environ is not None else os.environ
     available = dict(registry) if registry is not None else _default_registry(env)
+    policies = role_policies if role_policies is not None else OPENROUTER_ROLE_POLICY
 
     default_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_DEFAULT_EXECUTOR")) or "codex-cli"
     evaluator_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_EVALUATOR_EXECUTOR"))
     verifier_id = _clean_executor_id(env.get("ACADEMIC_ENGINE_VERIFIER_EXECUTOR"))
+    role_executor_ids = {
+        role_id: executor_id
+        for role_id in sorted(SUPPORTED_ROLE_IDS)
+        if (executor_id := _clean_executor_id(env.get(_role_executor_env_name(role_id)))) is not None
+    }
 
     return ExecutorRouter(
-        default_executor=_executor_for(default_id, available, route_name="default"),
+        default_executor=_executor_for(
+            default_id,
+            available,
+            route_name="default",
+            allow_openrouter_default=_openrouter_default_is_allowed(env, policies),
+        ),
         evaluator_executor=_executor_for(evaluator_id, available, route_name="evaluator") if evaluator_id else None,
         verifier_executor=_executor_for(verifier_id, available, route_name="verifier") if verifier_id else None,
         default_executor_id=default_id,
         evaluator_executor_id=evaluator_id,
         verifier_executor_id=verifier_id,
+        role_executors={
+            role_id: _executor_for(executor_id, available, route_name="role")
+            for role_id, executor_id in role_executor_ids.items()
+        },
+        role_executor_ids=role_executor_ids,
+        role_policies=policies,
     )
 
 
@@ -418,8 +507,9 @@ def _executor_for(
     registry: Mapping[str, RoleExecutorProtocol],
     *,
     route_name: str,
+    allow_openrouter_default: bool = False,
 ) -> RoleExecutorProtocol:
-    if route_name == "default" and executor_id == "openrouter":
+    if route_name == "default" and executor_id == "openrouter" and not allow_openrouter_default:
         return ForbiddenProviderRouteExecutor(executor_id, route_name)
     return registry.get(executor_id) or UnavailableExecutor(executor_id)
 
@@ -427,6 +517,41 @@ def _executor_for(
 def _clean_executor_id(value: str | None) -> str | None:
     clean = (value or "").strip()
     return clean or None
+
+
+def _role_executor_env_name(role_id: str) -> str:
+    normalized = role_id.upper().replace("-", "_")
+    return f"ACADEMIC_ENGINE_ROLE_EXECUTOR_{normalized}"
+
+
+def _openrouter_execution_mode(
+    role_id: str,
+    executor_id: str,
+    policies: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    if executor_id != "openrouter":
+        return None
+    policy = policies.get(role_id)
+    if not isinstance(policy, Mapping) or set(policy) != {"executor_id", "execution_mode"}:
+        return None
+    if policy.get("executor_id") != "openrouter":
+        return None
+    mode = policy.get("execution_mode")
+    return mode if mode in OPENROUTER_EXECUTION_MODES else None
+
+
+def _openrouter_default_is_allowed(
+    environ: Mapping[str, str],
+    policies: Mapping[str, Mapping[str, str]],
+) -> bool:
+    if _clean_env_value(environ.get("ACADEMIC_ENGINE_OPENROUTER_MODEL")) is None:
+        return False
+    if set(policies) != set(SUPPORTED_ROLE_IDS):
+        return False
+    return all(
+        _openrouter_execution_mode(role_id, "openrouter", policies) is not None
+        for role_id in SUPPORTED_ROLE_IDS
+    )
 
 
 def _clean_env_value(value: str | None) -> str | None:

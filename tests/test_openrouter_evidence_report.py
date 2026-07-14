@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from academic_engine.executors import OPENROUTER_ALLOWED_ROLE_ROUTES
+from academic_engine.executors import OPENROUTER_ROLE_POLICY
 
 FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
 
@@ -40,13 +40,16 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         *,
         roles: list[dict[str, object]],
         execution_status: str = "succeeded",
+        work_id: str = "openrouter-live-smoke",
+        lane: str = "article",
+        action: str = "repair",
     ) -> None:
         payload = {
             "version": "workflow-run/v1",
             "workflow_id": self.workflow_id,
-            "work_id": "openrouter-live-smoke",
-            "lane": "article",
-            "action": "repair",
+            "work_id": work_id,
+            "lane": lane,
+            "action": action,
             "status": "completed",
             "execution_status": execution_status,
             "readiness_status": "strong-draft-with-blockers",
@@ -90,6 +93,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
                 "status": "succeeded",
                 "executor_route": "verifier",
                 "executor_id": "openrouter",
+                "execution_mode": "read-only",
                 "blockers": [],
             },
             {
@@ -106,6 +110,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
                 "status": "succeeded",
                 "executor_route": "evaluator",
                 "executor_id": "openrouter",
+                "execution_mode": "read-only",
                 "blockers": [{"code": "primary-support-gap"}],
             },
             {
@@ -118,25 +123,31 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
             },
         ]
 
-    def run_report(self, *, secret: str = FAKE_OPENROUTER_KEY) -> subprocess.CompletedProcess[str]:
+    def run_report(
+        self,
+        *,
+        secret: str = FAKE_OPENROUTER_KEY,
+        extra_args: list[str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["OPENROUTER_API_KEY"] = secret
         env["ACADEMIC_ENGINE_OPENROUTER_MODEL"] = "openrouter/test-model"
+        command = [
+            sys.executable,
+            str(self.script),
+            "--root",
+            str(self.root),
+            "--workflow-id",
+            self.workflow_id,
+            "--stdout-log",
+            str(self.stdout_log),
+            "--stderr-log",
+            str(self.stderr_log),
+        ]
+        command.extend(extra_args or [])
+        command.extend(("--report", str(self.report)))
         return subprocess.run(
-            [
-                sys.executable,
-                str(self.script),
-                "--root",
-                str(self.root),
-                "--workflow-id",
-                self.workflow_id,
-                "--stdout-log",
-                str(self.stdout_log),
-                "--stderr-log",
-                str(self.stderr_log),
-                "--report",
-                str(self.report),
-            ],
+            command,
             text=True,
             capture_output=True,
             env=env,
@@ -153,17 +164,91 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Controlled smoke: PASS", text)
         self.assertIn("Route policy: PASS", text)
         self.assertIn("Secret scan: PASS", text)
-        self.assertIn("| academic-source-verifier | verifier | openrouter | succeeded |", text)
-        self.assertIn("| academic-submission-evaluator | evaluator | openrouter | succeeded |", text)
+        self.assertIn("| academic-source-verifier | verifier | openrouter | read-only | succeeded |", text)
+        self.assertIn("| academic-submission-evaluator | evaluator | openrouter | read-only | succeeded |", text)
 
-    def test_evidence_policy_matches_router_allowlist(self) -> None:
+    def test_report_passes_for_one_role_qualification_with_custom_scope(self) -> None:
+        work_id = "openrouter-role-qualification"
+        target = f"works/{work_id}/articles/reviews/qualification.md"
+        self.write_runtime_request(
+            work_id=work_id,
+            lane="article",
+            action="review",
+            target=target,
+        )
+        self.write_workflow(
+            work_id=work_id,
+            lane="article",
+            action="review",
+            roles=[
+                {
+                    "role_run_id": "01-academic-source-verifier",
+                    "role_id": "academic-source-verifier",
+                    "status": "succeeded",
+                    "executor_route": "verifier",
+                    "executor_id": "openrouter",
+                    "execution_mode": "read-only",
+                    "blockers": [],
+                }
+            ],
+        )
+
+        result = self.run_report(
+            extra_args=[
+                "--expected-work-id",
+                work_id,
+                "--expected-lane",
+                "article",
+                "--expected-action",
+                "review",
+                "--expected-target",
+                target,
+                "--expected-role",
+                "academic-source-verifier",
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertIn("Controlled smoke: PASS", text)
+        self.assertIn("Route policy: PASS", text)
+
+    def test_report_rejects_traversal_work_id_before_secret_scan(self) -> None:
+        self.write_workflow(roles=self.passing_roles())
+
+        result = self.run_report(extra_args=["--expected-work-id", "../outside"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected work ID", result.stderr)
+
+    def test_report_rejects_absolute_work_id_before_secret_scan(self) -> None:
+        self.write_workflow(roles=self.passing_roles())
+
+        result = self.run_report(extra_args=["--expected-work-id", "/tmp/outside"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("expected work ID", result.stderr)
+
+    def test_evidence_policy_matches_router_role_policy(self) -> None:
         spec = importlib.util.spec_from_file_location("openrouter_evidence_report", self.script)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        self.assertEqual(module.ALLOWED_OPENROUTER_ROUTES, OPENROUTER_ALLOWED_ROLE_ROUTES)
+        self.assertEqual(module.EXPECTED_OPENROUTER_ROLE_POLICY, OPENROUTER_ROLE_POLICY)
+
+    def test_report_fails_when_openrouter_execution_mode_does_not_match_policy(self) -> None:
+        roles = self.passing_roles()
+        for role in roles:
+            if role["role_id"] == "academic-submission-evaluator":
+                role["execution_mode"] = "write-plan"
+        self.write_workflow(roles=roles)
+
+        result = self.run_report()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Route policy violation", result.stderr)
 
     def test_report_fails_when_required_openrouter_role_is_missing(self) -> None:
         roles = [

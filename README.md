@@ -193,7 +193,14 @@ python3 -m academic_engine.work_cli provider-smoke openrouter
 unset ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST
 ```
 
-Ordinary CI and unit tests do not call OpenRouter. `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is intentionally rejected until a safe file-write bridge exists for writer/finalizer roles; OpenRouter is not enabled for thesis routes in this RC.
+Ordinary CI and unit tests do not call OpenRouter. A sandbox-only write-plan
+bridge and a guarded default mechanism exist, but the current policy still
+covers only the two read-only article RC routes. Therefore
+`ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` remains fail-closed, and
+OpenRouter is not enabled for thesis or writer/finalizer roles until their
+serial qualification evidence, full-lane workflows, secret scan, and rollback
+drill pass. Codex CLI remains the manual default and no provider failure
+silently falls back between executors.
 
 Deploy runbook and diagnostics matrix: [docs/deploy/openrouter-runbook.md](docs/deploy/openrouter-runbook.md). Redacted local env template: [.env.example](.env.example).
 

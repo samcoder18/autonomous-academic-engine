@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 import tempfile
 import threading
 import unittest
@@ -514,6 +515,92 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(workflow_payload["role_runs"][1]["executor_route"], "evaluator")
         self.assertEqual(workflow_payload["role_runs"][1]["executor_id"], "trace-evaluator")
 
+    def test_workflow_persists_openrouter_execution_mode(self) -> None:
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [self.target.relative_to(self.root)],
+                verdict=_evaluator_payload("submission-ready")
+                if "Role ID: thesis-submission-evaluator" in prompt
+                else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            evaluator_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            evaluator_executor_id="openrouter",
+            role_policies={
+                "thesis-submission-evaluator": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "read-only",
+                }
+            },
+        )
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertIsNone(result.role_runs[0].execution_mode)
+        self.assertEqual(result.role_runs[1].execution_mode, "read-only")
+        workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
+        self.assertEqual(workflow_payload["role_runs"][1]["execution_mode"], "read-only")
+
+    def test_openrouter_write_plan_role_uses_mode_aware_two_call_path(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Routed write-plan change\n")
+                return
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=_evaluator_payload("submission-ready") if role_id == "thesis-submission-evaluator" else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            role_executors={"thesis-style-editor": CallableRoleExecutor(executor)},
+            role_executor_ids={"thesis-style-editor": "openrouter"},
+            role_policies={
+                "thesis-style-editor": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.role_runs[0].executor_id, "openrouter")
+        self.assertEqual(result.role_runs[0].execution_mode, "write-plan")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
+
     def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
         prompts: dict[str, str] = {}
 
@@ -933,6 +1020,323 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.promotion.status, "blocked")
         self.assertTrue(self.target.exists())
 
+    def test_provider_write_plan_applies_only_in_sandbox_then_uses_manifest_evidence(self) -> None:
+        target_path = self.target.relative_to(self.root)
+        follow_up_prompts: list[str] = []
+        self.target.chmod(0o640)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned sandbox change\n")
+                return
+            if role_id == "thesis-style-editor":
+                follow_up_prompts.append(prompt)
+                _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
+                return
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=_evaluator_payload("submission-ready"),
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.promotion.status, "promoted")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Planned sandbox change\n")
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o640)
+        self.assertEqual(len(follow_up_prompts), 1)
+        self.assertIn('"provider_result_evidence_envelope"', follow_up_prompts[0])
+        self.assertIn(target_path.as_posix(), follow_up_prompts[0])
+
+    def test_provider_write_plan_outside_scope_fails_without_canonical_mutation(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            _write_provider_write_plan(output, prompt, sandbox, Path("AGENTS.md"), "# Forbidden\n")
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-write-path-forbidden" for item in result.blockers))
+        self.assertFalse(any(item["code"] == "role-result-block-missing" for item in result.blockers))
+        self.assertEqual(target_path.as_posix(), self.target.relative_to(self.root).as_posix())
+
+    def test_provider_write_plan_cannot_bypass_canonical_conflict(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Provider change\n")
+                return
+            if role_id == "thesis-submission-evaluator":
+                self.target.write_text("# User change\n", encoding="utf-8")
+                _write_role_result(
+                    output,
+                    prompt,
+                    sandbox,
+                    [target_path],
+                    verdict=_evaluator_payload("submission-ready"),
+                )
+                return
+            _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.promotion.status, "conflict")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# User change\n")
+
+    def test_provider_write_plan_missing_follow_up_role_result_fails_closed(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned but unverified\n")
+                return
+            output.write_text("provider omitted the role result", encoding="utf-8")
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(result.promotion.status, "blocked")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "role-result-block-missing" for item in result.blockers))
+
+    def test_provider_write_plan_hash_invalid_follow_up_role_result_fails_closed(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned but hash invalid\n")
+                return
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=None,
+                artifact_sha256_override="0" * 64,
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(result.promotion.status, "blocked")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "role-result-artifact-hash-mismatch" for item in result.blockers))
+
+    def test_provider_write_plan_follow_up_requires_verbatim_evidence_envelope(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned evidence change\n")
+                return
+            checkpoints = json.loads(re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", prompt).group("body"))
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=None,
+                checkpoint_evidence_override={
+                    checkpoint: [target_path.as_posix(), target_path.as_posix()]
+                    for checkpoint in checkpoints
+                },
+            )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "role-result-provider-evidence-mismatch" for item in result.blockers))
+
+    def test_provider_write_plan_first_call_failure_leaves_canonical_file_unchanged(self) -> None:
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            raise ProviderExecutionError("provider-http-failed", "provider unavailable")
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-http-failed" for item in result.blockers))
+
+    def test_provider_write_plan_second_call_failure_leaves_canonical_file_unchanged(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned then provider failed\n")
+                return
+            raise ProviderExecutionError("provider-http-failed", "provider unavailable")
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(result.promotion.status, "blocked")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-http-failed" for item in result.blockers))
+
+    def test_provider_write_plan_rejects_direct_sandbox_write_before_plan(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            (sandbox / target_path).write_text("# Direct provider write\n", encoding="utf-8")
+            _write_provider_write_plan(output, prompt, sandbox, target_path, "# Planned provider write\n")
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-write-plan-direct-write-forbidden" for item in result.blockers))
+
+    def test_provider_write_plan_is_forbidden_for_read_only_evaluator(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if _prompt_field(prompt, "Role ID") == "thesis-submission-evaluator":
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Forbidden evaluator plan\n")
+                return
+            _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-write-plan-route-forbidden" for item in result.blockers))
+
+    def test_read_only_openrouter_verifier_rejects_plan_even_with_a_writable_contract(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if _prompt_field(prompt, "Role ID") == "thesis-source-verifier":
+                _write_provider_write_plan(output, prompt, sandbox, target_path, "# Forbidden verifier plan\n")
+                return
+            _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            verifier_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            verifier_executor_id="openrouter",
+            role_policies={
+                "thesis-source-verifier": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "read-only",
+                }
+            },
+        )
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="write-section",
+            contract=self.contract(action="write-section"),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
+        self.assertTrue(any(item["code"] == "provider-write-plan-route-forbidden" for item in result.blockers))
+
     def test_repair_loop_is_bounded_to_two_iterations(self) -> None:
         blocker = {
             "category": "citation",
@@ -1164,6 +1568,7 @@ def _write_role_result(
     blockers: list[dict[str, object]] | None = None,
     identity_overrides: dict[str, str] | None = None,
     checkpoint_evidence_override: dict[str, list[str]] | None = None,
+    artifact_sha256_override: str | None = None,
 ) -> None:
     checkpoint_match = re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", prompt)
     assert checkpoint_match is not None
@@ -1172,7 +1577,7 @@ def _write_role_result(
     for relative in artifact_paths:
         path = sandbox / relative
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        artifacts.append({"path": relative.as_posix(), "sha256": digest})
+        artifacts.append({"path": relative.as_posix(), "sha256": artifact_sha256_override or digest})
     evidence_path = artifacts[0]["path"] if artifacts else ""
     payload = {
         "version": "role-result/v1",
@@ -1196,6 +1601,32 @@ def _write_role_result(
     payload.update(identity_overrides or {})
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(f"role complete\n```role-result\n{json.dumps(payload)}\n```\n", encoding="utf-8")
+
+
+def _write_provider_write_plan(
+    output: Path,
+    prompt: str,
+    sandbox: Path,
+    path: Path,
+    content: str,
+) -> None:
+    target = sandbox / path
+    payload = {
+        "version": "provider-write-plan/v1",
+        "workflow_id": _prompt_field(prompt, "Workflow ID"),
+        "role_run_id": _prompt_field(prompt, "Role Run ID"),
+        "role_id": _prompt_field(prompt, "Role ID"),
+        "work_id": _prompt_field(prompt, "Work ID"),
+        "operations": [
+            {
+                "path": path.as_posix(),
+                "base_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "content": content,
+            }
+        ],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(f"```provider-write-plan\n{json.dumps(payload)}\n```\n", encoding="utf-8")
 
 
 def _prompt_field(prompt: str, label: str) -> str:
