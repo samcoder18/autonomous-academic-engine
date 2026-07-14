@@ -7,7 +7,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -28,19 +28,88 @@ QUALIFICATION_WORK_ID = "openrouter-live-smoke"
 QUALIFICATION_LANE = "article"
 QUALIFICATION_ACTION = "qualify-intake"
 QUALIFICATION_SEED_PATH = "works/openrouter-live-smoke/articles/briefs/academic-intake-qualification.md"
-QUALIFICATION_METADATA_KEYS = frozenset(
-    {
-        "candidate_id",
-        "allowed_path",
-        "before_sha256",
-        "after_sha256",
-        "canonical_unchanged",
-    }
+SOURCE_QUALIFICATION_ROLE_ID = "academic-source-acquirer"
+SOURCE_QUALIFICATION_ACTION = "qualify-source-acquirer"
+SOURCE_QUALIFICATION_SEED_PATH = "works/openrouter-live-smoke/articles/briefs/academic-source-acquirer-qualification.md"
+SOURCE_QUALIFICATION_TARGET_PATH = (
+    "works/openrouter-live-smoke/articles/evidence/academic-source-acquirer-qualification.md"
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-QUALIFICATION_WORKFLOW_ID_RE = re.compile(
-    r"openrouter-live-smoke-article-qualify-intake-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}"
-)
+
+
+class QualificationEvidenceSpec(NamedTuple):
+    role_id: str
+    work_id: str
+    lane: str
+    action: str
+    write_path: str
+    execution_mode: str
+    checkpoint: str | None
+    metadata_keys: frozenset[str]
+    metadata_expected_values: tuple[tuple[str, str], ...]
+    metadata_hash_pairs: tuple[tuple[str, str], ...]
+    workflow_id_re: re.Pattern[str]
+
+
+QUALIFICATION_EVIDENCE_SPECS = {
+    QUALIFICATION_ROLE_ID: QualificationEvidenceSpec(
+        role_id=QUALIFICATION_ROLE_ID,
+        work_id=QUALIFICATION_WORK_ID,
+        lane=QUALIFICATION_LANE,
+        action=QUALIFICATION_ACTION,
+        write_path=QUALIFICATION_SEED_PATH,
+        execution_mode="write-plan",
+        checkpoint=None,
+        metadata_keys=frozenset(
+            {
+                "candidate_id",
+                "allowed_path",
+                "before_sha256",
+                "after_sha256",
+                "canonical_unchanged",
+            }
+        ),
+        metadata_expected_values=(
+            ("candidate_id", QUALIFICATION_ROLE_ID),
+            ("allowed_path", QUALIFICATION_SEED_PATH),
+        ),
+        metadata_hash_pairs=(("before_sha256", "after_sha256"),),
+        workflow_id_re=re.compile(r"openrouter-live-smoke-article-qualify-intake-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}"),
+    ),
+    SOURCE_QUALIFICATION_ROLE_ID: QualificationEvidenceSpec(
+        role_id=SOURCE_QUALIFICATION_ROLE_ID,
+        work_id=QUALIFICATION_WORK_ID,
+        lane=QUALIFICATION_LANE,
+        action=SOURCE_QUALIFICATION_ACTION,
+        write_path=SOURCE_QUALIFICATION_TARGET_PATH,
+        execution_mode="write-plan",
+        checkpoint="qualification:academic-source-acquirer",
+        metadata_keys=frozenset(
+            {
+                "candidate_id",
+                "context_path",
+                "write_path",
+                "context_before_sha256",
+                "context_after_sha256",
+                "write_before_sha256",
+                "write_after_sha256",
+                "canonical_unchanged",
+            }
+        ),
+        metadata_expected_values=(
+            ("candidate_id", SOURCE_QUALIFICATION_ROLE_ID),
+            ("context_path", SOURCE_QUALIFICATION_SEED_PATH),
+            ("write_path", SOURCE_QUALIFICATION_TARGET_PATH),
+        ),
+        metadata_hash_pairs=(
+            ("context_before_sha256", "context_after_sha256"),
+            ("write_before_sha256", "write_after_sha256"),
+        ),
+        workflow_id_re=re.compile(
+            r"openrouter-live-smoke-article-qualify-source-acquirer-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}"
+        ),
+    ),
+}
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]{20,}"),
     re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE),
@@ -67,11 +136,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-action", default=CONTROLLED_SMOKE_ACTION)
     parser.add_argument("--expected-target", default=CONTROLLED_SMOKE_TARGET)
     parser.add_argument("--expected-role", action="append", default=[])
-    parser.add_argument("--qualification-role", choices=(QUALIFICATION_ROLE_ID,))
+    parser.add_argument("--qualification-role", choices=tuple(QUALIFICATION_EVIDENCE_SPECS))
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
-    if args.qualification_role is None and QUALIFICATION_ROLE_ID in args.expected_role:
-        parser.error("--expected-role academic-intake requires --qualification-role academic-intake")
+    if args.qualification_role is None:
+        for role_id in args.expected_role:
+            if role_id in QUALIFICATION_EVIDENCE_SPECS:
+                parser.error(f"--expected-role {role_id} requires --qualification-role {role_id}")
     return args
 
 
@@ -128,9 +199,7 @@ def controlled_smoke_violations(
     if workflow.get("status") != "completed":
         violations.append(f"workflow status is {workflow.get('status')!r}; expected 'completed'")
     if workflow.get("execution_status") != "succeeded":
-        violations.append(
-            f"workflow execution_status is {workflow.get('execution_status')!r}; expected 'succeeded'"
-        )
+        violations.append(f"workflow execution_status is {workflow.get('execution_status')!r}; expected 'succeeded'")
     if request_error:
         violations.append(request_error)
         return violations
@@ -156,13 +225,14 @@ def controlled_smoke_violations(
 def qualification_controlled_smoke_violations(
     workflow: dict[str, Any],
     workflow_id: str,
+    spec: QualificationEvidenceSpec,
 ) -> list[str]:
     violations: list[str] = []
     expected_workflow = {
         "workflow_id": workflow_id,
-        "work_id": QUALIFICATION_WORK_ID,
-        "lane": QUALIFICATION_LANE,
-        "action": QUALIFICATION_ACTION,
+        "work_id": spec.work_id,
+        "lane": spec.lane,
+        "action": spec.action,
         "status": "completed",
         "execution_status": "succeeded",
     }
@@ -230,7 +300,10 @@ def route_policy_violations(
     return violations
 
 
-def qualification_route_policy_violations(workflow: dict[str, Any]) -> list[str]:
+def qualification_route_policy_violations(
+    workflow: dict[str, Any],
+    spec: QualificationEvidenceSpec,
+) -> list[str]:
     raw_roles = workflow.get("role_runs")
     if not isinstance(raw_roles, list):
         return ["qualification role_runs must be a list"]
@@ -242,10 +315,10 @@ def qualification_route_policy_violations(workflow: dict[str, Any]) -> list[str]
 
     violations: list[str] = []
     expected_fields = {
-        "role_id": QUALIFICATION_ROLE_ID,
+        "role_id": spec.role_id,
         "executor_route": "role",
         "executor_id": "openrouter",
-        "execution_mode": "write-plan",
+        "execution_mode": spec.execution_mode,
         "status": "succeeded",
     }
     for field, expected in expected_fields.items():
@@ -254,7 +327,10 @@ def qualification_route_policy_violations(workflow: dict[str, Any]) -> list[str]
     return violations
 
 
-def qualification_control_violations(workflow: dict[str, Any]) -> list[str]:
+def qualification_control_violations(
+    workflow: dict[str, Any],
+    spec: QualificationEvidenceSpec,
+) -> list[str]:
     raw_roles = workflow.get("role_runs")
     if not isinstance(raw_roles, list) or len(raw_roles) != 1 or not isinstance(raw_roles[0], dict):
         return ["qualification controls require exactly one role object"]
@@ -262,10 +338,12 @@ def qualification_control_violations(workflow: dict[str, Any]) -> list[str]:
     violations: list[str] = []
     if role.get("write_plan_applied") is not True:
         violations.append("qualification write_plan_applied must be true")
-    if role.get("changed_paths") != [QUALIFICATION_SEED_PATH]:
-        violations.append(f"qualification changed paths must equal {QUALIFICATION_SEED_PATH}")
+    if role.get("changed_paths") != [spec.write_path]:
+        violations.append("qualification changed paths must equal the approved write target")
     if role.get("forbidden_paths") != []:
         violations.append("qualification forbidden paths must be empty")
+    if spec.checkpoint is not None and role.get("checkpoints") != [spec.checkpoint]:
+        violations.append("qualification checkpoints must equal the approved checkpoint")
 
     promotion = workflow.get("promotion")
     if not isinstance(promotion, dict):
@@ -275,30 +353,41 @@ def qualification_control_violations(workflow: dict[str, Any]) -> list[str]:
             violations.append("qualification promotion status must be skipped")
         if promotion.get("reason") != "qualification-no-promotion":
             violations.append("qualification promotion reason must be qualification-no-promotion")
+        if promotion.get("skipped") != [spec.write_path]:
+            violations.append("qualification promotion skipped must equal the approved write target")
 
     metadata = workflow.get("metadata")
     if not isinstance(metadata, dict):
         violations.append("qualification canonical metadata must be an object")
         return violations
-    if set(metadata) != QUALIFICATION_METADATA_KEYS:
+    if set(metadata) != spec.metadata_keys:
         violations.append("qualification canonical metadata keys are invalid")
-    if metadata.get("candidate_id") != QUALIFICATION_ROLE_ID:
-        violations.append("qualification canonical metadata candidate_id is invalid")
-    if metadata.get("allowed_path") != QUALIFICATION_SEED_PATH:
-        violations.append("qualification canonical metadata allowed_path is invalid")
-    before_sha256 = metadata.get("before_sha256")
-    after_sha256 = metadata.get("after_sha256")
-    if (
-        not isinstance(before_sha256, str)
-        or not isinstance(after_sha256, str)
-        or SHA256_RE.fullmatch(before_sha256) is None
-        or SHA256_RE.fullmatch(after_sha256) is None
-        or before_sha256 != after_sha256
-    ):
+    for field, expected in spec.metadata_expected_values:
+        if metadata.get(field) != expected:
+            violations.append(f"qualification canonical metadata {field} is invalid")
+    if not _qualification_metadata_hashes_match(metadata, spec.metadata_hash_pairs):
         violations.append("qualification canonical metadata hashes must be equal lowercase SHA-256 values")
     if metadata.get("canonical_unchanged") is not True:
         violations.append("qualification canonical metadata canonical_unchanged must be true")
     return violations
+
+
+def _qualification_metadata_hashes_match(
+    metadata: dict[str, Any],
+    hash_pairs: tuple[tuple[str, str], ...],
+) -> bool:
+    for before_key, after_key in hash_pairs:
+        before_sha256 = metadata.get(before_key)
+        after_sha256 = metadata.get(after_key)
+        if (
+            not isinstance(before_sha256, str)
+            or not isinstance(after_sha256, str)
+            or SHA256_RE.fullmatch(before_sha256) is None
+            or SHA256_RE.fullmatch(after_sha256) is None
+            or before_sha256 != after_sha256
+        ):
+            return False
+    return True
 
 
 def _scan_paths(
@@ -385,8 +474,8 @@ def route_table(roles: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _qualification_workflow_id(value: object) -> str:
-    if isinstance(value, str) and QUALIFICATION_WORKFLOW_ID_RE.fullmatch(value):
+def _qualification_workflow_id(value: object, spec: QualificationEvidenceSpec) -> str:
+    if isinstance(value, str) and spec.workflow_id_re.fullmatch(value):
         return value
     return "<invalid>"
 
@@ -395,7 +484,10 @@ def _qualification_fixed_value(value: object, expected: str) -> str:
     return expected if value == expected else "<invalid>"
 
 
-def qualification_route_table(roles: list[dict[str, Any]]) -> list[str]:
+def qualification_route_table(
+    roles: list[dict[str, Any]],
+    spec: QualificationEvidenceSpec,
+) -> list[str]:
     lines = [
         "| Role | Route | Executor | Mode | Status |",
         "| --- | --- | --- | --- | --- |",
@@ -403,10 +495,10 @@ def qualification_route_table(roles: list[dict[str, Any]]) -> list[str]:
     for role in roles:
         lines.append(
             "| {role} | {route} | {executor} | {mode} | {status} |".format(
-                role=_qualification_fixed_value(role.get("role_id"), QUALIFICATION_ROLE_ID),
+                role=_qualification_fixed_value(role.get("role_id"), spec.role_id),
                 route=_qualification_fixed_value(role.get("executor_route"), "role"),
                 executor=_qualification_fixed_value(role.get("executor_id"), "openrouter"),
-                mode=_qualification_fixed_value(role.get("execution_mode"), "write-plan"),
+                mode=_qualification_fixed_value(role.get("execution_mode"), spec.execution_mode),
                 status=_qualification_fixed_value(role.get("status"), "succeeded"),
             )
         )
@@ -426,18 +518,18 @@ def write_report(
     counts: tuple[int, int],
     model: str,
     *,
-    qualification_mode: bool = False,
+    qualification_spec: QualificationEvidenceSpec | None = None,
     qualification_ok: bool = True,
     qualification_violations: list[str] | None = None,
 ) -> None:
     total_artifacts, role_artifacts = counts
     qualification_violations = qualification_violations or []
-    if qualification_mode:
+    if qualification_spec is not None:
         lines = [
             "# OpenRouter Evidence Report",
             "",
-            f"Workflow ID: {_qualification_workflow_id(workflow.get('workflow_id'))}",
-            f"Work ID: {_qualification_fixed_value(workflow.get('work_id'), QUALIFICATION_WORK_ID)}",
+            f"Workflow ID: {_qualification_workflow_id(workflow.get('workflow_id'), qualification_spec)}",
+            f"Work ID: {_qualification_fixed_value(workflow.get('work_id'), qualification_spec.work_id)}",
             "",
             f"Controlled smoke: {status_text(controlled_ok)}",
             f"Route policy: {status_text(route_ok)}",
@@ -451,7 +543,7 @@ def write_report(
             "",
             "## Route Table",
             "",
-            *qualification_route_table(roles),
+            *qualification_route_table(roles, qualification_spec),
             "",
             "## Findings",
             "",
@@ -499,12 +591,17 @@ def main() -> int:
     root = args.root
     workflow = load_workflow(root, args.workflow_id)
     roles = role_runs(workflow)
-    qualification_mode = args.qualification_role is not None
+    qualification_spec = QUALIFICATION_EVIDENCE_SPECS.get(args.qualification_role)
+    qualification_mode = qualification_spec is not None
     if qualification_mode:
-        controlled_violations = qualification_controlled_smoke_violations(workflow, args.workflow_id)
-        route_violations = qualification_route_policy_violations(workflow)
-        qualification_violations = qualification_control_violations(workflow)
-        work_id_for_scan = QUALIFICATION_WORK_ID
+        controlled_violations = qualification_controlled_smoke_violations(
+            workflow,
+            args.workflow_id,
+            qualification_spec,
+        )
+        route_violations = qualification_route_policy_violations(workflow, qualification_spec)
+        qualification_violations = qualification_control_violations(workflow, qualification_spec)
+        work_id_for_scan = qualification_spec.work_id
     else:
         runtime_request, request_error = load_runtime_request(root, args.workflow_id)
         controlled_violations = controlled_smoke_violations(
@@ -550,7 +647,7 @@ def main() -> int:
         secret_failures,
         artifact_counts(root, args.workflow_id),
         "" if qualification_mode else os.environ.get("ACADEMIC_ENGINE_OPENROUTER_MODEL", ""),
-        qualification_mode=qualification_mode,
+        qualification_spec=qualification_spec,
         qualification_ok=qualification_ok,
         qualification_violations=qualification_violations,
     )

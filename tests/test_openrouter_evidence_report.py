@@ -14,6 +14,12 @@ from academic_engine.executors import OPENROUTER_ROLE_POLICY
 FAKE_OPENROUTER_KEY = "sk-or-v1-" + "unit-test-secret-1234567890"
 QUALIFICATION_SEED_PATH = "works/openrouter-live-smoke/articles/briefs/academic-intake-qualification.md"
 QUALIFICATION_SHA256 = "a" * 64
+SOURCE_QUALIFICATION_SEED_PATH = "works/openrouter-live-smoke/articles/briefs/academic-source-acquirer-qualification.md"
+SOURCE_QUALIFICATION_TARGET_PATH = (
+    "works/openrouter-live-smoke/articles/evidence/academic-source-acquirer-qualification.md"
+)
+SOURCE_CONTEXT_SHA256 = "b" * 64
+SOURCE_WRITE_SHA256 = "c" * 64
 
 
 class OpenRouterEvidenceReportTests(unittest.TestCase):
@@ -131,6 +137,74 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
             gates=[{"gate_id": "evaluator-verdict", "status": "block"}],
             promotion=promotion if promotion is not None else self.qualification_promotion(),
             metadata=metadata if metadata is not None else self.qualification_metadata(),
+        )
+
+    def source_qualification_role(self, **overrides: object) -> dict[str, object]:
+        role: dict[str, object] = {
+            "role_run_id": "01-academic-source-acquirer",
+            "role_id": "academic-source-acquirer",
+            "status": "succeeded",
+            "executor_route": "role",
+            "executor_id": "openrouter",
+            "execution_mode": "write-plan",
+            "write_plan_applied": True,
+            "changed_paths": [SOURCE_QUALIFICATION_TARGET_PATH],
+            "forbidden_paths": [],
+            "checkpoints": ["qualification:academic-source-acquirer"],
+            "blockers": [],
+        }
+        role.update(overrides)
+        return role
+
+    def source_qualification_metadata(self, **overrides: object) -> dict[str, object]:
+        metadata: dict[str, object] = {
+            "candidate_id": "academic-source-acquirer",
+            "context_path": SOURCE_QUALIFICATION_SEED_PATH,
+            "write_path": SOURCE_QUALIFICATION_TARGET_PATH,
+            "context_before_sha256": SOURCE_CONTEXT_SHA256,
+            "context_after_sha256": SOURCE_CONTEXT_SHA256,
+            "write_before_sha256": SOURCE_WRITE_SHA256,
+            "write_after_sha256": SOURCE_WRITE_SHA256,
+            "canonical_unchanged": True,
+        }
+        metadata.update(overrides)
+        return metadata
+
+    def source_qualification_promotion(self, **overrides: object) -> dict[str, object]:
+        promotion: dict[str, object] = {
+            "status": "skipped",
+            "reason": "qualification-no-promotion",
+            "skipped": [SOURCE_QUALIFICATION_TARGET_PATH],
+        }
+        promotion.update(overrides)
+        return promotion
+
+    def write_source_qualification_workflow(
+        self,
+        *,
+        roles: list[dict[str, object]] | None = None,
+        execution_status: str = "succeeded",
+        status: str = "completed",
+        work_id: str = "openrouter-live-smoke",
+        lane: str = "article",
+        action: str = "qualify-source-acquirer",
+        promotion: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        request_path = self.runtime_dir / "request.json"
+        request_path.unlink(missing_ok=True)
+        self.write_workflow(
+            roles=roles if roles is not None else [self.source_qualification_role()],
+            execution_status=execution_status,
+            status=status,
+            work_id=work_id,
+            lane=lane,
+            action=action,
+            readiness_status="strong-draft-with-blockers",
+            blockers=[{"code": "generic-evaluator-gate"}],
+            gates=[{"gate_id": "evaluator-verdict", "status": "block"}],
+            promotion=promotion if promotion is not None else self.source_qualification_promotion(),
+            metadata=metadata if metadata is not None else self.source_qualification_metadata(),
         )
 
     def write_runtime_request(
@@ -257,6 +331,115 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertNotIn("OpenRouter model:", text)
         self.assertNotIn("submission-ready", text)
 
+    def test_report_passes_for_source_acquirer_qualification_without_runtime_request(self) -> None:
+        self.write_source_qualification_workflow()
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-source-acquirer"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertIn("Controlled smoke: PASS", text)
+        self.assertIn("Route policy: PASS", text)
+        self.assertIn("Qualification controls: PASS", text)
+        self.assertIn("Secret scan: PASS", text)
+        self.assertIn(
+            "| academic-source-acquirer | role | openrouter | write-plan | succeeded |",
+            text,
+        )
+        self.assertNotIn("OpenRouter model:", text)
+
+    def test_source_qualification_rejects_wrong_checkpoint_or_fixture_metadata(self) -> None:
+        cases = (
+            (
+                "checkpoint",
+                [self.source_qualification_role(checkpoints=["qualification:academic-intake"])],
+                None,
+            ),
+            (
+                "write-path",
+                None,
+                self.source_qualification_metadata(
+                    write_path="works/openrouter-live-smoke/articles/evidence/not-approved.md"
+                ),
+            ),
+            (
+                "context-hash-drift",
+                None,
+                self.source_qualification_metadata(context_after_sha256="d" * 64),
+            ),
+            (
+                "write-hash-drift",
+                None,
+                self.source_qualification_metadata(write_after_sha256="d" * 64),
+            ),
+            (
+                "changed-write-target",
+                [
+                    self.source_qualification_role(
+                        changed_paths=["works/openrouter-live-smoke/articles/evidence/not-approved.md"]
+                    )
+                ],
+                None,
+            ),
+        )
+        for label, roles, metadata in cases:
+            with self.subTest(label=label):
+                self.write_source_qualification_workflow(roles=roles, metadata=metadata)
+
+                result = self.run_report(extra_args=["--qualification-role", "academic-source-acquirer"])
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Qualification controls violation", result.stderr)
+                self.assertIn("Qualification controls: FAIL", self.report.read_text(encoding="utf-8"))
+
+    def test_source_qualification_rejects_mismatched_identity_or_route(self) -> None:
+        cases = (
+            ("work", {"work_id": "starter-work"}, {}, "Controlled smoke violation"),
+            ("lane", {"lane": "thesis"}, {}, "Controlled smoke violation"),
+            ("action", {"action": "qualify-intake"}, {}, "Controlled smoke violation"),
+            (
+                "role",
+                {},
+                {"role_id": "academic-intake"},
+                "Route policy violation",
+            ),
+            (
+                "mode",
+                {},
+                {"execution_mode": "read-only"},
+                "Route policy violation",
+            ),
+        )
+        for label, workflow_overrides, role_overrides, expected_error in cases:
+            with self.subTest(label=label):
+                roles = [self.source_qualification_role(**role_overrides)] if role_overrides else None
+                self.write_source_qualification_workflow(roles=roles, **workflow_overrides)
+
+                result = self.run_report(extra_args=["--qualification-role", "academic-source-acquirer"])
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(expected_error, result.stderr)
+
+    def test_source_qualification_report_redacts_key_like_route_fields(self) -> None:
+        self.write_source_qualification_workflow(
+            roles=[
+                self.source_qualification_role(
+                    role_id=f"role-{FAKE_OPENROUTER_KEY}",
+                    executor_route=f"route-{FAKE_OPENROUTER_KEY}",
+                    executor_id=f"executor-{FAKE_OPENROUTER_KEY}",
+                    execution_mode=f"mode-{FAKE_OPENROUTER_KEY}",
+                    status=f"status-{FAKE_OPENROUTER_KEY}",
+                )
+            ]
+        )
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-source-acquirer"])
+
+        self.assertEqual(result.returncode, 1)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertNotIn(FAKE_OPENROUTER_KEY, text)
+        self.assertIn("| <invalid> | <invalid> | <invalid> | <invalid> | <invalid> |", text)
+
     def test_qualification_rejects_extra_role(self) -> None:
         self.write_qualification_workflow(
             roles=[
@@ -315,6 +498,29 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Qualification controls violation", result.stderr)
         self.assertIn("promotion", self.report.read_text(encoding="utf-8"))
+
+    def test_qualification_rejects_forged_promotion_skipped_path_for_each_candidate(self) -> None:
+        cases = (
+            (
+                "academic-intake",
+                self.write_qualification_workflow,
+                self.qualification_promotion(skipped=[SOURCE_QUALIFICATION_TARGET_PATH]),
+            ),
+            (
+                "academic-source-acquirer",
+                self.write_source_qualification_workflow,
+                self.source_qualification_promotion(skipped=[QUALIFICATION_SEED_PATH]),
+            ),
+        )
+        for role_id, write_workflow, promotion in cases:
+            with self.subTest(role_id=role_id):
+                write_workflow(promotion=promotion)
+
+                result = self.run_report(extra_args=["--qualification-role", role_id])
+
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Qualification controls violation", result.stderr)
+                self.assertIn("promotion skipped", self.report.read_text(encoding="utf-8"))
 
     def test_qualification_rejects_canonical_drift_or_invalid_metadata(self) -> None:
         cases = (
@@ -495,6 +701,23 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("--qualification-role academic-intake", result.stderr)
         self.assertFalse(self.report.exists())
 
+    def test_generic_expected_role_rejects_source_acquirer_qualification_bypass(self) -> None:
+        self.write_source_qualification_workflow(
+            roles=[
+                self.source_qualification_role(
+                    write_plan_applied=False,
+                    changed_paths=["works/openrouter-live-smoke/articles/evidence/not-approved.md"],
+                    forbidden_paths=["works/openrouter-live-smoke/articles/drafts/forbidden.md"],
+                )
+            ]
+        )
+
+        result = self.run_report(extra_args=["--expected-role", "academic-source-acquirer"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--qualification-role academic-source-acquirer", result.stderr)
+        self.assertFalse(self.report.exists())
+
     def test_report_rejects_traversal_work_id_before_secret_scan(self) -> None:
         self.write_workflow(roles=self.passing_roles())
 
@@ -533,11 +756,7 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertIn("Route policy violation", result.stderr)
 
     def test_report_fails_when_required_openrouter_role_is_missing(self) -> None:
-        roles = [
-            role
-            for role in self.passing_roles()
-            if role["role_id"] != "academic-submission-evaluator"
-        ]
+        roles = [role for role in self.passing_roles() if role["role_id"] != "academic-submission-evaluator"]
         self.write_workflow(roles=roles)
 
         result = self.run_report()
