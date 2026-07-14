@@ -179,6 +179,16 @@ class OpenRouterQualificationTests(unittest.TestCase):
                 self.router,
                 role_policies={"academic-intake": {"executor_id": "openrouter", "execution_mode": "read-only"}},
             ),
+            replace(
+                self.router,
+                role_policies={
+                    "academic-intake": {
+                        "executor_id": "openrouter",
+                        "execution_mode": "write-plan",
+                        "unexpected": "field",
+                    }
+                },
+            ),
         )
 
         for router in invalid_routers:

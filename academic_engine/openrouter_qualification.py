@@ -200,8 +200,9 @@ def _validate_injected_qualification_router(router: object, candidate: Qualifica
         or set(router.role_policies) != expected_role_ids
         or router.role_executor_ids.get(candidate.role_id) != "openrouter"
         or not isinstance(policy, Mapping)
+        or set(policy) != {"executor_id", "execution_mode"}
         or policy.get("executor_id") != "openrouter"
-        or policy.get("execution_mode") != "write-plan"
+        or policy.get("execution_mode") != candidate.execution_mode
         or not isinstance(router.default_executor, UnavailableExecutor)
         or router.default_executor.executor_id != "qualification-default"
         or router.default_executor_id != "qualification-default"
