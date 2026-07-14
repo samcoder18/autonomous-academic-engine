@@ -1861,21 +1861,36 @@ def _repair_no_change_evidence_envelope(
     artifacts: dict[str, dict[str, Any]],
     checkpoints: tuple[str, ...],
 ) -> dict[str, Any] | None:
+    candidates: list[tuple[int, str, dict[str, Any]]] = []
     for relative_path, record in artifacts.items():
-        path = Path(relative_path)
-        parts = {part.casefold() for part in path.parts}
-        name = path.name.casefold()
-        if not (
-            parts.intersection({"review", "reviews", "repair", "repairs", "checklist", "checklists"})
-            or "repair" in name
-            or "checklist" in name
-        ):
-            continue
-        sandbox_path = f"works/{work_id}/{relative_path}"
-        return {
-            "artifacts": [{"path": sandbox_path, "sha256": str(record["sha256"])}],
-            "checkpoint_evidence": {checkpoint: [sandbox_path] for checkpoint in checkpoints},
-        }
+        priority = _managed_repair_evidence_priority(relative_path)
+        if priority is not None:
+            candidates.append((priority, relative_path, record))
+    if not candidates:
+        return None
+
+    _, relative_path, record = min(candidates, key=lambda item: (item[0], item[1]))
+    sandbox_path = f"works/{work_id}/{relative_path}"
+    return {
+        "artifacts": [{"path": sandbox_path, "sha256": str(record["sha256"])}],
+        "checkpoint_evidence": {checkpoint: [sandbox_path] for checkpoint in checkpoints},
+    }
+
+
+def _managed_repair_evidence_priority(relative_path: str) -> int | None:
+    path = Path(relative_path)
+    parts = tuple(part.casefold() for part in path.parts)
+    if len(parts) < 2 or parts[0] not in {"articles", "thesis"}:
+        return None
+    directories = set(parts[:-1])
+    if "reviews" in directories:
+        return 0
+    if directories.intersection({"repair", "repairs"}):
+        return 1
+    if directories.intersection({"checklist", "checklists"}):
+        return 2
+    if "final" in directories and "checklist" in path.name.casefold():
+        return 2
     return None
 
 

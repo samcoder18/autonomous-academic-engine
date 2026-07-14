@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from academic_engine.action_specs import (
@@ -26,7 +27,58 @@ from academic_engine.executors import (
 )
 from academic_engine.runtime_status import load_runtime_record
 from academic_engine.state import RuntimeStore
-from academic_engine.workflow_engine import WorkflowBusyError, WorkflowEngine, WorkflowLease, build_role_plan
+from academic_engine.workflow_engine import (
+    RoleNode,
+    WorkflowBusyError,
+    WorkflowEngine,
+    WorkflowLease,
+    WorkflowRun,
+    _role_prompt,
+    build_role_plan,
+)
+
+
+def _dynamic_repair_prompt(root: Path, sandbox: Path, contract: ExecutionContract) -> str:
+    workflow = WorkflowRun(
+        workflow_id="repair-prompt-test",
+        run_id="repair-prompt-test",
+        work_id="demo",
+        lane="article",
+        action="review",
+        status="running",
+        execution_status="running",
+        readiness_status="not-evaluated",
+        started_at="2026-07-14T00:00:00+00:00",
+        workflow_dir=str(root / "output" / "runs" / "repair-prompt-test"),
+        sandbox_dir=str(sandbox),
+    )
+    return _role_prompt(
+        workflow=workflow,
+        node=RoleNode(
+            role_id="academic-repair-orchestrator",
+            policy_path="agents/academic-repair-orchestrator.md",
+            checkpoints=("repair-2:academic-repair-orchestrator",),
+        ),
+        contract=contract,
+        policy_text="# Repair policy\n",
+        base_prompt="test",
+        root_dir=root,
+        sandbox_dir=sandbox,
+    )
+
+
+def _prompt_repair_no_change_evidence_envelope(prompt: str) -> dict[str, object] | None:
+    match = re.search(
+        r"--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---\n(?P<body>.*?)\n"
+        r"--- END REPAIR NO-CHANGE EVIDENCE ENVELOPE ---",
+        prompt,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    payload = json.loads(match.group("body"))
+    envelope = payload.get("repair_no_change_evidence_envelope")
+    return envelope if isinstance(envelope, dict) else None
 
 
 class WorkflowEngineTests(unittest.TestCase):
@@ -1560,6 +1612,51 @@ class WorkflowEngineTests(unittest.TestCase):
             [(artifact_path, artifact_sha256)],
         )
         self.assertFalse(any(item["code"].startswith("role-result-") for item in repair_two_role.blockers))
+
+    def test_repair_no_change_evidence_prefers_managed_review_over_draft_filename(self) -> None:
+        sandbox = self.root / "repair-evidence-sandbox"
+        draft = sandbox / "works" / "demo" / "articles" / "drafts" / "repair-notes.md"
+        review = sandbox / "works" / "demo" / "articles" / "reviews" / "managed-review.md"
+        draft.parent.mkdir(parents=True)
+        review.parent.mkdir(parents=True)
+        draft.write_text("# Draft repair notes\n", encoding="utf-8")
+        review.write_text("# Managed review\n", encoding="utf-8")
+
+        prompt = _dynamic_repair_prompt(
+            self.root,
+            sandbox,
+            replace(self.contract(action="review"), lane="article"),
+        )
+
+        envelope = _prompt_repair_no_change_evidence_envelope(prompt)
+
+        self.assertIsNotNone(envelope)
+        assert envelope is not None
+        artifacts = envelope["artifacts"]
+        self.assertEqual(
+            artifacts,
+            [
+                {
+                    "path": "works/demo/articles/reviews/managed-review.md",
+                    "sha256": hashlib.sha256(review.read_bytes()).hexdigest(),
+                }
+            ],
+        )
+
+    def test_dynamic_repair_prompt_omits_no_change_evidence_without_managed_artifact(self) -> None:
+        sandbox = self.root / "repair-evidence-sandbox"
+        draft = sandbox / "works" / "demo" / "articles" / "drafts" / "repair-notes.md"
+        draft.parent.mkdir(parents=True)
+        draft.write_text("# Draft repair notes\n", encoding="utf-8")
+
+        prompt = _dynamic_repair_prompt(
+            self.root,
+            sandbox,
+            replace(self.contract(action="review"), lane="article"),
+        )
+
+        self.assertNotIn("--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---", prompt)
+        self.assertIsNone(_prompt_repair_no_change_evidence_envelope(prompt))
 
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
