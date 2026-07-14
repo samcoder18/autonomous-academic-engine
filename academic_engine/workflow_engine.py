@@ -607,16 +607,29 @@ class WorkflowEngine:
                 "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
             )
             role.executor_id = "custom"
-        prompt = _role_prompt(
+        policy_text = policy_file.read_text(encoding="utf-8")
+        sandbox_base_prompt = base_prompt.replace(str(self.root_dir), str(sandbox_dir))
+        role_result_prompt = _role_prompt(
             workflow=workflow,
             node=node,
             contract=contract,
-            policy_text=policy_file.read_text(encoding="utf-8"),
-            base_prompt=base_prompt.replace(str(self.root_dir), str(sandbox_dir)),
+            policy_text=policy_text,
+            base_prompt=sandbox_base_prompt,
             root_dir=self.root_dir,
             sandbox_dir=sandbox_dir,
-            execution_mode=context.execution_mode,
         )
+        prompt = role_result_prompt
+        if context.execution_mode == "write-plan":
+            prompt = _role_prompt(
+                workflow=workflow,
+                node=node,
+                contract=contract,
+                policy_text=policy_text,
+                base_prompt=sandbox_base_prompt,
+                root_dir=self.root_dir,
+                sandbox_dir=sandbox_dir,
+                execution_mode=context.execution_mode,
+            )
         _write_json(
             request_file,
             {
@@ -715,7 +728,10 @@ class WorkflowEngine:
                         post_write_manifest,
                         node.checkpoints,
                     )
-                    follow_up_prompt = _provider_write_result_prompt(prompt, provider_result_evidence_envelope)
+                    follow_up_prompt = _provider_write_result_prompt(
+                        role_result_prompt,
+                        provider_result_evidence_envelope,
+                    )
                     self.executor_router.execute(context, follow_up_prompt)
                     if time.monotonic() - started > self.role_timeout_seconds:
                         raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
@@ -1329,6 +1345,48 @@ def _role_prompt(
     execution_mode: str | None = None,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
+    context = _role_context(
+        workflow=workflow,
+        node=node,
+        contract=contract,
+        base_prompt=base_prompt,
+        sandbox_dir=sandbox_dir,
+    )
+    if execution_mode == "write-plan":
+        return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
+
+Workflow ID: {workflow.workflow_id}
+Role ID: {node.role_id}
+Role Run ID: {role_run_id}
+Work ID: {workflow.work_id}
+Lane/action: {workflow.lane}/{workflow.action}
+Sandbox root: {workflow.sandbox_dir}
+
+The role policy below is authoritative. Execute only this role; do not orchestrate other roles.
+
+--- ROLE POLICY ---
+{policy_text}
+--- END ROLE POLICY ---
+
+Workflow context:
+{context}
+
+Allowed write scopes:
+{json.dumps(_sandbox_write_scopes(root_dir, sandbox_dir, node, contract), ensure_ascii=False, indent=2)}
+
+Required checkpoints:
+{json.dumps(list(node.checkpoints), ensure_ascii=False)}
+
+Rules:
+- The role policy and Workflow context are the complete provider-visible input.
+- Provider/chat routes cannot call tools or read files.
+- Do not emit tool calls, `read_file` requests, shell commands, or instructions to inspect files.
+{_PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION}
+- The JSON object must contain only `version`, `workflow_id`, `role_run_id`, `role_id`, `work_id`, and `operations`.
+- Each non-empty `operations` entry must contain only `path`, `base_sha256`, and full replacement `content`.
+- Each `path` must be sandbox-relative and within Allowed write scopes; never request a deletion or rename.
+- Each `base_sha256` must be the actual lowercase SHA-256 hash for the current source supplied in Workflow context.
+"""
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
     artifact_example_hash = "<64 lowercase hex>"
     evidence_envelope = None
@@ -1419,16 +1477,6 @@ def _role_prompt(
 --- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---
 {json.dumps({"repair_no_change_evidence_envelope": repair_no_change_evidence_envelope}, ensure_ascii=False, indent=2)}
 --- END REPAIR NO-CHANGE EVIDENCE ENVELOPE ---"""
-    context = _role_context(
-        workflow=workflow,
-        node=node,
-        contract=contract,
-        base_prompt=base_prompt,
-        sandbox_dir=sandbox_dir,
-    )
-    provider_write_plan_phase = (
-        _PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION if execution_mode == "write-plan" else ""
-    )
     return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1507,7 +1555,6 @@ Rules:
 - `verdict.metrics` must be an object when present; use {{}} or omit it instead of null.
 - Put role-specific verdict metadata such as loop counts, reroute decisions, or review measurements under
   `metrics` or `notes`, never as extra top-level fields.
-{provider_write_plan_phase}
 
 Required role result shape:
 ```role-result
@@ -1736,8 +1783,7 @@ def _provider_write_result_evidence_envelope(
 
 
 def _provider_write_result_prompt(base_prompt: str, evidence_envelope: dict[str, Any]) -> str:
-    role_result_prompt = base_prompt.replace(_PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION, "")
-    return f"""{role_result_prompt}
+    return f"""{base_prompt}
 
 --- PROVIDER WRITE PLAN RESULT PHASE ---
 WorkflowEngine has validated and applied the prior provider-write-plan/v1 only
@@ -1750,8 +1796,8 @@ Provider result evidence envelope:
 Return exactly one strict fenced `role-result` JSON block. Copy the
 `artifacts` and `checkpoint_evidence` values from
 `provider_result_evidence_envelope` verbatim: do not add, omit, reorder, or
-alter their entries. All other role-result/v1 validation rules in the initial
-prompt remain in force.
+alter their entries. All other role-result/v1 validation rules in this prompt
+remain in force.
 """
 
 

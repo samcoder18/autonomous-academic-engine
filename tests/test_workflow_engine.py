@@ -619,12 +619,17 @@ class WorkflowEngineTests(unittest.TestCase):
     def test_openrouter_write_plan_role_uses_mode_aware_two_call_path(self) -> None:
         target_path = self.target.relative_to(self.root)
         initial_write_plan_prompts: list[str] = []
+        follow_up_prompts: list[str] = []
 
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
             role_id = _prompt_field(prompt, "Role ID")
             if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
                 initial_write_plan_prompts.append(prompt)
                 _write_provider_write_plan(output, prompt, sandbox, target_path, "# Routed write-plan change\n")
+                return
+            if role_id == "thesis-style-editor":
+                follow_up_prompts.append(prompt)
+                _write_role_result(output, prompt, sandbox, [target_path], verdict=None)
                 return
             _write_role_result(
                 output,
@@ -669,6 +674,12 @@ class WorkflowEngineTests(unittest.TestCase):
         )
         self.assertIn("Do not emit `role-result` or prose in this phase.", initial_write_plan_prompts[0])
         self.assertIn("Do not change the sandbox directly.", initial_write_plan_prompts[0])
+        self.assertNotIn("Required role result shape:", initial_write_plan_prompts[0])
+        self.assertNotIn("```role-result", initial_write_plan_prompts[0])
+        self.assertEqual(len(follow_up_prompts), 1)
+        self.assertIn("Required role result shape:", follow_up_prompts[0])
+        self.assertIn("Provider result evidence envelope:", follow_up_prompts[0])
+        self.assertIn("Return exactly one strict fenced `role-result` JSON block.", follow_up_prompts[0])
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertTrue(workflow_payload["role_runs"][0]["write_plan_applied"])
