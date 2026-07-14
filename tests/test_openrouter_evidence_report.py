@@ -370,6 +370,68 @@ class OpenRouterEvidenceReportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertNotIn(FAKE_OPENROUTER_KEY, self.report.read_text(encoding="utf-8"))
 
+    def test_qualification_report_redacts_non_engine_workflow_id(self) -> None:
+        self.write_qualification_workflow()
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-intake"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertIn("Workflow ID: <invalid>", text)
+        self.assertNotIn("Workflow ID: workflow-live-smoke", text)
+
+    def test_qualification_report_renders_engine_generated_workflow_id(self) -> None:
+        self.write_qualification_workflow()
+        workflow_id = "openrouter-live-smoke-article-qualify-intake-20260714-140200-abcdef12"
+        workflow_path = self.workflow_dir / "workflow.json"
+        payload = json.loads(workflow_path.read_text(encoding="utf-8"))
+        payload["workflow_id"] = workflow_id
+        workflow_path.write_text(json.dumps(payload), encoding="utf-8")
+        updated_workflow_dir = self.root / "output" / "runs" / workflow_id
+        self.workflow_dir.rename(updated_workflow_dir)
+        self.workflow_id = workflow_id
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-intake"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"Workflow ID: {workflow_id}", self.report.read_text(encoding="utf-8"))
+
+    def test_qualification_report_does_not_render_key_like_workflow_headers(self) -> None:
+        self.write_qualification_workflow()
+        workflow_path = self.workflow_dir / "workflow.json"
+        payload = json.loads(workflow_path.read_text(encoding="utf-8"))
+        payload["workflow_id"] = f"workflow-{FAKE_OPENROUTER_KEY}"
+        payload["work_id"] = f"work-{FAKE_OPENROUTER_KEY}"
+        workflow_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-intake"])
+
+        self.assertEqual(result.returncode, 1)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertNotIn(FAKE_OPENROUTER_KEY, text)
+        self.assertIn("Workflow ID: <invalid>", text)
+        self.assertIn("Work ID: <invalid>", text)
+
+    def test_qualification_report_does_not_render_key_like_route_fields(self) -> None:
+        self.write_qualification_workflow(
+            roles=[
+                self.qualification_role(
+                    role_id=f"role-{FAKE_OPENROUTER_KEY}",
+                    executor_route=f"route-{FAKE_OPENROUTER_KEY}",
+                    executor_id=f"executor-{FAKE_OPENROUTER_KEY}",
+                    execution_mode=f"mode-{FAKE_OPENROUTER_KEY}",
+                    status=f"status-{FAKE_OPENROUTER_KEY}",
+                )
+            ]
+        )
+
+        result = self.run_report(extra_args=["--qualification-role", "academic-intake"])
+
+        self.assertEqual(result.returncode, 1)
+        text = self.report.read_text(encoding="utf-8")
+        self.assertNotIn(FAKE_OPENROUTER_KEY, text)
+        self.assertIn("| <invalid> | <invalid> | <invalid> | <invalid> | <invalid> |", text)
+
     def test_report_passes_for_one_role_qualification_with_custom_scope(self) -> None:
         work_id = "openrouter-role-qualification"
         target = f"works/{work_id}/articles/reviews/qualification.md"

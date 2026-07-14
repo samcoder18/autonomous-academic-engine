@@ -38,7 +38,9 @@ QUALIFICATION_METADATA_KEYS = frozenset(
     }
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-SAFE_REPORT_VALUE_RE = re.compile(r"[A-Za-z0-9._:/=-]{1,160}")
+QUALIFICATION_WORKFLOW_ID_RE = re.compile(
+    r"openrouter-live-smoke-article-qualify-intake-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}"
+)
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]{20,}"),
     re.compile(r"Authorization:\s*Bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE),
@@ -380,10 +382,14 @@ def route_table(roles: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _safe_report_value(value: object) -> str:
-    if isinstance(value, str) and SAFE_REPORT_VALUE_RE.fullmatch(value):
+def _qualification_workflow_id(value: object) -> str:
+    if isinstance(value, str) and QUALIFICATION_WORKFLOW_ID_RE.fullmatch(value):
         return value
     return "<invalid>"
+
+
+def _qualification_fixed_value(value: object, expected: str) -> str:
+    return expected if value == expected else "<invalid>"
 
 
 def qualification_route_table(roles: list[dict[str, Any]]) -> list[str]:
@@ -394,11 +400,11 @@ def qualification_route_table(roles: list[dict[str, Any]]) -> list[str]:
     for role in roles:
         lines.append(
             "| {role} | {route} | {executor} | {mode} | {status} |".format(
-                role=_safe_report_value(role.get("role_id")),
-                route=_safe_report_value(role.get("executor_route")),
-                executor=_safe_report_value(role.get("executor_id")),
-                mode=_safe_report_value(role.get("execution_mode")),
-                status=_safe_report_value(role.get("status")),
+                role=_qualification_fixed_value(role.get("role_id"), QUALIFICATION_ROLE_ID),
+                route=_qualification_fixed_value(role.get("executor_route"), "role"),
+                executor=_qualification_fixed_value(role.get("executor_id"), "openrouter"),
+                mode=_qualification_fixed_value(role.get("execution_mode"), "write-plan"),
+                status=_qualification_fixed_value(role.get("status"), "succeeded"),
             )
         )
     return lines
@@ -427,8 +433,8 @@ def write_report(
         lines = [
             "# OpenRouter Evidence Report",
             "",
-            f"Workflow ID: {_safe_report_value(workflow.get('workflow_id'))}",
-            f"Work ID: {_safe_report_value(workflow.get('work_id'))}",
+            f"Workflow ID: {_qualification_workflow_id(workflow.get('workflow_id'))}",
+            f"Work ID: {_qualification_fixed_value(workflow.get('work_id'), QUALIFICATION_WORK_ID)}",
             "",
             f"Controlled smoke: {status_text(controlled_ok)}",
             f"Route policy: {status_text(route_ok)}",
