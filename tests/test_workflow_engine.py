@@ -618,10 +618,12 @@ class WorkflowEngineTests(unittest.TestCase):
 
     def test_openrouter_write_plan_role_uses_mode_aware_two_call_path(self) -> None:
         target_path = self.target.relative_to(self.root)
+        initial_write_plan_prompts: list[str] = []
 
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
             role_id = _prompt_field(prompt, "Role ID")
             if role_id == "thesis-style-editor" and "Provider result evidence envelope:" not in prompt:
+                initial_write_plan_prompts.append(prompt)
                 _write_provider_write_plan(output, prompt, sandbox, target_path, "# Routed write-plan change\n")
                 return
             _write_role_result(
@@ -658,7 +660,60 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result.execution_status, "succeeded")
         self.assertEqual(result.role_runs[0].executor_id, "openrouter")
         self.assertEqual(result.role_runs[0].execution_mode, "write-plan")
+        self.assertTrue(result.role_runs[0].write_plan_applied)
+        self.assertEqual(len(initial_write_plan_prompts), 1)
+        self.assertIn("--- FIRST PROVIDER WRITE-PLAN PHASE ---", initial_write_plan_prompts[0])
+        self.assertIn(
+            "Return exactly one fenced `provider-write-plan` JSON block now.",
+            initial_write_plan_prompts[0],
+        )
+        self.assertIn("Do not emit `role-result` or prose in this phase.", initial_write_plan_prompts[0])
+        self.assertIn("Do not change the sandbox directly.", initial_write_plan_prompts[0])
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
+        workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
+        self.assertTrue(workflow_payload["role_runs"][0]["write_plan_applied"])
+
+    def test_write_plan_route_rejects_first_call_role_result_without_canonical_mutation(self) -> None:
+        target_path = self.target.relative_to(self.root)
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            role_id = _prompt_field(prompt, "Role ID")
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [target_path],
+                verdict=_evaluator_payload("submission-ready") if role_id == "thesis-submission-evaluator" else None,
+            )
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            role_executors={"thesis-style-editor": CallableRoleExecutor(executor)},
+            role_executor_ids={"thesis-style-editor": "openrouter"},
+            role_policies={
+                "thesis-style-editor": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="thesis",
+            action="style-pass",
+            contract=self.contract(),
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "failed")
+        self.assertEqual(result.promotion.status, "blocked")
+        self.assertFalse(result.role_runs[0].write_plan_applied)
+        self.assertTrue(any(item["code"] == "provider-write-plan-block-missing" for item in result.blockers))
+        self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
 
     def test_verifier_prompt_includes_read_only_artifact_manifest(self) -> None:
         prompts: dict[str, str] = {}
@@ -1200,6 +1255,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
         self.assertEqual(result.execution_status, "failed")
         self.assertEqual(result.promotion.status, "blocked")
+        self.assertFalse(result.role_runs[0].write_plan_applied)
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
         self.assertTrue(any(item["code"] == "role-result-block-missing" for item in result.blockers))
 
@@ -1311,6 +1367,7 @@ class WorkflowEngineTests(unittest.TestCase):
 
         self.assertEqual(result.execution_status, "failed")
         self.assertEqual(result.promotion.status, "blocked")
+        self.assertFalse(result.role_runs[0].write_plan_applied)
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Original\n")
         self.assertTrue(any(item["code"] == "provider-http-failed" for item in result.blockers))
 

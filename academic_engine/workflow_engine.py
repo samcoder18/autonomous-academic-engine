@@ -49,6 +49,14 @@ ROLE_TIMEOUT_SECONDS = 45 * 60
 WORKFLOW_TIMEOUT_SECONDS = 240 * 60
 MAX_CONCURRENT_WORKFLOWS = 2
 VERIFIER_ROLE_IDS = {"thesis-source-verifier", "academic-source-verifier"}
+_PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION = """
+--- FIRST PROVIDER WRITE-PLAN PHASE ---
+This is phase one of a provider write-plan route.
+Return exactly one fenced `provider-write-plan` JSON block now.
+Set its JSON `version` to `provider-write-plan/v1`.
+Do not emit `role-result` or prose in this phase.
+Do not change the sandbox directly.
+"""
 READINESS_ORDER = {
     "submission-ready": 0,
     "strong-draft": 1,
@@ -126,6 +134,7 @@ class RoleRun:
     executor_route: str | None = None
     executor_id: str | None = None
     execution_mode: str | None = None
+    write_plan_applied: bool = False
     reported_status: str | None = None
     finished_at: str | None = None
     attempt_count: int = 0
@@ -150,6 +159,7 @@ class RoleRun:
             "executor_route": self.executor_route,
             "executor_id": self.executor_id,
             "execution_mode": self.execution_mode,
+            "write_plan_applied": self.write_plan_applied,
             "status": self.status,
             "reported_status": self.reported_status,
             "started_at": self.started_at,
@@ -570,6 +580,33 @@ class WorkflowEngine:
             started_at=utc_now(),
             output_file=str(output_file),
         )
+        context = RoleExecutionContext(
+            workflow_id=workflow.workflow_id,
+            role_run_id=role_run_id,
+            role_id=node.role_id,
+            work_id=workflow.work_id,
+            lane=workflow.lane,
+            action=workflow.action,
+            sandbox_dir=sandbox_dir,
+            output_file=output_file,
+            use_search=use_search,
+            model=model,
+            timeout_seconds=self.role_timeout_seconds,
+            is_evaluator=node.evaluator,
+            is_verifier=node.role_id in VERIFIER_ROLE_IDS,
+            is_finalizer=node.finalizer,
+        )
+        if isinstance(self.executor_router, ExecutorRouter):
+            selection = self.executor_router.describe_selection(context)
+            role.executor_route = selection.route_name
+            role.executor_id = selection.executor_id
+            role.execution_mode = selection.execution_mode
+            context = replace(context, execution_mode=selection.execution_mode)
+        else:
+            role.executor_route = (
+                "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
+            )
+            role.executor_id = "custom"
         prompt = _role_prompt(
             workflow=workflow,
             node=node,
@@ -578,6 +615,7 @@ class WorkflowEngine:
             base_prompt=base_prompt.replace(str(self.root_dir), str(sandbox_dir)),
             root_dir=self.root_dir,
             sandbox_dir=sandbox_dir,
+            execution_mode=context.execution_mode,
         )
         _write_json(
             request_file,
@@ -606,45 +644,20 @@ class WorkflowEngine:
         )
         error: Exception | None = None
         provider_result_evidence_envelope: dict[str, Any] | None = None
-        write_plan_applied = False
+        provider_write_plan_applied = False
         for attempt in range(1, 3):
             role.attempt_count = attempt
             try:
                 started = time.monotonic()
-                context = RoleExecutionContext(
-                    workflow_id=workflow.workflow_id,
-                    role_run_id=role_run_id,
-                    role_id=node.role_id,
-                    work_id=workflow.work_id,
-                    lane=workflow.lane,
-                    action=workflow.action,
-                    sandbox_dir=sandbox_dir,
-                    output_file=output_file,
-                    use_search=use_search,
-                    model=model,
-                    timeout_seconds=self.role_timeout_seconds,
-                    is_evaluator=node.evaluator,
-                    is_verifier=node.role_id in VERIFIER_ROLE_IDS,
-                    is_finalizer=node.finalizer,
-                )
-                if isinstance(self.executor_router, ExecutorRouter):
-                    selection = self.executor_router.describe_selection(context)
-                    role.executor_route = selection.route_name
-                    role.executor_id = selection.executor_id
-                    role.execution_mode = selection.execution_mode
-                    context = replace(context, execution_mode=selection.execution_mode)
-                else:
-                    role.executor_route = (
-                        "evaluator" if context.is_evaluator else "verifier" if context.is_verifier else "default"
-                    )
-                    role.executor_id = "custom"
                 self.executor_router.execute(context, prompt)
                 if time.monotonic() - started > self.role_timeout_seconds:
                     raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
                 raw_output = output_file.read_text(encoding="utf-8", errors="replace") if output_file.exists() else ""
                 write_plan_payload, write_plan_blockers = parse_provider_write_plan(raw_output)
                 if write_plan_payload is None:
-                    if any(item["code"] != "provider-write-plan-block-missing" for item in write_plan_blockers):
+                    if context.execution_mode == "write-plan" or any(
+                        item["code"] != "provider-write-plan-block-missing" for item in write_plan_blockers
+                    ):
                         raise ProviderWritePlanError(write_plan_blockers)
                 else:
                     if context.execution_mode == "read-only":
@@ -696,13 +709,13 @@ class WorkflowEngine:
                     )
                     if post_write_manifest is None:
                         raise ProviderWritePlanError(apply_blockers)
+                    provider_write_plan_applied = True
                     provider_result_evidence_envelope = _provider_write_result_evidence_envelope(
                         write_plan,
                         post_write_manifest,
                         node.checkpoints,
                     )
                     follow_up_prompt = _provider_write_result_prompt(prompt, provider_result_evidence_envelope)
-                    write_plan_applied = True
                     self.executor_router.execute(context, follow_up_prompt)
                     if time.monotonic() - started > self.role_timeout_seconds:
                         raise TimeoutError(f"Role `{node.role_id}` exceeded {self.role_timeout_seconds} seconds.")
@@ -725,7 +738,7 @@ class WorkflowEngine:
                 break
             except (OSError, TimeoutError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 error = exc
-                if write_plan_applied or attempt >= 2:
+                if provider_write_plan_applied or attempt >= 2:
                     break
             except Exception as exc:
                 error = exc
@@ -768,6 +781,7 @@ class WorkflowEngine:
                 role.blockers.extend(role_result["blockers"])
                 role.verdict = role_result["verdict"]
                 role.status = "failed" if role.reported_status == "failed" else "succeeded"
+                role.write_plan_applied = provider_write_plan_applied and role.status == "succeeded"
         if forbidden:
             role.status = "failed"
             role.blockers.append(
@@ -1312,6 +1326,7 @@ def _role_prompt(
     base_prompt: str,
     root_dir: Path,
     sandbox_dir: Path,
+    execution_mode: str | None = None,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
@@ -1411,6 +1426,9 @@ def _role_prompt(
         base_prompt=base_prompt,
         sandbox_dir=sandbox_dir,
     )
+    provider_write_plan_phase = (
+        _PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION if execution_mode == "write-plan" else ""
+    )
     return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1489,6 +1507,7 @@ Rules:
 - `verdict.metrics` must be an object when present; use {{}} or omit it instead of null.
 - Put role-specific verdict metadata such as loop counts, reroute decisions, or review measurements under
   `metrics` or `notes`, never as extra top-level fields.
+{provider_write_plan_phase}
 
 Required role result shape:
 ```role-result
@@ -1717,7 +1736,8 @@ def _provider_write_result_evidence_envelope(
 
 
 def _provider_write_result_prompt(base_prompt: str, evidence_envelope: dict[str, Any]) -> str:
-    return f"""{base_prompt}
+    role_result_prompt = base_prompt.replace(_PROVIDER_WRITE_PLAN_INITIAL_INSTRUCTION, "")
+    return f"""{role_result_prompt}
 
 --- PROVIDER WRITE PLAN RESULT PHASE ---
 WorkflowEngine has validated and applied the prior provider-write-plan/v1 only
