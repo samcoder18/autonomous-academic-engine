@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workflow-id", required=True)
     parser.add_argument("--stdout-log", action="append", default=[], type=Path)
     parser.add_argument("--stderr-log", action="append", default=[], type=Path)
+    parser.add_argument("--expected-work-id", default=CONTROLLED_SMOKE_WORK_ID)
+    parser.add_argument("--expected-lane", default=CONTROLLED_SMOKE_LANE)
+    parser.add_argument("--expected-action", default=CONTROLLED_SMOKE_ACTION)
+    parser.add_argument("--expected-target", default=CONTROLLED_SMOKE_TARGET)
+    parser.add_argument("--expected-role", action="append", default=[])
     parser.add_argument("--report", required=True, type=Path)
     return parser.parse_args()
 
@@ -72,13 +77,18 @@ def controlled_smoke_violations(
     runtime_request: dict[str, Any] | None,
     request_error: str | None,
     workflow_id: str,
+    *,
+    expected_work_id: str,
+    expected_lane: str,
+    expected_action: str,
+    expected_target: str,
 ) -> list[str]:
     violations: list[str] = []
     expected_workflow = {
         "workflow_id": workflow_id,
-        "work_id": CONTROLLED_SMOKE_WORK_ID,
-        "lane": CONTROLLED_SMOKE_LANE,
-        "action": CONTROLLED_SMOKE_ACTION,
+        "work_id": expected_work_id,
+        "lane": expected_lane,
+        "action": expected_action,
     }
     for field, expected in expected_workflow.items():
         actual = workflow.get(field)
@@ -98,10 +108,10 @@ def controlled_smoke_violations(
         return violations
     expected_request = {
         "workflow_id": workflow_id,
-        "work_id": CONTROLLED_SMOKE_WORK_ID,
-        "lane": CONTROLLED_SMOKE_LANE,
-        "action": CONTROLLED_SMOKE_ACTION,
-        "target": CONTROLLED_SMOKE_TARGET,
+        "work_id": expected_work_id,
+        "lane": expected_lane,
+        "action": expected_action,
+        "target": expected_target,
     }
     for field, expected in expected_request.items():
         actual = runtime_request.get(field)
@@ -112,18 +122,26 @@ def controlled_smoke_violations(
     return violations
 
 
-def route_policy_violations(roles: list[dict[str, Any]]) -> list[str]:
+def route_policy_violations(
+    roles: list[dict[str, Any]],
+    *,
+    expected_role_ids: set[str] | None = None,
+) -> list[str]:
     violations: list[str] = []
-    observed_allowed_roles: set[str] = set()
+    expected_roles = expected_role_ids or set(EXPECTED_OPENROUTER_ROLE_POLICY)
+    observed_expected_roles: set[str] = set()
+    for role_id in sorted(expected_roles):
+        if role_id not in EXPECTED_OPENROUTER_ROLE_POLICY:
+            violations.append(f"expected role {role_id} is not approved by the OpenRouter policy")
     for role in roles:
         role_id = str(role.get("role_id", ""))
         route = str(role.get("executor_route", ""))
         executor_id = str(role.get("executor_id", ""))
         execution_mode = str(role.get("execution_mode") or "")
         status = str(role.get("status", ""))
-        expected_policy = EXPECTED_OPENROUTER_ROLE_POLICY.get(role_id)
+        expected_policy = EXPECTED_OPENROUTER_ROLE_POLICY.get(role_id) if role_id in expected_roles else None
         if expected_policy is not None:
-            observed_allowed_roles.add(role_id)
+            observed_expected_roles.add(role_id)
             expected_executor_id = expected_policy["executor_id"]
             expected_mode = expected_policy["execution_mode"]
             expected_route = OPENROUTER_ALLOWED_ROLE_ROUTES.get(
@@ -142,13 +160,19 @@ def route_policy_violations(roles: list[dict[str, Any]]) -> list[str]:
                     f"{expected_route}/{expected_executor_id}/{expected_mode} succeeded"
                 )
             continue
+        if executor_id == "openrouter":
+            violations.append(
+                f"{role_id or '<missing-role>'} used OpenRouter without being selected for this qualification"
+            )
+            continue
         if route != DEFAULT_ROUTE or executor_id != DEFAULT_EXECUTOR:
             violations.append(
                 f"{role_id or '<missing-role>'} used {route or '<missing-route>'}/"
                 f"{executor_id or '<missing-executor>'}; expected {DEFAULT_ROUTE}/{DEFAULT_EXECUTOR}"
             )
-    for role_id, expected_policy in EXPECTED_OPENROUTER_ROLE_POLICY.items():
-        if role_id not in observed_allowed_roles:
+    for role_id in sorted(expected_roles):
+        expected_policy = EXPECTED_OPENROUTER_ROLE_POLICY.get(role_id)
+        if expected_policy is not None and role_id not in observed_expected_roles:
             violations.append(
                 f"required role {role_id} did not run on "
                 f"{expected_policy['executor_id']}/{expected_policy['execution_mode']}"
@@ -156,7 +180,14 @@ def route_policy_violations(roles: list[dict[str, Any]]) -> list[str]:
     return violations
 
 
-def _scan_paths(root: Path, workflow_id: str, stdout_logs: list[Path], stderr_logs: list[Path]) -> list[Path]:
+def _scan_paths(
+    root: Path,
+    workflow_id: str,
+    stdout_logs: list[Path],
+    stderr_logs: list[Path],
+    *,
+    work_id: str,
+) -> list[Path]:
     candidates = [
         root / "output" / "runs" / workflow_id,
         root / "output" / "runtime" / "runs" / workflow_id,
@@ -164,7 +195,7 @@ def _scan_paths(root: Path, workflow_id: str, stdout_logs: list[Path], stderr_lo
         root / ".env.example",
         root / "docs" / "deploy" / "openrouter-runbook.md",
         root / "docs" / "deploy" / "evidence",
-        root / "works" / "openrouter-live-smoke",
+        root / "works" / work_id,
         *stdout_logs,
         *stderr_logs,
     ]
@@ -288,9 +319,22 @@ def main() -> int:
         runtime_request,
         request_error,
         args.workflow_id,
+        expected_work_id=args.expected_work_id,
+        expected_lane=args.expected_lane,
+        expected_action=args.expected_action,
+        expected_target=args.expected_target,
     )
-    route_violations = route_policy_violations(roles)
-    scan_files = _scan_paths(root, args.workflow_id, args.stdout_log, args.stderr_log)
+    route_violations = route_policy_violations(
+        roles,
+        expected_role_ids=set(args.expected_role) or None,
+    )
+    scan_files = _scan_paths(
+        root,
+        args.workflow_id,
+        args.stdout_log,
+        args.stderr_log,
+        work_id=args.expected_work_id,
+    )
     secret_failures = secret_scan_failures(scan_files, os.environ.get("OPENROUTER_API_KEY"))
     controlled_ok = not controlled_violations
     route_ok = not route_violations
