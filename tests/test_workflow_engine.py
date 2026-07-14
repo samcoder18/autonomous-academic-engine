@@ -731,6 +731,10 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("Required role result shape:", follow_up_prompt)
         self.assertIn("Provider result evidence envelope:", follow_up_prompt)
         self.assertIn("Return exactly one strict fenced `role-result` JSON block.", follow_up_prompt)
+        self.assertIn(
+            "This non-evaluator provider write-plan result must set `verdict` to `null`.",
+            follow_up_prompt,
+        )
         self.assertNotIn("--- TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---", follow_up_prompt)
         self.assertNotIn("Sandbox root:", follow_up_prompt)
         self.assertNotIn("Allowed write scopes:", follow_up_prompt)

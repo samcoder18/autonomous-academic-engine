@@ -1540,6 +1540,12 @@ Rules:
         provider_visible_input_rule = (
             "- The role policy and Workflow context are the complete provider-visible input.\n"
         )
+    verdict_rule = "- Put the structured verdict object in `verdict`; evaluator roles must not use `null`."
+    if provider_write_result and not node.evaluator:
+        verdict_rule = (
+            "- This non-evaluator provider write-plan result must set `verdict` to `null`.\n"
+            "- Do not put a structured verdict object inside `role-result` in this phase."
+        )
     return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1607,7 +1613,7 @@ Rules:
   do not copy unrelated `artifact_manifest` entries.
 - For read-only provider routes, copy `provider_result_evidence_envelope` verbatim into `artifacts` and
   `checkpoint_evidence`. Do not add, omit, or alter its entries.
-- Put the structured verdict object in `verdict`; evaluator roles must not use `null`.
+{verdict_rule}
 - Evaluator roles must repeat every Required checkpoint and its manifest-backed evidence even when the role status is
   `blocked` or `failed`.
 - Evaluator roles must include a non-null `verdict` even when the role status is `blocked` or `failed`.
