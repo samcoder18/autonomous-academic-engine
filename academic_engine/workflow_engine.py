@@ -1905,23 +1905,14 @@ def _managed_contract_evidence_candidates(
             artifacts=artifacts,
         )
     for item in contract.allowed_write_scopes:
-        priority = _managed_contract_evidence_priority(item.name)
-        sandbox_relative_path = _sandbox_relative_contract_path(root_dir, sandbox_dir, item.path)
-        if priority is None or sandbox_relative_path is None:
-            continue
-        scope = _work_relative_contract_path(sandbox_relative_path, work_id)
-        if scope is None:
-            continue
-        for path in artifacts:
-            if _path_is_allowed(path, (scope,)):
-                _add_contract_evidence_candidate(
-                    candidates,
-                    priority=priority,
-                    declaration_priority=1,
-                    sandbox_relative_path=f"works/{work_id}/{path}",
-                    work_id=work_id,
-                    artifacts=artifacts,
-                )
+        _add_contract_evidence_candidate(
+            candidates,
+            priority=_managed_contract_evidence_priority(item.name),
+            declaration_priority=1,
+            sandbox_relative_path=_sandbox_relative_contract_path(root_dir, sandbox_dir, item.path),
+            work_id=work_id,
+            artifacts=artifacts,
+        )
     return candidates
 
 

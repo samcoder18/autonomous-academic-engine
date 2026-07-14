@@ -1628,6 +1628,7 @@ class WorkflowEngineTests(unittest.TestCase):
         review = sandbox / "works" / "demo" / "articles" / "reviews" / "managed-review.md"
         scoped_review = sandbox / "works" / "demo" / "articles" / "reviews" / "a-scope-review.md"
         canonical_review = self.work_dir / "articles" / "reviews" / "managed-review.md"
+        canonical_scoped_review = self.work_dir / "articles" / "reviews" / "a-scope-review.md"
         draft.parent.mkdir(parents=True)
         review.parent.mkdir(parents=True)
         canonical_review.parent.mkdir(parents=True)
@@ -1635,6 +1636,7 @@ class WorkflowEngineTests(unittest.TestCase):
         review.write_text("# Managed review\n", encoding="utf-8")
         scoped_review.write_text("# Scope-only review\n", encoding="utf-8")
         canonical_review.write_text("# Managed review\n", encoding="utf-8")
+        canonical_scoped_review.write_text("# Scope-only review\n", encoding="utf-8")
 
         prompt = _dynamic_repair_prompt(
             self.root,
@@ -1646,7 +1648,7 @@ class WorkflowEngineTests(unittest.TestCase):
                     RequiredArtifact("review-sheet", str(canonical_review), "required", "Managed review artifact."),
                 ),
                 allowed_write_scopes=(
-                    AllowedWriteScope("review", str(canonical_review.parent), "Managed reviews."),
+                    AllowedWriteScope("review", str(canonical_scoped_review), "Managed review artifact."),
                 ),
                 required_outputs=(),
             ),
@@ -1677,6 +1679,31 @@ class WorkflowEngineTests(unittest.TestCase):
             self.root,
             sandbox,
             replace(self.contract(action="review"), lane="article"),
+        )
+
+        self.assertNotIn("--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---", prompt)
+        self.assertIsNone(_prompt_repair_no_change_evidence_envelope(prompt))
+
+    def test_dynamic_repair_prompt_rejects_descendant_of_declared_review_scope(self) -> None:
+        sandbox = self.root / "repair-evidence-sandbox"
+        canonical_scope = self.work_dir / "articles" / "reviews"
+        scoped_child = sandbox / "works" / "demo" / "articles" / "reviews" / "scope-only-review.md"
+        canonical_scope.mkdir(parents=True)
+        scoped_child.parent.mkdir(parents=True)
+        scoped_child.write_text("# Scope-only review\n", encoding="utf-8")
+
+        prompt = _dynamic_repair_prompt(
+            self.root,
+            sandbox,
+            replace(
+                self.contract(action="review"),
+                lane="article",
+                required_context=(),
+                allowed_write_scopes=(
+                    AllowedWriteScope("review", str(canonical_scope), "Managed reviews."),
+                ),
+                required_outputs=(),
+            ),
         )
 
         self.assertNotIn("--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---", prompt)
