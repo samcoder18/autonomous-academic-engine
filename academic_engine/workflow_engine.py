@@ -245,9 +245,7 @@ class ProviderWritePlanError(ExecutorUnavailableError):
         super().__init__(message)
         self.blockers = blockers
         self.blocker_code = (
-            str(blockers[0].get("code", "provider-write-plan-invalid"))
-            if blockers
-            else "provider-write-plan-invalid"
+            str(blockers[0].get("code", "provider-write-plan-invalid")) if blockers else "provider-write-plan-invalid"
         )
 
 
@@ -379,10 +377,14 @@ class WorkflowEngine:
                 baseline = _file_manifest(sandbox_dir)
                 canonical_baseline = _canonical_manifest(self.root_dir, baseline)
                 _write_json(workflow_dir / "baseline.json", canonical_baseline)
-                nodes = role_plan if role_plan is not None else build_role_plan(
-                    lane,
-                    action,
-                    contract.required_checkpoints,
+                nodes = (
+                    role_plan
+                    if role_plan is not None
+                    else build_role_plan(
+                        lane,
+                        action,
+                        contract.required_checkpoints,
+                    )
                 )
                 repair_iterations_used = 1 if lane == "article" and action == "repair" else 0
 
@@ -629,18 +631,18 @@ class WorkflowEngine:
             _role_allowed_write_scopes(node, contract),
         )
         policy_text = policy_file.read_text(encoding="utf-8")
-        sandbox_base_prompt = base_prompt.replace(str(self.root_dir), str(sandbox_dir))
-        role_result_prompt = _role_prompt(
-            workflow=workflow,
-            node=node,
-            contract=contract,
-            policy_text=policy_text,
-            base_prompt=sandbox_base_prompt,
-            root_dir=self.root_dir,
-            sandbox_dir=sandbox_dir,
-        )
-        prompt = role_result_prompt
         if context.execution_mode == "write-plan":
+            provider_base_prompt = _provider_write_base_prompt(base_prompt, self.root_dir, sandbox_dir)
+            role_result_prompt = _role_prompt(
+                workflow=workflow,
+                node=node,
+                contract=contract,
+                policy_text=policy_text,
+                base_prompt=provider_base_prompt,
+                root_dir=self.root_dir,
+                sandbox_dir=sandbox_dir,
+                provider_write_result=True,
+            )
             provider_write_plan_wire_context = _provider_write_plan_wire_context(
                 workflow_id=workflow.workflow_id,
                 role_run_id=role_run_id,
@@ -654,12 +656,24 @@ class WorkflowEngine:
                 node=node,
                 contract=contract,
                 policy_text=policy_text,
-                base_prompt=sandbox_base_prompt,
+                base_prompt=provider_base_prompt,
                 root_dir=self.root_dir,
                 sandbox_dir=sandbox_dir,
                 execution_mode=context.execution_mode,
                 provider_write_plan_wire_context=provider_write_plan_wire_context,
             )
+        else:
+            sandbox_base_prompt = base_prompt.replace(str(self.root_dir), str(sandbox_dir))
+            role_result_prompt = _role_prompt(
+                workflow=workflow,
+                node=node,
+                contract=contract,
+                policy_text=policy_text,
+                base_prompt=sandbox_base_prompt,
+                root_dir=self.root_dir,
+                sandbox_dir=sandbox_dir,
+            )
+            prompt = role_result_prompt
         _write_json(
             request_file,
             {
@@ -1370,18 +1384,13 @@ def _role_prompt(
     sandbox_dir: Path,
     execution_mode: str | None = None,
     provider_write_plan_wire_context: dict[str, Any] | None = None,
+    provider_write_result: bool = False,
 ) -> str:
     role_run_id = f"{len(workflow.role_runs) + 1:02d}-{node.role_id}"
-    context = _role_context(
-        workflow=workflow,
-        node=node,
-        contract=contract,
-        base_prompt=base_prompt,
-        sandbox_dir=sandbox_dir,
-    )
     if execution_mode == "write-plan":
         if provider_write_plan_wire_context is None:
             raise ValueError("Provider write-plan prompts require trusted wire context.")
+        context = _sanitize_role_context(base_prompt)
         return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1421,6 +1430,17 @@ Rules:
   deletion or rename.
 - Do not include `lane`, `action`, prose, or any extra field in the plan JSON.
 """
+    context = (
+        _sanitize_role_context(base_prompt)
+        if provider_write_result
+        else _role_context(
+            workflow=workflow,
+            node=node,
+            contract=contract,
+            base_prompt=base_prompt,
+            sandbox_dir=sandbox_dir,
+        )
+    )
     artifact_example_path = f"works/{workflow.work_id}/path/to/artifact.md"
     artifact_example_hash = "<64 lowercase hex>"
     evidence_envelope = None
@@ -1493,8 +1513,7 @@ Rules:
                 "`shasum -a 256 <sandbox-relative-path>`.",
                 "- Every listed digest must be the real 64-character lowercase SHA-256 value; never omit it",
                 "  for a blocked or failed result and never copy the `<64 lowercase hex>` example placeholder.",
-                "- Writable-role preflight checkpoint keys: "
-                f"{json.dumps(list(node.checkpoints), ensure_ascii=False)}.",
+                f"- Writable-role preflight checkpoint keys: {json.dumps(list(node.checkpoints), ensure_ascii=False)}.",
                 "  Copy these literal keys into `checkpoint_evidence` and map each to an artifact whose actual",
                 "  SHA-256 appears in `artifacts`.",
             )
@@ -1511,6 +1530,16 @@ Rules:
 --- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---
 {json.dumps({"repair_no_change_evidence_envelope": repair_no_change_evidence_envelope}, ensure_ascii=False, indent=2)}
 --- END REPAIR NO-CHANGE EVIDENCE ENVELOPE ---"""
+    sandbox_root_line = "" if provider_write_result else f"Sandbox root: {workflow.sandbox_dir}"
+    allowed_write_scopes = ""
+    if not provider_write_result:
+        allowed_write_scopes = f"""Allowed write scopes:
+{json.dumps(_sandbox_write_scopes(root_dir, sandbox_dir, node, contract), ensure_ascii=False, indent=2)}"""
+    provider_visible_input_rule = ""
+    if provider_write_result:
+        provider_visible_input_rule = (
+            "- The role policy and Workflow context are the complete provider-visible input.\n"
+        )
     return f"""You are an isolated role worker in deterministic workflow `{workflow.workflow_id}`.
 
 Workflow ID: {workflow.workflow_id}
@@ -1518,7 +1547,7 @@ Role ID: {node.role_id}
 Role Run ID: {role_run_id}
 Work ID: {workflow.work_id}
 Lane/action: {workflow.lane}/{workflow.action}
-Sandbox root: {workflow.sandbox_dir}
+{sandbox_root_line}
 
 The role policy below is authoritative. Execute only this role; do not orchestrate other roles.
 
@@ -1529,14 +1558,13 @@ The role policy below is authoritative. Execute only this role; do not orchestra
 Workflow context:
 {context}
 
-Allowed write scopes:
-{json.dumps(_sandbox_write_scopes(root_dir, sandbox_dir, node, contract), ensure_ascii=False, indent=2)}
+{allowed_write_scopes}
 
 Required checkpoints:
 {json.dumps(list(node.checkpoints), ensure_ascii=False)}
 
 Rules:
-- Work only inside the sandbox and active work.
+{provider_visible_input_rule}- Work only inside the sandbox and active work.
 - Do not edit role policies, runtime code, workspace configuration, or other works.
 - Do not create or export DOCX unless this is the finalizer and every blocker is resolved.
 - Preserve unresolved blockers explicitly.
@@ -1902,6 +1930,14 @@ def _sanitize_role_context(base_prompt: str) -> str:
         if not any(fragment in line.casefold() for fragment in blocked_fragments)
     ]
     return "\n".join(lines).strip()
+
+
+def _provider_write_base_prompt(base_prompt: str, root_dir: Path, sandbox_dir: Path) -> str:
+    """Keep provider write-plan prompts free of engine-generated absolute paths."""
+    sanitized = base_prompt
+    for path in (root_dir, root_dir.resolve(), sandbox_dir, sandbox_dir.resolve()):
+        sanitized = sanitized.replace(str(path), ".")
+    return sanitized
 
 
 def _role_context(

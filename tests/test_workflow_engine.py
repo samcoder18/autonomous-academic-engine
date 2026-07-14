@@ -732,6 +732,10 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertIn("Provider result evidence envelope:", follow_up_prompt)
         self.assertIn("Return exactly one strict fenced `role-result` JSON block.", follow_up_prompt)
         self.assertNotIn("--- TRUSTED PROVIDER WRITE-PLAN WIRE CONTEXT ---", follow_up_prompt)
+        self.assertNotIn("Sandbox root:", follow_up_prompt)
+        self.assertNotIn("Allowed write scopes:", follow_up_prompt)
+        self.assertNotIn(result.sandbox_dir, follow_up_prompt)
+        self.assertNotIn(str(self.root), follow_up_prompt)
         self.assertEqual(self.target.read_text(encoding="utf-8"), "# Routed write-plan change\n")
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertTrue(workflow_payload["role_runs"][0]["write_plan_applied"])
@@ -1465,8 +1469,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 [target_path],
                 verdict=None,
                 checkpoint_evidence_override={
-                    checkpoint: [target_path.as_posix(), target_path.as_posix()]
-                    for checkpoint in checkpoints
+                    checkpoint: [target_path.as_posix(), target_path.as_posix()] for checkpoint in checkpoints
                 },
             )
 
@@ -1657,11 +1660,7 @@ class WorkflowEngineTests(unittest.TestCase):
         }
         self.assertEqual(iterations, {"repair-1", "repair-2"})
         self.assertEqual(result.readiness_status, "strong-draft-with-blockers")
-        repair_two_prompt = next(
-            prompt
-            for prompt in prompts
-            if 'Required checkpoints:\n["repair-2:' in prompt
-        )
+        repair_two_prompt = next(prompt for prompt in prompts if 'Required checkpoints:\n["repair-2:' in prompt)
         checkpoint_match = re.search(r"Required checkpoints:\n(?P<body>\[[^\n]*\])", repair_two_prompt)
         self.assertIsNotNone(checkpoint_match)
         assert checkpoint_match is not None
@@ -1915,9 +1914,7 @@ class WorkflowEngineTests(unittest.TestCase):
                 self.contract(action="review"),
                 lane="article",
                 required_context=(),
-                allowed_write_scopes=(
-                    AllowedWriteScope("review", str(canonical_scope), "Managed reviews."),
-                ),
+                allowed_write_scopes=(AllowedWriteScope("review", str(canonical_scope), "Managed reviews."),),
                 required_outputs=(),
             ),
         )

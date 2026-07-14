@@ -151,12 +151,14 @@ class OpenRouterQualificationTests(unittest.TestCase):
         self.assertEqual(result.metadata["write_before_sha256"], result.metadata["write_after_sha256"])
         self.assertTrue(result.metadata["canonical_unchanged"])
 
-        first_prompt = self.source_executor.calls[0][1]
-        self.assertIn(_SOURCE_SEED_PATH.as_posix(), first_prompt)
-        self.assertIn(_SOURCE_TARGET_PATH.as_posix(), first_prompt)
-        self.assertNotIn(str(self.root), first_prompt)
-        self.assertNotIn(str(self.source_seed_path), first_prompt)
-        self.assertNotIn(str(self.source_target_path), first_prompt)
+        for _context, prompt in self.source_executor.calls:
+            self.assertIn(_SOURCE_SEED_PATH.as_posix(), prompt)
+            self.assertIn(_SOURCE_TARGET_PATH.as_posix(), prompt)
+            self.assertNotIn("Sandbox root:", prompt)
+            self.assertNotIn("Allowed write scopes:", prompt)
+            self.assertNotIn(str(self.root), prompt)
+            self.assertNotIn(str(self.source_seed_path), prompt)
+            self.assertNotIn(str(self.source_target_path), prompt)
         self.assertFalse((self.root / "works/openrouter-live-smoke/articles/runs").exists())
         self.assertFalse((self.root / "output/jobs").exists())
 
