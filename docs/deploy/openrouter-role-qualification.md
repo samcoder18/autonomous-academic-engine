@@ -21,8 +21,8 @@ Git, gate, promotion, or secret-store access.
   authorization for other roles or a default switch.
 - **Not qualified**: the role has no approved OpenRouter route or model. Any
   attempted OpenRouter route remains fail-closed.
-- **Qualified**: reserved for a later row that has all required synthetic,
-  live, gate, secret-scan, and rollback evidence under the
+- **Qualified**: a row with all required synthetic, live, gate, secret-scan,
+  and rollback evidence under the
   [full-transition policy](openrouter-full-transition-policy.md).
 
 For each `not qualified` row, `not approved` means no model has been approved
@@ -37,22 +37,22 @@ an `execution_mode`; the router persists that mode in the workflow role trace
 and rejects an OpenRouter selection whose policy is absent or malformed with
 `provider-route-forbidden` before invoking the provider.
 
-For a later qualified role, an operator may select its explicit route with:
+For a qualified role, an operator may select its explicit route with:
 
 ```bash
 export ACADEMIC_ENGINE_ROLE_EXECUTOR_<ROLE_ID_UPPER_WITH_UNDERSCORES>=openrouter
 ```
 
-For example, `academic-intake` would use
+For example, `academic-intake` uses
 `ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE`. That environment variable is
 only a request to the router; it grants no capability. Until the exact role
 has a `qualified` matrix row and a matching code policy entry, the request
 fails closed with `provider-route-forbidden` and never falls back to
 `codex-cli`.
 
-As of this matrix revision, the runtime map still contains only the two
-read-only RC baselines below. No write-plan row has been added, because their
-dedicated live qualification and rollback evidence has not yet been recorded.
+As of this matrix revision, the runtime map contains the two read-only RC
+baselines below and the qualified `academic-intake` `write-plan` route. The
+default remains `codex-cli`; every unqualified role remains fail-closed.
 
 ## Current Read-Only PASS Baselines
 
@@ -85,7 +85,7 @@ all pass before the next matrix entry is enabled.
 | — | `academic-submission-evaluator` | article | `read-only` | `deepseek/deepseek-v4-flash` | [2026-07-13 controlled smoke](evidence/2026-07-13-openrouter-controlled-live-workflow-smoke.md) | Remove policy; fail closed; no automatic Codex reroute. | RC baseline PASS; current narrow route only. |
 | — | `thesis-source-verifier` | thesis | `read-only` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; current RC forbids thesis routing. |
 | — | `thesis-submission-evaluator` | thesis | `read-only` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; current RC forbids thesis routing. |
-| 1 | `academic-intake` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Qualification harness ready; Not qualified pending live PASS and rollback record; brief/publication-contract handoff. |
+| 1 | `academic-intake` | article | `write-plan` | `deepseek/deepseek-v4-flash` | [2026-07-14 qualification](evidence/2026-07-14-openrouter-academic-intake-qualification.md) | Remove policy; `provider-route-forbidden` before executor in the offline rollback-selection control; not the production rollback drill. | Qualified; one-role no-promotion qualification only, not submission-ready; brief/publication-contract handoff. |
 | 2 | `academic-source-acquirer` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; evidence-pack handoff. |
 | 3 | `academic-evidence-cartographer` | article | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; claim/coverage-map handoff. |
 | 4 | `thesis-structure-architect` | thesis | `write-plan` | Not approved | — | Remove policy; fail closed; no automatic Codex reroute. | Not qualified; chapter-contract handoff. |

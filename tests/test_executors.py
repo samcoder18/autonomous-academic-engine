@@ -198,13 +198,13 @@ class ExecutorTests(unittest.TestCase):
         writer = RecordingExecutor("writer")
         router = ExecutorRouter(
             default_executor=default,
-            role_executors={"academic-intake": writer},
-            role_executor_ids={"academic-intake": "openrouter"},
+            role_executors={"academic-source-acquirer": writer},
+            role_executor_ids={"academic-source-acquirer": "openrouter"},
             role_policies=OPENROUTER_ROLE_POLICY,
         )
 
         with self.assertRaises(ProviderExecutionError) as caught:
-            router.execute(self.context("academic-intake"), "intake")
+            router.execute(self.context("academic-source-acquirer"), "acquire")
 
         self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
         self.assertEqual(len(default.calls), 0)
@@ -373,7 +373,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsInstance(router.verifier_executor, OpenAICompatibleExecutor)
         self.assertIsInstance(router.default_executor, CodexCliExecutor)
 
-    def test_build_router_rejects_unqualified_role_override_without_default_fallback(self) -> None:
+    def test_build_router_routes_qualified_academic_intake_via_explicit_env(self) -> None:
         default = RecordingExecutor("default")
         openrouter = RecordingExecutor("openrouter")
         environ = {
@@ -383,6 +383,37 @@ class ExecutorTests(unittest.TestCase):
         router = build_executor_router(
             environ=environ,
             registry={"codex-cli": default, "openrouter": openrouter},
+        )
+        context = self.context("academic-intake")
+
+        self.assertEqual(
+            router.describe_selection(context).to_dict(),
+            {
+                "route_name": "role",
+                "executor_id": "openrouter",
+                "execution_mode": "write-plan",
+            },
+        )
+        router.execute(context, "intake")
+
+        self.assertEqual(len(default.calls), 0)
+        self.assertEqual(len(openrouter.calls), 1)
+
+    def test_build_router_rejects_academic_intake_without_policy_before_executor_invocation(self) -> None:
+        default = RecordingExecutor("default")
+        openrouter = RecordingExecutor("openrouter")
+        environ = {
+            "ACADEMIC_ENGINE_DEFAULT_EXECUTOR": "codex-cli",
+            "ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE": "openrouter",
+        }
+        router = build_executor_router(
+            environ=environ,
+            registry={"codex-cli": default, "openrouter": openrouter},
+            role_policies={
+                role_id: policy
+                for role_id, policy in OPENROUTER_ROLE_POLICY.items()
+                if role_id != "academic-intake"
+            },
         )
 
         with self.assertRaises(ProviderExecutionError) as caught:

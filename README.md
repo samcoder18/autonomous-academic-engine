@@ -169,13 +169,19 @@ Known limits и unknowns: [meta/autonomous-engine-unknowns-2026-04-19.md](meta/a
 
 ### OpenRouter provider route
 
-Codex CLI remains the default executor. OpenRouter can be enabled only for `academic-source-verifier` and `academic-submission-evaluator` in this slice. Thesis evaluator/verifier and every other role stay on Codex CLI; a non-academic OpenRouter selection fails closed without automatic fallback.
+Codex CLI remains the default executor. OpenRouter can be enabled for the
+read-only `academic-source-verifier` and `academic-submission-evaluator`
+routes, plus the explicitly selected qualified `academic-intake` sandbox
+`write-plan` route. Thesis evaluator/verifier and every unqualified role stay
+on Codex CLI; a non-qualified OpenRouter selection fails closed without
+automatic fallback.
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-redacted"
 export ACADEMIC_ENGINE_OPENROUTER_MODEL="provider/model-slug"
 export ACADEMIC_ENGINE_EVALUATOR_EXECUTOR=openrouter
 export ACADEMIC_ENGINE_VERIFIER_EXECUTOR=openrouter
+export ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE=openrouter
 ```
 
 Optional deploy attribution:
@@ -194,8 +200,9 @@ unset ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST
 ```
 
 Ordinary CI and unit tests do not call OpenRouter. A sandbox-only write-plan
-bridge and a guarded default mechanism exist, but the current policy still
-covers only the two read-only article RC routes. Therefore
+bridge and a guarded default mechanism exist. The current policy covers the
+two read-only article RC routes and qualified `academic-intake` `write-plan`.
+Therefore
 `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` remains fail-closed, and
 OpenRouter is not enabled for thesis or writer/finalizer roles until their
 serial qualification evidence, full-lane workflows, secret scan, and rollback

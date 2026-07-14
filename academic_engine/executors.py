@@ -43,9 +43,12 @@ SUPPORTED_ROLE_IDS = frozenset(
 )
 
 # This map is the runtime allowlist, not the qualification matrix. A role is
-# added only after its serial qualification record is complete. It intentionally
-# contains just the current read-only RC baselines.
+# added only after its serial qualification record is complete.
 OPENROUTER_ROLE_POLICY: dict[str, dict[str, str]] = {
+    "academic-intake": {
+        "executor_id": "openrouter",
+        "execution_mode": "write-plan",
+    },
     "academic-source-verifier": {
         "executor_id": "openrouter",
         "execution_mode": "read-only",

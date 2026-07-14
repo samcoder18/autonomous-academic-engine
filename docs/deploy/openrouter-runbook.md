@@ -2,23 +2,29 @@
 
 ## Purpose
 
-This runbook explains how to enable the existing OpenRouter executor route only for `academic-source-verifier` and `academic-submission-evaluator`, verify it with a live smoke check, diagnose provider failures, and administer the current RC route.
+This runbook explains how to enable the current qualified OpenRouter routes:
+`academic-source-verifier` and `academic-submission-evaluator` for read-only
+checks, plus explicitly selected `academic-intake` for its sandbox
+`write-plan` workflow. It covers live checks, provider-failure diagnosis, and
+current RC administration.
 
 It does not authorize OpenRouter as the default executor. Writer, finalizer, repair, citation, and thesis roles stay on Codex CLI because they need sandbox-aware file-writing behavior or are outside this RC scope.
 
 The versioned [full-transition policy](openrouter-full-transition-policy.md)
 and [role qualification matrix](openrouter-role-qualification.md) describe the
-approved broader migration. They do not expand the current route, change the
-default executor, or make an unqualified role runnable through OpenRouter.
+approved broader migration. They do not change the default executor or make an
+unqualified role runnable through OpenRouter.
 
 ## Hard Boundaries
 
 - Default executor remains `codex-cli`.
-- OpenRouter may be routed only to `academic-source-verifier` on the verifier route and `academic-submission-evaluator` on the evaluator route.
+- OpenRouter may be routed only to `academic-source-verifier` on the verifier
+  route, `academic-submission-evaluator` on the evaluator route, and the
+  explicitly selected `academic-intake` sandbox `write-plan` route.
 - An OpenRouter selection for every other role, including thesis evaluator/verifier roles, fails closed with `provider-route-forbidden`; it never falls back automatically to Codex CLI.
 - `ACADEMIC_ENGINE_DEFAULT_EXECUTOR=openrouter` is fail-closed while the
-  role-policy coverage is incomplete. The current RC has only two read-only
-  entries, so the default remains unavailable.
+  role-policy coverage is incomplete. The current RC has two read-only routes
+  and one qualified `write-plan` route, so the default remains unavailable.
 - Live provider calls are never part of ordinary CI or unit tests.
 - Provider secrets must not be committed, printed, copied into docs, or serialized into `output/runs/`.
 - `WorkflowEngine` remains the authority for prompts, role-result validation, gates, blockers, readiness, repairs, and promotion.
@@ -39,6 +45,11 @@ The current read-only RC baselines for `academic-source-verifier` and
 `academic-submission-evaluator` are the sanitized [2026-07-13 controlled live
 workflow smoke](evidence/2026-07-13-openrouter-controlled-live-workflow-smoke.md).
 They do not qualify any thesis or write-plan role.
+
+The separate [2026-07-14 academic-intake qualification](evidence/2026-07-14-openrouter-academic-intake-qualification.md)
+qualifies only the bounded `academic-intake` `write-plan` route. It does not
+switch the default, qualify another role, or replace the production rollback
+drill.
 
 ## Guarded Default (Not Active In The Current RC)
 
@@ -65,6 +76,7 @@ policy all pass.
 | `ACADEMIC_ENGINE_OPENROUTER_MODEL` | Yes for live smoke and live route | No | OpenRouter model slug, for example `provider/model-slug`. |
 | `ACADEMIC_ENGINE_EVALUATOR_EXECUTOR` | Yes to route academic submission evaluator through OpenRouter | No | Set to `openrouter` only after smoke passes. |
 | `ACADEMIC_ENGINE_VERIFIER_EXECUTOR` | Yes to route academic source verifier through OpenRouter | No | Set to `openrouter` only after smoke passes. |
+| `ACADEMIC_ENGINE_ROLE_EXECUTOR_ACADEMIC_INTAKE` | Yes to route qualified academic intake through OpenRouter | No | Set to `openrouter` only for the qualified sandbox `write-plan` route; it does not change the default. |
 | `ACADEMIC_ENGINE_OPENROUTER_LIVE_TEST` | Yes only for smoke | No | Set to `1` for `provider-smoke openrouter`; unset after smoke. |
 | `ACADEMIC_ENGINE_OPENROUTER_HTTP_REFERER` | Optional | No | Optional OpenRouter app attribution header. |
 | `ACADEMIC_ENGINE_OPENROUTER_APP_TITLE` | Optional | No | Optional OpenRouter app title attribution header. |
@@ -255,8 +267,9 @@ qualification evidence and must never be described as submission-ready.
 As an offline rollback-selection control, remove the qualification candidate
 policy and verify that selecting `academic-intake` returns
 `provider-route-forbidden` before any executor invocation. This is not the
-later production rollback drill. A harness pass does not authorize a
-production allowlist change, model approval, default switch, or the next role.
+later production rollback drill. The completed qualification authorizes only
+the recorded `academic-intake` route and model; it does not authorize a default
+switch or the next role.
 
 ## Diagnostics Matrix
 

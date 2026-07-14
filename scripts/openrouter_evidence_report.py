@@ -175,7 +175,7 @@ def route_policy_violations(
     expected_role_ids: set[str] | None = None,
 ) -> list[str]:
     violations: list[str] = []
-    expected_roles = expected_role_ids or set(EXPECTED_OPENROUTER_ROLE_POLICY)
+    expected_roles = expected_role_ids or set(OPENROUTER_ALLOWED_ROLE_ROUTES)
     observed_expected_roles: set[str] = set()
     for role_id in sorted(expected_roles):
         if role_id not in EXPECTED_OPENROUTER_ROLE_POLICY:
