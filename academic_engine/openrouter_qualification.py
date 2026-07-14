@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,7 +60,9 @@ def run_openrouter_role_qualification(
         "canonical_unchanged": True,
     }
     contract = _qualification_contract(candidate, canonical_seed)
-    executor_router = router or _qualification_router(candidate)
+    if router is not None:
+        _validate_injected_qualification_router(router, candidate)
+    executor_router = router if router is not None else _qualification_router(candidate)
     engine = WorkflowEngine(root, executor_router=executor_router)
     result = engine.run(
         work_id=candidate.work_id,
@@ -182,6 +185,38 @@ def _qualification_router(candidate: QualificationCandidate) -> ExecutorRouter:
                 "execution_mode": candidate.execution_mode,
             }
         },
+    )
+
+
+def _validate_injected_qualification_router(router: object, candidate: QualificationCandidate) -> None:
+    if not isinstance(router, ExecutorRouter):
+        _raise_forbidden_injected_router()
+
+    expected_role_ids = {candidate.role_id}
+    policy = router.role_policies.get(candidate.role_id)
+    if (
+        set(router.role_executors) != expected_role_ids
+        or set(router.role_executor_ids) != expected_role_ids
+        or set(router.role_policies) != expected_role_ids
+        or router.role_executor_ids.get(candidate.role_id) != "openrouter"
+        or not isinstance(policy, Mapping)
+        or policy.get("executor_id") != "openrouter"
+        or policy.get("execution_mode") != "write-plan"
+        or not isinstance(router.default_executor, UnavailableExecutor)
+        or router.default_executor.executor_id != "qualification-default"
+        or router.default_executor_id != "qualification-default"
+        or router.evaluator_executor is not None
+        or router.evaluator_executor_id is not None
+        or router.verifier_executor is not None
+        or router.verifier_executor_id is not None
+    ):
+        _raise_forbidden_injected_router()
+
+
+def _raise_forbidden_injected_router() -> None:
+    raise ProviderExecutionError(
+        "provider-route-forbidden",
+        "The injected router does not match the bounded OpenRouter qualification route.",
     )
 
 

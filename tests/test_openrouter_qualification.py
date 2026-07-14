@@ -5,6 +5,7 @@ import json
 import re
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -135,6 +136,74 @@ class OpenRouterQualificationTests(unittest.TestCase):
         self.assertEqual(removed.exception.blocker_code, "provider-route-forbidden")
         self.assertEqual(self.recording_executor.calls, [])
 
+    def test_rejects_injected_router_with_extra_or_missing_role_maps_before_executor_invocation(self) -> None:
+        invalid_routers = (
+            replace(
+                self.router,
+                role_executors={
+                    "academic-intake": self.recording_executor,
+                    "academic-draft-writer": self.recording_executor,
+                },
+            ),
+            replace(
+                self.router,
+                role_executor_ids={
+                    "academic-intake": "openrouter",
+                    "academic-draft-writer": "openrouter",
+                },
+            ),
+            replace(
+                self.router,
+                role_policies={
+                    "academic-intake": {"executor_id": "openrouter", "execution_mode": "write-plan"},
+                    "academic-draft-writer": {"executor_id": "openrouter", "execution_mode": "write-plan"},
+                },
+            ),
+            replace(self.router, role_executors={}),
+            replace(self.router, role_executor_ids={}),
+            replace(self.router, role_policies={}),
+        )
+
+        for router in invalid_routers:
+            with self.subTest(router=router):
+                self._assert_injected_router_forbidden(router)
+
+    def test_rejects_injected_router_with_wrong_candidate_route_or_policy_before_executor_invocation(self) -> None:
+        invalid_routers = (
+            replace(self.router, role_executor_ids={"academic-intake": "codex-cli"}),
+            replace(
+                self.router,
+                role_policies={"academic-intake": {"executor_id": "codex-cli", "execution_mode": "write-plan"}},
+            ),
+            replace(
+                self.router,
+                role_policies={"academic-intake": {"executor_id": "openrouter", "execution_mode": "read-only"}},
+            ),
+        )
+
+        for router in invalid_routers:
+            with self.subTest(router=router):
+                self._assert_injected_router_forbidden(router)
+
+    def test_rejects_default_or_evaluator_shaped_injected_router_before_executor_invocation(self) -> None:
+        invalid_routers = (
+            ExecutorRouter(
+                default_executor=UnavailableExecutor("codex-cli"),
+                default_executor_id="codex-cli",
+            ),
+            replace(self.router, default_executor=UnavailableExecutor("wrong-default")),
+            replace(self.router, default_executor_id="wrong-default"),
+            replace(self.router, default_executor=self.recording_executor),
+            replace(self.router, evaluator_executor=self.recording_executor),
+            replace(self.router, evaluator_executor_id="openrouter"),
+            replace(self.router, verifier_executor=self.recording_executor),
+            replace(self.router, verifier_executor_id="openrouter"),
+        )
+
+        for router in invalid_routers:
+            with self.subTest(router=router):
+                self._assert_injected_router_forbidden(router)
+
     def test_rejects_invalid_work_and_seed_before_executor_invocation(self) -> None:
         attempts = (
             ("wrong-work", _SEED_PATH.as_posix()),
@@ -224,6 +293,21 @@ class OpenRouterQualificationTests(unittest.TestCase):
         self.assertFalse(result.metadata["canonical_unchanged"])
         self.assertEqual(result.metadata["after_sha256"], "")
         self.assertTrue(any(item["code"] == "qualification-canonical-drift" for item in result.blockers))
+
+    def _assert_injected_router_forbidden(self, router: ExecutorRouter) -> None:
+        self.recording_executor.calls.clear()
+        with self.assertRaises(ProviderExecutionError) as caught:
+            run_openrouter_role_qualification(
+                self.root,
+                "academic-intake",
+                "openrouter-live-smoke",
+                _SEED_PATH.as_posix(),
+                use_search=False,
+                model=None,
+                router=router,
+            )
+        self.assertEqual(caught.exception.blocker_code, "provider-route-forbidden")
+        self.assertEqual(self.recording_executor.calls, [])
 
     @staticmethod
     def _build_workspace(root: Path) -> Path:
