@@ -342,6 +342,8 @@ class WorkflowEngine:
         use_search: bool,
         model: str | None,
         metadata: dict[str, Any] | None = None,
+        role_plan: tuple[RoleNode, ...] | None = None,
+        promotion_enabled: bool = True,
     ) -> WorkflowRun:
         workflow_id = workflow_id or _new_workflow_id(work_id, lane, action)
         workflow_dir = self.root_dir / "output" / "runs" / workflow_id
@@ -374,7 +376,11 @@ class WorkflowEngine:
                 baseline = _file_manifest(sandbox_dir)
                 canonical_baseline = _canonical_manifest(self.root_dir, baseline)
                 _write_json(workflow_dir / "baseline.json", canonical_baseline)
-                nodes = build_role_plan(lane, action, contract.required_checkpoints)
+                nodes = role_plan if role_plan is not None else build_role_plan(
+                    lane,
+                    action,
+                    contract.required_checkpoints,
+                )
                 repair_iterations_used = 1 if lane == "article" and action == "repair" else 0
 
                 for node in nodes:
@@ -478,14 +484,22 @@ class WorkflowEngine:
                 )
                 if any(item.blocking and item.status != "pass" for item in gates):
                     workflow.readiness_status = _downgrade_readiness(workflow.readiness_status)
-                workflow.promotion = self._promote(
-                    workflow=workflow,
-                    contract=contract,
-                    sandbox_dir=sandbox_dir,
-                    baseline=canonical_baseline,
-                    final_manifest=final_manifest,
-                    changed_paths=changed_paths,
-                )
+                if promotion_enabled:
+                    workflow.promotion = self._promote(
+                        workflow=workflow,
+                        contract=contract,
+                        sandbox_dir=sandbox_dir,
+                        baseline=canonical_baseline,
+                        final_manifest=final_manifest,
+                        changed_paths=changed_paths,
+                    )
+                else:
+                    workflow.promotion = PromotionResult(
+                        status="skipped",
+                        skipped=tuple(changed_paths),
+                        reason="qualification-no-promotion",
+                    )
+                    self._write_promotion_manifest(workflow, workflow.promotion)
                 execution_blocked = any(
                     blocker.get("code") in {"workflow-timeout", "workflow-exception"} for blocker in workflow.blockers
                 )

@@ -684,6 +684,102 @@ class WorkflowEngineTests(unittest.TestCase):
         workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
         self.assertTrue(workflow_payload["role_runs"][0]["write_plan_applied"])
 
+    def test_one_role_write_plan_can_skip_promotion_without_canonical_mutation(self) -> None:
+        seed = self.work_dir / "articles" / "briefs" / "academic-intake-qualification.md"
+        seed.parent.mkdir(parents=True)
+        seed.write_text("# Qualification seed\n", encoding="utf-8")
+        seed_relative = seed.relative_to(self.root)
+        canonical_bytes = seed.read_bytes()
+        canonical_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+        contract = ExecutionContract(
+            lane="article",
+            action="qualification",
+            title="Qualification",
+            summary="One-role qualification run.",
+            target_kind="markdown",
+            target_validation="test",
+            prompt_rules=(),
+            deliverables=(),
+            required_context=(RequiredArtifact("seed", str(seed), "required", "Qualification seed."),),
+            allowed_write_scopes=(AllowedWriteScope("seed", str(seed), "Qualification seed."),),
+            required_outputs=(RequiredArtifact("seed", str(seed), "required", "Qualification seed."),),
+            required_checkpoints=("qualification:academic-intake",),
+            terminal_statuses=("strong-draft",),
+            quality_gates=(),
+            repair_policy=RepairPolicy(
+                eligible=False,
+                max_iterations=0,
+                safe_only=True,
+                triggers=(),
+                terminal_reasons=(),
+            ),
+            transitions=(),
+            metadata=(("work_id", "demo"),),
+        )
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            if "Provider result evidence envelope:" not in prompt:
+                _write_provider_write_plan(
+                    output,
+                    prompt,
+                    sandbox,
+                    seed_relative,
+                    "# Qualified intake brief\n",
+                )
+                return
+            _write_role_result(output, prompt, sandbox, [seed_relative], verdict=None)
+
+        router = ExecutorRouter(
+            default_executor=CallableRoleExecutor(executor),
+            default_executor_id="codex-cli",
+            role_executors={"academic-intake": CallableRoleExecutor(executor)},
+            role_executor_ids={"academic-intake": "openrouter"},
+            role_policies={
+                "academic-intake": {
+                    "executor_id": "openrouter",
+                    "execution_mode": "write-plan",
+                }
+            },
+        )
+
+        result = WorkflowEngine(self.root, executor_router=router).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="article",
+            action="qualification",
+            contract=contract,
+            base_prompt="qualify the intake role",
+            use_search=False,
+            model=None,
+            role_plan=(
+                RoleNode(
+                    role_id="academic-intake",
+                    policy_path="agents/academic-intake.md",
+                    checkpoints=("qualification:academic-intake",),
+                ),
+            ),
+            promotion_enabled=False,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual([role.role_id for role in result.role_runs], ["academic-intake"])
+        self.assertTrue(result.role_runs[0].write_plan_applied)
+        self.assertEqual(result.role_runs[0].changed_paths, [seed_relative.as_posix()])
+        self.assertEqual(result.promotion.status, "skipped")
+        self.assertEqual(result.promotion.reason, "qualification-no-promotion")
+        self.assertEqual(result.promotion.skipped, (seed_relative.as_posix(),))
+
+        workflow_payload = json.loads((Path(result.workflow_dir) / "workflow.json").read_text(encoding="utf-8"))
+        promotion_payload = json.loads((Path(result.workflow_dir) / "promotion.json").read_text(encoding="utf-8"))
+        self.assertEqual(workflow_payload["promotion"]["status"], "skipped")
+        self.assertEqual(workflow_payload["promotion"]["reason"], "qualification-no-promotion")
+        self.assertEqual(workflow_payload["promotion"]["skipped"], [seed_relative.as_posix()])
+        self.assertEqual(promotion_payload["status"], "skipped")
+        self.assertEqual(promotion_payload["reason"], "qualification-no-promotion")
+        self.assertEqual(promotion_payload["skipped"], [seed_relative.as_posix()])
+        self.assertEqual(seed.read_bytes(), canonical_bytes)
+        self.assertEqual(hashlib.sha256(seed.read_bytes()).hexdigest(), canonical_sha256)
+
     def test_write_plan_route_rejects_first_call_role_result_without_canonical_mutation(self) -> None:
         target_path = self.target.relative_to(self.root)
 
