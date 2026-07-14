@@ -1409,6 +1409,158 @@ class WorkflowEngineTests(unittest.TestCase):
             repair_two_prompt,
         )
 
+    def test_bounded_article_repair_uses_no_change_evidence_for_repair_two(self) -> None:
+        review = self.work_dir / "articles" / "reviews" / "repair-status.md"
+        review.parent.mkdir(parents=True)
+        review.write_text("# Repair status\n\nCitation blocker remains open.\n", encoding="utf-8")
+        review_path = review.relative_to(self.root)
+        blocker = {
+            "category": "review",
+            "code": "repair-loop-limit-reached",
+            "message": "The bounded repair limit was reached.",
+            "repairable": False,
+        }
+        repair_two_prompt = ""
+        fallback_envelope: dict[str, object] | None = None
+
+        def article_evaluator_payload() -> dict[str, object]:
+            return {
+                "verdict_version": "1",
+                "lane": "article",
+                "kind": "submission-evaluator",
+                "status": "strong-draft-with-blockers",
+                "summary": "Independent evaluation retains the repair blocker.",
+                "blockers": [blocker],
+            }
+
+        def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
+            nonlocal fallback_envelope, repair_two_prompt
+            role_id = _prompt_field(prompt, "Role ID")
+            if role_id == "academic-repair-orchestrator" and 'Required checkpoints:\n["repair-2:' in prompt:
+                repair_two_prompt = prompt
+                envelope_match = re.search(
+                    r"--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---\n(?P<body>.*?)\n"
+                    r"--- END REPAIR NO-CHANGE EVIDENCE ENVELOPE ---",
+                    prompt,
+                    re.DOTALL,
+                )
+                if envelope_match is not None:
+                    envelope_payload = json.loads(envelope_match.group("body"))
+                    raw_envelope = envelope_payload.get("repair_no_change_evidence_envelope")
+                    if isinstance(raw_envelope, dict):
+                        fallback_envelope = raw_envelope
+                if fallback_envelope is not None:
+                    raw_artifacts = fallback_envelope["artifacts"]
+                    raw_evidence = fallback_envelope["checkpoint_evidence"]
+                    assert isinstance(raw_artifacts, list)
+                    assert len(raw_artifacts) == 1
+                    assert isinstance(raw_artifacts[0], dict)
+                    assert isinstance(raw_evidence, dict)
+                    artifact = raw_artifacts[0]
+                    _write_role_result(
+                        output,
+                        prompt,
+                        sandbox,
+                        [Path(str(artifact["path"]))],
+                        verdict=None,
+                        status="blocked",
+                        blockers=[blocker],
+                        checkpoint_evidence_override=raw_evidence,
+                        artifact_sha256_override=str(artifact["sha256"]),
+                    )
+                    return
+                _write_role_result(
+                    output,
+                    prompt,
+                    sandbox,
+                    [review_path],
+                    verdict=None,
+                    status="blocked",
+                    blockers=[blocker],
+                )
+                return
+
+            _write_role_result(
+                output,
+                prompt,
+                sandbox,
+                [review_path],
+                verdict=article_evaluator_payload() if role_id == "academic-submission-evaluator" else None,
+            )
+
+        article_contract = ExecutionContract(
+            lane="article",
+            action="review",
+            title="Article review",
+            summary="Bounded review with repair evidence.",
+            target_kind="markdown",
+            target_validation="test",
+            prompt_rules=(),
+            deliverables=(),
+            required_context=(),
+            allowed_write_scopes=(),
+            required_outputs=(),
+            required_checkpoints=("context-loaded", "reviewed", "verdict-issued"),
+            terminal_statuses=("submission-ready", "strong-draft-with-blockers"),
+            quality_gates=(),
+            repair_policy=RepairPolicy(
+                eligible=True,
+                max_iterations=2,
+                safe_only=True,
+                triggers=("blockers",),
+                terminal_reasons=("ready", "max-repair-iterations"),
+            ),
+            transitions=(),
+            metadata=(("work_id", "demo"),),
+        )
+
+        result = WorkflowEngine(self.root, role_executor=executor).run(
+            work_id="demo",
+            work_dir=self.work_dir,
+            lane="article",
+            action="review",
+            contract=article_contract,
+            base_prompt="test",
+            use_search=False,
+            model=None,
+        )
+
+        self.assertEqual(result.execution_status, "succeeded")
+        self.assertEqual(result.readiness_status, "strong-draft-with-blockers")
+        self.assertIn('Required checkpoints:\n["repair-2:academic-repair-orchestrator"]', repair_two_prompt)
+        self.assertIsNotNone(fallback_envelope)
+        assert fallback_envelope is not None
+        raw_artifacts = fallback_envelope["artifacts"]
+        raw_evidence = fallback_envelope["checkpoint_evidence"]
+        self.assertIsInstance(raw_artifacts, list)
+        self.assertEqual(len(raw_artifacts), 1)
+        assert isinstance(raw_artifacts, list)
+        self.assertIsInstance(raw_artifacts[0], dict)
+        assert isinstance(raw_artifacts[0], dict)
+        artifact = raw_artifacts[0]
+        artifact_path = str(artifact["path"])
+        artifact_sha256 = str(artifact["sha256"])
+        self.assertIn("/articles/reviews/", artifact_path)
+        sandbox_artifact = Path(result.sandbox_dir) / artifact_path
+        self.assertTrue(sandbox_artifact.is_file())
+        self.assertEqual(artifact_sha256, hashlib.sha256(sandbox_artifact.read_bytes()).hexdigest())
+        self.assertIsInstance(raw_evidence, dict)
+        assert isinstance(raw_evidence, dict)
+        dynamic_checkpoint = "repair-2:academic-repair-orchestrator"
+        self.assertEqual(raw_evidence, {dynamic_checkpoint: [artifact_path]})
+        repair_two_role = next(
+            role
+            for role in result.role_runs
+            if role.role_id == "academic-repair-orchestrator" and role.checkpoints == [dynamic_checkpoint]
+        )
+        self.assertEqual(repair_two_role.status, "succeeded")
+        self.assertEqual(repair_two_role.reported_status, "blocked")
+        self.assertEqual(
+            [(item.path, item.sha256) for item in repair_two_role.artifacts],
+            [(artifact_path, artifact_sha256)],
+        )
+        self.assertFalse(any(item["code"].startswith("role-result-") for item in repair_two_role.blockers))
+
     def test_canonical_conflict_preserves_user_change(self) -> None:
         def executor(sandbox: Path, prompt: str, output: Path, use_search: bool, model: str | None) -> None:
             if "Role ID: thesis-style-editor" in prompt:

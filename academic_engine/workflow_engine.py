@@ -1318,6 +1318,7 @@ def _role_prompt(
     artifact_example_hash = "<64 lowercase hex>"
     evidence_envelope = None
     read_only_provider_role = node.evaluator or node.role_id in VERIFIER_ROLE_IDS
+    repair_no_change_evidence_envelope = None
     if read_only_provider_role:
         artifacts = _file_manifest(sandbox_dir / "works" / workflow.work_id)
         evidence_envelope = _provider_result_evidence_envelope(
@@ -1329,6 +1330,12 @@ def _role_prompt(
             artifact = evidence_envelope["artifacts"][0]
             artifact_example_path = str(artifact["path"])
             artifact_example_hash = str(artifact["sha256"])
+    elif node.checkpoints and all(re.fullmatch(r"repair-\d+:[^:]+", checkpoint) for checkpoint in node.checkpoints):
+        repair_no_change_evidence_envelope = _repair_no_change_evidence_envelope(
+            work_id=workflow.work_id,
+            artifacts=_file_manifest(sandbox_dir / "works" / workflow.work_id),
+            checkpoints=node.checkpoints,
+        )
     success_verdict_example = "null"
     blocked_verdict_example = "null"
     if node.evaluator:
@@ -1382,6 +1389,18 @@ def _role_prompt(
                 "  SHA-256 appears in `artifacts`.",
             )
         )
+    repair_no_change_evidence_prompt = ""
+    if repair_no_change_evidence_envelope is not None:
+        repair_no_change_evidence_prompt = f"""- No-change repair fallback applies only when you make no file changes
+  and return `blocked` or `failed`, such as when the bounded repair limit is reached.
+- Copy `artifacts` and `checkpoint_evidence` from `repair_no_change_evidence_envelope` verbatim only while
+  the supplied artifact remains unchanged.
+- Do not claim that the fallback artifact was modified.
+- If you change any artifact, do not use this fallback: calculate post-write SHA-256 values and list every
+  changed artifact in `artifacts` as above.
+--- REPAIR NO-CHANGE EVIDENCE ENVELOPE ---
+{json.dumps({"repair_no_change_evidence_envelope": repair_no_change_evidence_envelope}, ensure_ascii=False, indent=2)}
+--- END REPAIR NO-CHANGE EVIDENCE ENVELOPE ---"""
     context = _role_context(
         workflow=workflow,
         node=node,
@@ -1436,6 +1455,7 @@ Rules:
 - For a repair checkpoint, record a managed review or repair artifact in `artifacts` with its SHA-256 and map the
   exact `repair-N:<role-id>` key to that artifact.
 {writable_evidence_preflight}
+{repair_no_change_evidence_prompt}
 - If Workflow context includes `artifact_manifest`, use those SHA-256 records for unchanged read-only artifacts.
 - If you cannot verify checkpoint evidence, return structured `blocked` or `failed`;
   do not return shell commands or prose only.
@@ -1833,6 +1853,30 @@ def _provider_result_evidence_envelope(
         "artifacts": [{"path": path, "sha256": str(record["sha256"])}],
         "checkpoint_evidence": {checkpoint: [path] for checkpoint in checkpoints},
     }
+
+
+def _repair_no_change_evidence_envelope(
+    *,
+    work_id: str,
+    artifacts: dict[str, dict[str, Any]],
+    checkpoints: tuple[str, ...],
+) -> dict[str, Any] | None:
+    for relative_path, record in artifacts.items():
+        path = Path(relative_path)
+        parts = {part.casefold() for part in path.parts}
+        name = path.name.casefold()
+        if not (
+            parts.intersection({"review", "reviews", "repair", "repairs", "checklist", "checklists"})
+            or "repair" in name
+            or "checklist" in name
+        ):
+            continue
+        sandbox_path = f"works/{work_id}/{relative_path}"
+        return {
+            "artifacts": [{"path": sandbox_path, "sha256": str(record["sha256"])}],
+            "checkpoint_evidence": {checkpoint: [sandbox_path] for checkpoint in checkpoints},
+        }
+    return None
 
 
 def _source_provenance_summary(sandbox_dir: Path, work_id: str) -> dict[str, int]:
